@@ -117,6 +117,20 @@ func run() error {
 	v.Add(syntheticAssets())
 	if pakFS != nil {
 		v.Add(pakFS)
+		// Eager-prefetch the OCI blobs so the streaming path exercises the
+		// registry (not just the manifest) on boot. The engine's normal
+		// runloop is synthbsp-only today + never opens pak0 / track*.ogg
+		// itself; without these probe-reads the OCI layer-3 plumbing is
+		// observable through the manifest GET alone, which is a weak
+		// end-to-end signal. Each Open here triggers ociassets.FS.load
+		// which sha256-verifies + caches the blob -- so a subsequent
+		// real-BSP-load lands instantly.
+		//
+		// Goroutine-launched so a 180 MB pak0 fetch doesn't block backend
+		// bring-up; the wasm Go scheduler is single-threaded but runner
+		// RunFrame yields to JS at every input poll, which is enough for
+		// the prefetch goroutine to make progress between frames.
+		go prefetchOCIAssets(pakFS)
 	}
 
 	// 4. Loopback client/server pair.
@@ -447,6 +461,62 @@ func (r *readerAt) ReadAt(p []byte, off int64) (int, error) {
 // stays grep-able.
 func logf(format string, args ...any) {
 	fmt.Printf("QUAKE: "+format+"\n", args...)
+}
+
+// prefetchOCIAssets opens the well-known pak + music names so
+// ociassets.FS.Open lazily fetches each layer from the registry into the
+// in-memory + IndexedDB cache. The reads are tolerant: a missing entry is
+// logged + skipped (a partial manifest is still useful). This is the
+// load-bearing piece that turns the layer-3 OCI plumbing into an
+// observable end-to-end network fetch even though the current runloop is
+// synthbsp-only and never opens these files itself.
+func prefetchOCIAssets(pakFS fs.FS) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("ociassets: prefetch PANIC: %v", r)
+		}
+	}()
+	// Brief deferral so the runner's RunUntilQuit reaches its first
+	// frame + parks on a JS-event-loop turn before this goroutine kicks
+	// the first fetch. On the wasm Go runtime that yield is what hands
+	// the JS event loop control to fulfill the registry response (the
+	// fetch itself is async but its body resolution rides the JS loop).
+	time.Sleep(50 * time.Millisecond)
+	logf("ociassets: prefetch starting (pakFS=%T)", pakFS)
+	// Music tracks first (small, cheap signal). pak0 (~180 MB) is heavier
+	// + tagged last so a slow link still produces an end-to-end-OCI
+	// observable signal early.
+	names := []string{}
+	for n := 2; n <= 11; n++ {
+		names = append(names, fmt.Sprintf("music/track%02d.ogg", n))
+	}
+	names = append(names, "pak0.pak")
+	for _, name := range names {
+		t0 := time.Now()
+		// Force a runtime yield BEFORE logf so the runloop's busy-spin
+		// can't starve this goroutine between iterations. time.Sleep(0)
+		// dispatches through netpoll which guarantees a JS event-loop
+		// turn in the wasm runtime.
+		time.Sleep(1 * time.Millisecond)
+		logf("ociassets: prefetch %s opening...", name)
+		file, err := pakFS.Open(name)
+		logf("ociassets: prefetch %s open returned err=%v", name, err)
+		if err != nil {
+			// Yield between attempts so a fault path doesn't busy-loop
+			// against the renderer.
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		// Drain so the read goes through (Open does the full GET +
+		// digest-verify, but draining is cheap insurance against
+		// future lazy-body implementations).
+		n, _ := io.Copy(io.Discard, file)
+		file.Close()
+		logf("ociassets: prefetched %s (%d bytes in %.2fs)", name, n, time.Since(t0).Seconds())
+		// Co-op yield between blobs so the renderer keeps painting.
+		time.Sleep(10 * time.Millisecond)
+	}
+	logf("ociassets: prefetch complete")
 }
 
 // openOCIAssets mirrors cmd/quake-wasm/main.go's helper: parse the
