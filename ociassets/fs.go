@@ -28,6 +28,7 @@ type FS struct {
 	client  *Client
 	repo    string
 	fileMap map[string]string // vfs-name -> "sha256:..."
+	sizeMap map[string]int64  // digest -> declared layer size (for progress totals)
 
 	mu        sync.Mutex
 	inflight  map[string]*pending
@@ -39,7 +40,30 @@ type FS struct {
 	// the blob fetch is issued with.
 	nowFn func() time.Time
 	ctxFn func() context.Context
+
+	// progress is the optional per-fetch progress sink. Fired on each
+	// counting-reader chunk + once on completion. nil = no callback.
+	progress ProgressFunc
+	// progressChunk is the cadence (in bytes) at which progress is
+	// emitted. Defaults to 64 KiB; SetProgress accepts a custom value.
+	progressChunk int
 }
+
+// ProgressFunc is the callback signature for blob-fetch progress.
+// `name` is the VFS-relative name (e.g. "pak0.pak"); `digest` is the
+// "sha256:..." identifier; `received` is the running total of bytes
+// pulled from the registry for THIS blob; `total` is the declared
+// layer size (0 if unknown). The callback fires from the goroutine
+// driving the fetch -- implementations MUST be cheap and MUST NOT
+// re-enter FS.Open on the same name.
+type ProgressFunc func(name, digest string, received, total int64)
+
+// defaultProgressChunkBytes is the cadence at which a counting reader
+// emits progress notifications when SetProgress is configured without
+// a custom chunk size. 64 KiB ~= 2800 ticks across a 180 MB pak0,
+// which is plenty for a smoothly-growing bar without flooding the
+// renderer goroutine.
+const defaultProgressChunkBytes = 64 * 1024
 
 // pending is the single-flight handle that fans out a concurrent
 // Open(name) burst to ONE blob fetch. Holders Wait on done; the
@@ -62,14 +86,16 @@ func NewFS(client *Client, repo string, fileMap map[string]string) (*FS, error) 
 		return nil, ErrManifestNoAnnotations
 	}
 	return &FS{
-		client:    client,
-		repo:      repo,
-		fileMap:   fileMap,
-		inflight:  make(map[string]*pending),
-		cache:     make(map[string][]byte),
-		persisted: defaultPersistCache(),
-		nowFn:     time.Now,
-		ctxFn:     context.Background,
+		client:        client,
+		repo:          repo,
+		fileMap:       fileMap,
+		sizeMap:       make(map[string]int64),
+		inflight:      make(map[string]*pending),
+		cache:         make(map[string][]byte),
+		persisted:     defaultPersistCache(),
+		nowFn:         time.Now,
+		ctxFn:         context.Background,
+		progressChunk: defaultProgressChunkBytes,
 	}, nil
 }
 
@@ -93,7 +119,79 @@ func NewFSFromManifest(ctx context.Context, client *Client, repo, reference stri
 	if err != nil {
 		return nil, err
 	}
-	return NewFS(client, repo, fm)
+	// NewFS can only error on empty fm, which BuildFileMap already
+	// rejected as ErrManifestNoAnnotations -- so the error here is
+	// unreachable on the live path. We still construct via NewFS (not
+	// a bare struct literal) so any future invariant added inside
+	// NewFS keeps applying here too; the err is swallowed because the
+	// "empty-map" precondition has been ruled out one frame up.
+	fsys, _ := NewFS(client, repo, fm)
+	// Hydrate sizeMap from the manifest's layer descriptors so progress
+	// callbacks can report received/total. Layers not referenced by an
+	// annotation are still indexed (cheap + future-proof).
+	for _, l := range m.Layers {
+		fsys.sizeMap[l.Digest] = l.Size
+	}
+	return fsys, nil
+}
+
+// SetProgress installs a per-blob progress callback. fn=nil disables
+// progress reporting. Thread-safe; callers may swap the callback at
+// any time, including while a fetch is in flight (the next chunk tick
+// will read + invoke the new value).
+//
+// The progress-tick cadence is the package default (64 KiB). To
+// customise it, callers may use [FS.SetProgressChunk].
+func (f *FS) SetProgress(fn ProgressFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.progress = fn
+	if f.progressChunk <= 0 {
+		f.progressChunk = defaultProgressChunkBytes
+	}
+}
+
+// SetProgressChunk overrides the progress-tick cadence (default 64
+// KiB). chunkBytes <= 0 resets to the default. Thread-safe.
+func (f *FS) SetProgressChunk(chunkBytes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if chunkBytes <= 0 {
+		f.progressChunk = defaultProgressChunkBytes
+		return
+	}
+	f.progressChunk = chunkBytes
+}
+
+// progressReader wraps an io.Reader + fires a ProgressFunc every
+// `chunk` bytes (and once on EOF). The total is informational only --
+// passing 0 disables percentage but still emits a running count.
+type progressReader struct {
+	r        io.Reader
+	name     string
+	digest   string
+	total    int64
+	received int64
+	emitted  int64
+	chunk    int64
+	fn       ProgressFunc
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.received += int64(n)
+	}
+	if p.fn != nil {
+		if p.received-p.emitted >= p.chunk || (err != nil && p.emitted != p.received) {
+			// Tick on chunk boundary OR a final tick at EOF / error so
+			// callers see the terminal count even when the last Read
+			// returned <chunk bytes.
+			p.emitted = p.received
+			p.fn(p.name, p.digest, p.received, p.total)
+		}
+	}
+	return n, err
 }
 
 // Open implements [io/fs.FS]. Name is the VFS-relative path under the
@@ -156,7 +254,37 @@ func (f *FS) load(name, digest string) ([]byte, error) {
 		return nil, err
 	}
 	defer rc.Close()
-	body, err := io.ReadAll(rc)
+
+	// Snapshot the progress configuration under the lock so concurrent
+	// SetProgress / SetProgressChunk calls can't race with us reading
+	// the fields. The snapshot is the one in force AT FETCH START --
+	// later swaps take effect on the next blob fetch.
+	f.mu.Lock()
+	progressFn := f.progress
+	chunk := f.progressChunk
+	total := f.sizeMap[digest]
+	f.mu.Unlock()
+	if chunk <= 0 {
+		chunk = defaultProgressChunkBytes
+	}
+
+	var reader io.Reader = rc
+	if progressFn != nil {
+		// Emit an initial 0/total tick so callers see "starting" before
+		// the first chunk lands -- the renderer goroutine can otherwise
+		// flicker between an unpainted surface and the first 64 KiB tick
+		// on fast localhost transports.
+		progressFn(name, digest, 0, total)
+		reader = &progressReader{
+			r:      rc,
+			name:   name,
+			digest: digest,
+			total:  total,
+			chunk:  int64(chunk),
+			fn:     progressFn,
+		}
+	}
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		p.err = err
 		return nil, err

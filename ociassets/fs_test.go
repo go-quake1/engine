@@ -385,3 +385,267 @@ func TestNopReadCloser(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+// slowBlobHandler streams `body` in fixed-size chunks with a tiny
+// per-chunk pause so the progressReader fires multiple ticks instead
+// of swallowing the whole body in a single Read. Used by progress
+// tests to assert the bar would visibly grow during a real fetch.
+type slowBlobHandler struct {
+	body  []byte
+	chunk int
+	delay time.Duration
+}
+
+func (s slowBlobHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	flusher, _ := w.(http.Flusher)
+	w.Header().Set("Content-Length", "")
+	for off := 0; off < len(s.body); off += s.chunk {
+		end := off + s.chunk
+		if end > len(s.body) {
+			end = len(s.body)
+		}
+		w.Write(s.body[off:end])
+		if flusher != nil {
+			flusher.Flush()
+		}
+		if s.delay > 0 {
+			time.Sleep(s.delay)
+		}
+	}
+}
+
+func TestFS_SetProgress_EmitsTicks(t *testing.T) {
+	// 256 KiB body streamed in 16 KiB HTTP chunks with a tiny pause so
+	// the counting reader sees several Read calls. With the default 64
+	// KiB tick cadence we expect at least 4 mid-stream ticks + the
+	// initial 0/total + a final terminal tick.
+	body := bytes.Repeat([]byte{0xAB}, 256*1024)
+	srv := httptest.NewServer(slowBlobHandler{body: body, chunk: 16 * 1024, delay: 1 * time.Millisecond})
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Origin: srv.URL}
+	digest := Sha256Digest(body)
+	fsys, err := NewFS(c, "repo", map[string]string{"big": digest})
+	if err != nil {
+		t.Fatalf("NewFS: %v", err)
+	}
+	// hydrate the sizeMap manually so progress callbacks carry total.
+	fsys.sizeMap[digest] = int64(len(body))
+
+	type tick struct {
+		name           string
+		digest         string
+		received, total int64
+	}
+	var (
+		mu    sync.Mutex
+		ticks []tick
+	)
+	fsys.SetProgress(func(name, dg string, received, total int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		ticks = append(ticks, tick{name, dg, received, total})
+	})
+	if _, err := fsys.Open("big"); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ticks) < 3 {
+		t.Fatalf("ticks: got %d, want >=3 (initial + at least one chunk + final)", len(ticks))
+	}
+	if ticks[0].received != 0 || ticks[0].total != int64(len(body)) {
+		t.Fatalf("first tick: %+v, want initial 0/total", ticks[0])
+	}
+	last := ticks[len(ticks)-1]
+	if last.received != int64(len(body)) {
+		t.Fatalf("last tick: received=%d, want %d", last.received, len(body))
+	}
+	// Monotonic + bounded.
+	var prev int64
+	for i, tk := range ticks {
+		if tk.name != "big" || tk.digest != digest {
+			t.Fatalf("tick %d: name/digest mismatch: %+v", i, tk)
+		}
+		if tk.received < prev {
+			t.Fatalf("tick %d: non-monotonic received: %d<%d", i, tk.received, prev)
+		}
+		if tk.received > int64(len(body)) {
+			t.Fatalf("tick %d: received overshoot: %d>%d", i, tk.received, len(body))
+		}
+		prev = tk.received
+	}
+}
+
+func TestFS_SetProgress_NilDisables(t *testing.T) {
+	body := bytes.Repeat([]byte{0x01}, 4*1024)
+	rf := newFakeRegistry(t, map[string][]byte{"x": body})
+	defer rf.srv.Close()
+	c := &Client{HTTP: rf.srv.Client(), Origin: rf.srv.URL}
+	fsys, _ := NewFSFromManifest(context.Background(), c, "repo", "latest")
+	var hits int32
+	fsys.SetProgress(func(string, string, int64, int64) { atomic.AddInt32(&hits, 1) })
+	if _, err := fsys.Open("x"); err != nil {
+		t.Fatalf("Open(progress-on): %v", err)
+	}
+	if atomic.LoadInt32(&hits) == 0 {
+		t.Fatal("progress-on: want >0 ticks")
+	}
+	// Disable + fetch a different name so the cache doesn't short-circuit.
+	atomic.StoreInt32(&hits, 0)
+	fsys.SetProgress(nil)
+	// Force a fresh fetch path: drop the cache.
+	fsys.mu.Lock()
+	fsys.cache = map[string][]byte{}
+	fsys.mu.Unlock()
+	if _, err := fsys.Open("x"); err != nil {
+		t.Fatalf("Open(progress-off): %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("progress-off: got %d ticks, want 0", got)
+	}
+}
+
+func TestFS_SetProgressChunk(t *testing.T) {
+	// Custom cadence: 1 KiB cadence over a 4 KiB body served in 1 KiB
+	// chunks. Expect 4+ ticks (1 per HTTP chunk) -- way more than the
+	// default 64 KiB cadence would emit on this body.
+	body := bytes.Repeat([]byte{0x55}, 4*1024)
+	srv := httptest.NewServer(slowBlobHandler{body: body, chunk: 1024, delay: 1 * time.Millisecond})
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Origin: srv.URL}
+	digest := Sha256Digest(body)
+	fsys, _ := NewFS(c, "repo", map[string]string{"x": digest})
+
+	var hits int32
+	fsys.SetProgress(func(string, string, int64, int64) { atomic.AddInt32(&hits, 1) })
+	fsys.SetProgressChunk(1024)
+	if _, err := fsys.Open("x"); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got < 4 {
+		t.Fatalf("custom chunk: got %d ticks, want >=4", got)
+	}
+	// Reset to default via 0; the field should fall back to the package default.
+	fsys.SetProgressChunk(0)
+	fsys.mu.Lock()
+	got := fsys.progressChunk
+	fsys.mu.Unlock()
+	if got != defaultProgressChunkBytes {
+		t.Fatalf("SetProgressChunk(0): chunk=%d want default %d", got, defaultProgressChunkBytes)
+	}
+	// Negative also resets to default.
+	fsys.SetProgressChunk(-1)
+	fsys.mu.Lock()
+	got = fsys.progressChunk
+	fsys.mu.Unlock()
+	if got != defaultProgressChunkBytes {
+		t.Fatalf("SetProgressChunk(-1): chunk=%d want default", got)
+	}
+}
+
+func TestFS_SetProgress_NilFSResetsChunk(t *testing.T) {
+	// Construct an FS with a zeroed chunk to exercise the "reset to
+	// default" branch of SetProgress.
+	c := NewClient("http://x")
+	fsys, _ := NewFS(c, "repo", map[string]string{"x": "sha256:00"})
+	fsys.mu.Lock()
+	fsys.progressChunk = 0
+	fsys.mu.Unlock()
+	fsys.SetProgress(func(string, string, int64, int64) {})
+	fsys.mu.Lock()
+	got := fsys.progressChunk
+	fsys.mu.Unlock()
+	if got != defaultProgressChunkBytes {
+		t.Fatalf("SetProgress reset: chunk=%d want default", got)
+	}
+}
+
+func TestProgressReader_EmitsFinalTickOnEOF(t *testing.T) {
+	// Direct unit test on progressReader so we cover the error-branch
+	// final-tick path without depending on the HTTP stack.
+	body := bytes.Repeat([]byte{0x77}, 9*1024) // 9 KiB
+	var ticks []int64
+	pr := &progressReader{
+		r:      bytes.NewReader(body),
+		name:   "x",
+		digest: "sha256:zz",
+		total:  int64(len(body)),
+		chunk:  4 * 1024, // 4 KiB cadence
+		fn: func(_, _ string, received, _ int64) {
+			ticks = append(ticks, received)
+		},
+	}
+	if _, err := io.ReadAll(pr); err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(ticks) < 2 {
+		t.Fatalf("ticks: %v (want >=2)", ticks)
+	}
+	if last := ticks[len(ticks)-1]; last != int64(len(body)) {
+		t.Fatalf("final tick: %d, want %d", last, len(body))
+	}
+}
+
+func TestProgressReader_NoFnIsNoop(t *testing.T) {
+	// fn=nil branch: counting still happens but no callback fires +
+	// must not panic.
+	body := []byte("abcd")
+	pr := &progressReader{
+		r:     bytes.NewReader(body),
+		chunk: 1,
+		fn:    nil,
+	}
+	n, err := io.ReadAll(pr)
+	if err != nil || len(n) != len(body) {
+		t.Fatalf("ReadAll(no-fn): n=%d err=%v", len(n), err)
+	}
+	if pr.received != int64(len(body)) {
+		t.Fatalf("received: %d want %d", pr.received, len(body))
+	}
+}
+
+func TestFS_LoadDefensiveZeroChunkFallback(t *testing.T) {
+	// Drives the defensive `if chunk <= 0 { chunk = default }` branch in
+	// load. SetProgressChunk normally guards against this, but if a
+	// caller twiddles the field directly OR a future refactor leaves a
+	// zero-value FS in flight we still emit progress at the default
+	// cadence -- proven here.
+	body := bytes.Repeat([]byte{0x99}, 4*1024)
+	rf := newFakeRegistry(t, map[string][]byte{"x": body})
+	defer rf.srv.Close()
+	c := &Client{HTTP: rf.srv.Client(), Origin: rf.srv.URL}
+	fsys, _ := NewFSFromManifest(context.Background(), c, "repo", "latest")
+	var hits int32
+	fsys.SetProgress(func(string, string, int64, int64) { atomic.AddInt32(&hits, 1) })
+	// Force zero AFTER SetProgress has restored the default. The load
+	// path snapshots progressChunk under the lock + must fall back.
+	fsys.mu.Lock()
+	fsys.progressChunk = 0
+	fsys.mu.Unlock()
+	if _, err := fsys.Open("x"); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if atomic.LoadInt32(&hits) == 0 {
+		t.Fatal("want >=1 tick from defensive-default load path")
+	}
+}
+
+func TestFS_NewFSFromManifest_HydratesSizeMap(t *testing.T) {
+	// Confirms NewFSFromManifest fills sizeMap from layer descriptors
+	// so progress totals are non-zero on the OCI happy path.
+	files := map[string][]byte{
+		"pak0.pak": bytes.Repeat([]byte{0x42}, 1024),
+	}
+	rf := newFakeRegistry(t, files)
+	defer rf.srv.Close()
+	c := &Client{HTTP: rf.srv.Client(), Origin: rf.srv.URL}
+	fsys, err := NewFSFromManifest(context.Background(), c, "repo", "latest")
+	if err != nil {
+		t.Fatalf("NewFSFromManifest: %v", err)
+	}
+	digest := Sha256Digest(files["pak0.pak"])
+	if got := fsys.sizeMap[digest]; got != int64(len(files["pak0.pak"])) {
+		t.Fatalf("sizeMap[digest]=%d want %d", got, len(files["pak0.pak"]))
+	}
+}

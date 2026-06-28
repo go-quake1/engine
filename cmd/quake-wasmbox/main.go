@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-quake1/engine/assets"
@@ -113,14 +114,54 @@ func run() error {
 		} else {
 			logf("ociassets: streaming pak + music from %s", OCIReference)
 			musicFS = ociFS
+			// Wire the progress sink BEFORE kicking the fetch goroutine.
+			// The renderer goroutine reads the latest received/total via
+			// atomic loads + paints a centred bar 20x/s until the fetch
+			// completes (or fails).
+			var (
+				received int64
+				total    int64
+				done     atomic.Bool
+			)
+			if ociFSImpl, ok := ociFS.(*ociassets.FS); ok {
+				ociFSImpl.SetProgress(func(_, _ string, r, tot int64) {
+					atomic.StoreInt64(&received, r)
+					if tot > 0 {
+						atomic.StoreInt64(&total, tot)
+					}
+				})
+			}
+			// Reusable RGBA backing the paint helper writes into. Allocated
+			// once -- repainted in place every frame so we don't churn the
+			// wasm GC during the fetch.
+			rgba := make([]byte, fbWidth*fbHeight*4)
+			renderDone := make(chan struct{})
+			go func() {
+				defer close(renderDone)
+				tick := time.NewTicker(50 * time.Millisecond)
+				defer tick.Stop()
+				for {
+					if done.Load() {
+						return
+					}
+					r := atomic.LoadInt64(&received)
+					tot := atomic.LoadInt64(&total)
+					paintLoadingBar(rgba, fbWidth, fbHeight, r, tot)
+					if err := be.PresentFrame(rgba, fbWidth, fbHeight); err != nil {
+						logf("loading-bar PresentFrame: %v", err)
+					}
+					<-tick.C
+				}
+			}()
+
 			// Fetch pak0.pak from the OCI overlay + reparse as a pak.FS.
 			// This blocks on the HTTP GET (~180 MB on localhost ~= 2 s);
 			// runs in a goroutine with a 60s timeout so a hung registry
 			// doesn't trap the worker.
-			done := make(chan fetchPakResult, 1)
-			go func() { done <- fetchPakFromOCI(ociFS) }()
+			fetchDone := make(chan fetchPakResult, 1)
+			go func() { fetchDone <- fetchPakFromOCI(ociFS) }()
 			select {
-			case res := <-done:
+			case res := <-fetchDone:
 				if res.err != nil {
 					logf("ociassets: pak0.pak fetch/parse failed: %v -- falling back", res.err)
 				} else {
@@ -130,6 +171,8 @@ func run() error {
 			case <-time.After(60 * time.Second):
 				logf("ociassets: pak0.pak fetch timeout after 60s -- falling back")
 			}
+			done.Store(true)
+			<-renderDone
 		}
 	}
 
