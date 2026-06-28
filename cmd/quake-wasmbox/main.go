@@ -6,14 +6,22 @@
 
 // quake-wasmbox is the wasmbox-external-client entry point for the
 // Go-native Quake engine. It is a sibling of cmd/quake-wasm: same
-// engine wiring, same synthbsp fallback, same loopback host -- but the
-// presentation surface is a wasmbox-protocol SharedArrayBuffer + the
-// `{type:"commit"}` postMessage rather than a DOM canvas.
+// engine wiring, same synthbsp fallback when no real pak is available,
+// same loopback host -- but the presentation surface is a wasmbox-
+// protocol SharedArrayBuffer + the `{type:"commit"}` postMessage rather
+// than a DOM canvas.
 //
 // The wasm runs inside a Web Worker. The wasmbox compositor (on the
 // main thread) owns the desktop canvas + stacking + focus + input
 // routing; our backend.Backend talks to it via the step-B wire protocol
 // documented at github.com/wasmdesk/wasmbox/docs/protocol.md.
+//
+// 2026-06-28: when the OCI-streamed pak0 successfully reaches
+// maps/start.bsp, we hand off to runner.Setup -- the SAME shared
+// real-pak bring-up tamago uses (host + client + loopback + sound pool +
+// music + particles + alias preload + sbar + menu + attract demo). When
+// the pak is absent / corrupt / placeholder, we fall back to the synth
+// renderer that has shipped here since first bring-up.
 package main
 
 import (
@@ -35,6 +43,7 @@ import (
 	"github.com/go-quake1/engine/ociassets"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/runloop"
+	"github.com/go-quake1/engine/runner"
 	engineserver "github.com/go-quake1/engine/server"
 	"github.com/go-quake1/engine/vfs"
 )
@@ -47,17 +56,13 @@ var OCIReference = ""
 
 // fbWidth / fbHeight match the vanilla DOS Quake framebuffer so the
 // software rasterizer's per-pixel work stays affordable in a wasm
-// runtime. The wasmbox compositor blits the surface 1:1 to the
-// negotiated window (no scaling on commit; the user can resize the
-// desktop canvas if they want bigger pixels).
+// runtime.
 const (
 	fbWidth  = 320
 	fbHeight = 240
 )
 
-// stubHost satisfies [runloop.HostFramer] for the first bring-up. The
-// real id-Software game-server tick lands in a follow-up batch; for now
-// the loop just processes input + paints the world walk.
+// stubHost satisfies [runloop.HostFramer] for the synth-only fallback.
 type stubHost struct{}
 
 func (stubHost) Frame(_ float32) error { return nil }
@@ -79,8 +84,6 @@ func main() {
 // on receipt.
 func run() error {
 	// 1. Handshake with the wasmbox compositor + build the backend.
-	//    NewClient allocates the SAB, posts hello, waits for welcome,
-	//    then installs the long-lived input listener + audio sink.
 	be, err := wasmbox.NewClient("quake (wasm)", fbWidth, fbHeight)
 	if err != nil {
 		return fmt.Errorf("wasmbox.NewClient: %w", err)
@@ -88,8 +91,7 @@ func run() error {
 	logf("backend up -- wasmbox surface=%dx%d", fbWidth, fbHeight)
 
 	// 2. OCI streaming first (when -ldflags '-X main.OCIReference=...'
-	//    has been set at build time). See cmd/quake-wasm/main.go for
-	//    the rationale -- same fall-through semantics here.
+	//    has been set at build time).
 	var pakFS fs.FS
 	if OCIReference != "" {
 		fsys, err := openOCIAssets(OCIReference)
@@ -112,33 +114,74 @@ func run() error {
 		}
 	}
 
-	// 4. Build the asset VFS.
+	// 4. Probe for a real BSP. The first Open through OCI is async-
+	//    blocking (fetches the layer from the registry); the embedpak
+	//    placeholder will simply fail to open maps/start.bsp. Wait up
+	//    to 60s on the OCI path.
+	isReal := false
+	if pakFS != nil {
+		done := make(chan error, 1)
+		go func() {
+			f, err := pakFS.Open("maps/start.bsp")
+			if err == nil {
+				f.Close()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			isReal = (err == nil)
+			if err != nil {
+				logf("real BSP probe failed: %v -- falling back to synth", err)
+			}
+		case <-time.After(60 * time.Second):
+			logf("real BSP probe timeout after 60s -- falling back to synth")
+		}
+	}
+
+	if isReal {
+		// 5a. Real-pak path: hand off to the shared runner.
+		r, err := runner.Setup(runner.SetupOpts{
+			Backend:                     be,
+			PakFS:                       pakFS,
+			FBWidth:                     fbWidth,
+			FBHeight:                    fbHeight,
+			MapSlug:                     "start",
+			Logf:                        logf,
+			DemoOrbit:                   true,
+			DemoOrbitAutoDisableOnInput: true,
+		})
+		if err != nil {
+			logf("runner.Setup failed: %v -- falling back to synth", err)
+		} else {
+			logf("real-pak bring-up live -- entering RunUntilQuit")
+			return r.RunUntilQuit()
+		}
+	}
+
+	// 5b. Synth fallback. The original wasmbox bring-up path: hand-built
+	//     VFS over synthetic palette/colormap/conchars + an in-process
+	//     synthbsp renderer.
+	return runSynth(be, pakFS)
+}
+
+// runSynth is the synth-only fallback path. Kept here (rather than
+// shared) because the synth-only bring-up is wasmbox-specific: tamago
+// has a real-pak host always and never needs this branch.
+func runSynth(be *wasmbox.Backend, pakFS fs.FS) error {
 	v := vfs.New()
 	v.Add(syntheticAssets())
 	if pakFS != nil {
 		v.Add(pakFS)
-		// Eager-prefetch the OCI blobs so the streaming path exercises the
-		// registry (not just the manifest) on boot. The engine's normal
-		// runloop is synthbsp-only today + never opens pak0 / track*.ogg
-		// itself; without these probe-reads the OCI layer-3 plumbing is
-		// observable through the manifest GET alone, which is a weak
-		// end-to-end signal. Each Open here triggers ociassets.FS.load
-		// which sha256-verifies + caches the blob -- so a subsequent
-		// real-BSP-load lands instantly.
-		//
-		// Goroutine-launched so a 180 MB pak0 fetch doesn't block backend
-		// bring-up; the wasm Go scheduler is single-threaded but runner
-		// RunFrame yields to JS at every input poll, which is enough for
-		// the prefetch goroutine to make progress between frames.
+		// Goroutine-launched OCI prefetch so a 180 MB pak0 fetch
+		// doesn't block backend bring-up.
 		go prefetchOCIAssets(pakFS)
 	}
 
-	// 4. Loopback client/server pair.
 	cli, _ := engineserver.NewLoopbackConn()
 	clientState := client.NewState()
 
-	// 5. Runner via the standard SetupOpts path.
-	runner, err := runloop.NewRunnerFromVFS(runloop.SetupOpts{
+	r, err := runloop.NewRunnerFromVFS(runloop.SetupOpts{
 		VFS:            v,
 		Host:           stubHost{},
 		Client:         clientState,
@@ -151,22 +194,20 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("NewRunnerFromVFS: %w", err)
 	}
-	runner.Console.Print("PURE-GO QUAKE 1 -- wasmbox bring-up\n")
-	runner.Console.Print("backend/wasmbox: SAB + protocol commits\n")
-	logf("runner up -- console seeded, entering RunUntilQuit")
+	r.Console.Print("PURE-GO QUAKE 1 -- wasmbox synth bring-up\n")
+	r.Console.Print("backend/wasmbox: SAB + protocol commits\n")
+	logf("synth runner up -- entering RunUntilQuit")
 
-	// 6. Pre2DDraw walks a synthbsp scene so the surface paints actual
-	//    3D pixels.
-	if err := setupSynthRenderer(runner); err != nil {
+	if err := setupSynthRenderer(r); err != nil {
 		logf("setupSynthRenderer skipped: %v -- 2D-only fallback", err)
 	}
 
-	return runner.RunUntilQuit()
+	return r.RunUntilQuit()
 }
 
 // setupSynthRenderer wires a Pre2DDraw closure that paints the synthbsp
 // BuildWithFaces scene.
-func setupSynthRenderer(runner *runloop.Runner) error {
+func setupSynthRenderer(r *runloop.Runner) error {
 	bspBytes, size, err := synthbsp.BuildWithFaces()
 	if err != nil {
 		return fmt.Errorf("synthbsp.BuildWithFaces: %w", err)
@@ -220,14 +261,6 @@ func setupSynthRenderer(runner *runloop.Runner) error {
 			cm[light][src] = byte(src)
 		}
 	}
-	// Camera anchored 20 units above the synth-bsp floor (which lives
-	// at Z=0 spanning [0,10] x [0,10]); pitch=80 looks down at the
-	// floor with a steep enough angle that yaw rotation is visible
-	// (gimbal-safe stand-off from straight-down 90 degrees). See the
-	// twin comment in cmd/quake-wasm/main.go for the rationale -- the
-	// original pitch=0 horizon shot pointed the camera through the
-	// side of the floor + missed every face entirely, producing the
-	// uniform-clear-color surface the L2/L3 bring-up reports flagged.
 	camOrigin := [3]float32{5, 5, 20}
 	const (
 		fovX     = 90.0
@@ -236,19 +269,12 @@ func setupSynthRenderer(runner *runloop.Runner) error {
 
 	var surfaces bsprender.SurfaceList
 	frameCount := 0
-	runner.Pre2DDraw = func(fb *render.FrameBuffer, viewOrigin, viewAngles [3]float32) error {
+	r.Pre2DDraw = func(fb *render.FrameBuffer, viewOrigin, viewAngles [3]float32) error {
 		frame := frameCount
 		frameCount++
-		// Slow yaw spin so the surface paints visible motion; pitch is
-		// fixed so we keep looking down at the floor regardless of the
-		// per-tic viewAngles state the runloop hands us (the stub host
-		// can't drive a real player edict that would refresh these).
 		viewAngles = [3]float32{camPitch, float32(frame % 360), 0}
 		viewOrigin = camOrigin
 
-		// Clear to background palette index 0x10 (sky-like). Compose2D
-		// downstream sees Runner.Pre2DDraw != nil and sets
-		// SkipBackgroundFill so this clear survives into PresentFrame.
 		for i := range fb.Pixels {
 			fb.Pixels[i] = 0x10
 		}
@@ -324,9 +350,6 @@ func syntheticAssets() fs.FS {
 
 func makePaletteLump() []byte {
 	buf := make([]byte, render.PaletteLumpSize)
-	// Sweep a 6-channel rainbow across the 256 palette slots so the
-	// rendered scene paints in visually distinct colours -- see the
-	// twin comment in cmd/quake-wasm/main.go for the rationale.
 	for i := 0; i < 256; i++ {
 		base := byte(i)
 		switch i % 6 {
@@ -356,16 +379,9 @@ func makePaletteLump() []byte {
 			buf[i*3+2] = base
 		}
 	}
-	// Idx 0x10 is the Pre2DDraw clear (sky) -- pin it to mid-blue so
-	// it never collides with a face tile colour.
 	buf[0x10*3+0] = 48
 	buf[0x10*3+1] = 96
 	buf[0x10*3+2] = 176
-	// Pin the four checker-face tile indices (see makeCheckerTex)
-	// to bright, well-separated colours so the rendered face stands
-	// out against the sky -- see the twin comment in
-	// cmd/quake-wasm/main.go for why the rainbow ramp alone leaves
-	// them too dark.
 	for k, rgb := range [...][3]byte{
 		{255, 64, 64},
 		{255, 200, 32},
@@ -457,35 +473,21 @@ func (r *readerAt) ReadAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-// logf is fmt.Printf scoped to a QUAKE: prefix so worker-console output
-// stays grep-able.
+// logf is fmt.Printf scoped to a QUAKE: prefix.
 func logf(format string, args ...any) {
 	fmt.Printf("QUAKE: "+format+"\n", args...)
 }
 
 // prefetchOCIAssets opens the well-known pak + music names so
-// ociassets.FS.Open lazily fetches each layer from the registry into the
-// in-memory + IndexedDB cache. The reads are tolerant: a missing entry is
-// logged + skipped (a partial manifest is still useful). This is the
-// load-bearing piece that turns the layer-3 OCI plumbing into an
-// observable end-to-end network fetch even though the current runloop is
-// synthbsp-only and never opens these files itself.
+// ociassets.FS.Open lazily fetches each layer.
 func prefetchOCIAssets(pakFS fs.FS) {
 	defer func() {
 		if r := recover(); r != nil {
 			logf("ociassets: prefetch PANIC: %v", r)
 		}
 	}()
-	// Brief deferral so the runner's RunUntilQuit reaches its first
-	// frame + parks on a JS-event-loop turn before this goroutine kicks
-	// the first fetch. On the wasm Go runtime that yield is what hands
-	// the JS event loop control to fulfill the registry response (the
-	// fetch itself is async but its body resolution rides the JS loop).
 	time.Sleep(50 * time.Millisecond)
 	logf("ociassets: prefetch starting (pakFS=%T)", pakFS)
-	// Music tracks first (small, cheap signal). pak0 (~180 MB) is heavier
-	// + tagged last so a slow link still produces an end-to-end-OCI
-	// observable signal early.
 	names := []string{}
 	for n := 2; n <= 11; n++ {
 		names = append(names, fmt.Sprintf("music/track%02d.ogg", n))
@@ -493,42 +495,30 @@ func prefetchOCIAssets(pakFS fs.FS) {
 	names = append(names, "pak0.pak")
 	for _, name := range names {
 		t0 := time.Now()
-		// Force a runtime yield BEFORE logf so the runloop's busy-spin
-		// can't starve this goroutine between iterations. time.Sleep(0)
-		// dispatches through netpoll which guarantees a JS event-loop
-		// turn in the wasm runtime.
 		time.Sleep(1 * time.Millisecond)
 		logf("ociassets: prefetch %s opening...", name)
 		file, err := pakFS.Open(name)
 		logf("ociassets: prefetch %s open returned err=%v", name, err)
 		if err != nil {
-			// Yield between attempts so a fault path doesn't busy-loop
-			// against the renderer.
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		// Drain so the read goes through (Open does the full GET +
-		// digest-verify, but draining is cheap insurance against
-		// future lazy-body implementations).
 		n, _ := io.Copy(io.Discard, file)
 		file.Close()
 		logf("ociassets: prefetched %s (%d bytes in %.2fs)", name, n, time.Since(t0).Seconds())
-		// Co-op yield between blobs so the renderer keeps painting.
 		time.Sleep(10 * time.Millisecond)
 	}
 	logf("ociassets: prefetch complete")
 }
 
-// openOCIAssets mirrors cmd/quake-wasm/main.go's helper: parse the
-// linker-baked reference, build the client, fetch the manifest, return
-// an fs.FS that streams the layers on demand.
+// openOCIAssets mirrors cmd/quake-wasm/main.go's helper.
 func openOCIAssets(reference string) (fs.FS, error) {
 	ref, err := ociassets.ParseReference(reference)
 	if err != nil {
 		return nil, fmt.Errorf("parse %q: %w", reference, err)
 	}
-	client := ociassets.NewClient(ref.Origin)
-	return ociassets.NewFSFromManifest(context.Background(), client, ref.Repo, ref.Tag)
+	c := ociassets.NewClient(ref.Origin)
+	return ociassets.NewFSFromManifest(context.Background(), c, ref.Repo, ref.Tag)
 }
 
 var _ = errors.New
