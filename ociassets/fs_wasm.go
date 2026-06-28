@@ -53,7 +53,12 @@ func (c *indexedDBCache) openDB() js.Value {
 	done := make(chan js.Value, 1)
 	upgrade := js.FuncOf(func(this js.Value, args []js.Value) any {
 		db := req.Get("result")
-		if !db.IsUndefined() && !db.Call("objectStoreNames").Call("contains", c.storeName).Bool() {
+		// IDBDatabase.objectStoreNames is a DOMStringList PROPERTY, not a
+		// method -- call Get, not Call. The prior `db.Call(...)` form
+		// raised "property objectStoreNames is not a function" during the
+		// first OCI fetch + killed the worker before runner.Setup could
+		// even reach the pak0.pak Read.
+		if !db.IsUndefined() && !db.Get("objectStoreNames").Call("contains", c.storeName).Bool() {
 			db.Call("createObjectStore", c.storeName)
 		}
 		return nil

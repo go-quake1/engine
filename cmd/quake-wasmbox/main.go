@@ -25,6 +25,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ import (
 	"github.com/go-quake1/engine/embedpak"
 	"github.com/go-quake1/engine/model"
 	"github.com/go-quake1/engine/ociassets"
+	"github.com/go-quake1/engine/pak"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/runloop"
 	"github.com/go-quake1/engine/runner"
@@ -91,15 +93,43 @@ func run() error {
 	logf("backend up -- wasmbox surface=%dx%d", fbWidth, fbHeight)
 
 	// 2. OCI streaming first (when -ldflags '-X main.OCIReference=...'
-	//    has been set at build time).
-	var pakFS fs.FS
+	//    has been set at build time). The OCI FS exposes top-level entries
+	//    named pak0.pak + music/track*.ogg. The pak0.pak entry is the .pak
+	//    archive itself -- we need to fetch its bytes + reparse via
+	//    pak.Open so the inner "maps/start.bsp" path becomes resolvable.
+	//    The music/ entries are passthrough fs.FS reads that the runner's
+	//    MusicOpen closure tries from the OCI overlay first, then the
+	//    embedmusic fallback.
+	var (
+		pakFS    fs.FS // the real .pak archive (pak.FS) -- exposes maps/start.bsp etc.
+		musicFS  fs.FS // optional music overlay (ociFS for OCI builds, nil otherwise)
+		ociErr   error
+	)
 	if OCIReference != "" {
-		fsys, err := openOCIAssets(OCIReference)
+		ociFS, err := openOCIAssets(OCIReference)
 		if err != nil {
+			ociErr = err
 			logf("ociassets: %v -- falling back to embedpak", err)
 		} else {
-			pakFS = fsys
 			logf("ociassets: streaming pak + music from %s", OCIReference)
+			musicFS = ociFS
+			// Fetch pak0.pak from the OCI overlay + reparse as a pak.FS.
+			// This blocks on the HTTP GET (~180 MB on localhost ~= 2 s);
+			// runs in a goroutine with a 60s timeout so a hung registry
+			// doesn't trap the worker.
+			done := make(chan fetchPakResult, 1)
+			go func() { done <- fetchPakFromOCI(ociFS) }()
+			select {
+			case res := <-done:
+				if res.err != nil {
+					logf("ociassets: pak0.pak fetch/parse failed: %v -- falling back", res.err)
+				} else {
+					pakFS = res.fs
+					logf("ociassets: pak0.pak parsed -- %d entries (size=%d bytes)", res.entries, res.size)
+				}
+			case <-time.After(60 * time.Second):
+				logf("ociassets: pak0.pak fetch timeout after 60s -- falling back")
+			}
 		}
 	}
 
@@ -114,36 +144,30 @@ func run() error {
 		}
 	}
 
-	// 4. Probe for a real BSP. The first Open through OCI is async-
-	//    blocking (fetches the layer from the registry); the embedpak
-	//    placeholder will simply fail to open maps/start.bsp. Wait up
-	//    to 60s on the OCI path.
+	// 4. Probe for a real BSP. With pak0.pak materialised in step 2 the
+	//    probe is a straight in-memory lookup; with the embedpak
+	//    placeholder it will fail (the placeholder has no entries).
 	isReal := false
 	if pakFS != nil {
-		done := make(chan error, 1)
-		go func() {
-			f, err := pakFS.Open("maps/start.bsp")
-			if err == nil {
-				f.Close()
-			}
-			done <- err
-		}()
-		select {
-		case err := <-done:
-			isReal = (err == nil)
-			if err != nil {
-				logf("real BSP probe failed: %v -- falling back to synth", err)
-			}
-		case <-time.After(60 * time.Second):
-			logf("real BSP probe timeout after 60s -- falling back to synth")
+		f, err := pakFS.Open("maps/start.bsp")
+		if err != nil {
+			logf("real BSP probe failed: %v -- falling back to synth", err)
+		} else {
+			f.Close()
+			isReal = true
+			logf("real BSP probe ok -- maps/start.bsp is resolvable")
 		}
 	}
+	_ = ociErr // ociErr already logged above; keep var for clarity.
 
 	if isReal {
-		// 5a. Real-pak path: hand off to the shared runner.
+		// 5a. Real-pak path: hand off to the shared runner. MusicOverlayFS
+		// = the OCI manifest FS so music/track*.ogg layers stream from the
+		// registry (pak0.pak does NOT carry music).
 		r, err := runner.Setup(runner.SetupOpts{
 			Backend:                     be,
 			PakFS:                       pakFS,
+			MusicOverlayFS:              musicFS,
 			FBWidth:                     fbWidth,
 			FBHeight:                    fbHeight,
 			MapSlug:                     "start",
@@ -509,6 +533,46 @@ func prefetchOCIAssets(pakFS fs.FS) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	logf("ociassets: prefetch complete")
+}
+
+// fetchPakResult bundles the outcome of fetchPakFromOCI so the timeout
+// select-case stays cheap.
+type fetchPakResult struct {
+	fs      fs.FS
+	entries int
+	size    int
+	err     error
+}
+
+// fetchPakFromOCI opens "pak0.pak" through the OCI manifest-FS, drains it
+// into memory, and reparses the bytes via pak.Open. The returned fs.FS is
+// a *pak.FS that exposes the inner directory layout ("maps/start.bsp",
+// "progs.dat", "gfx/palette.lmp", "progs/*.mdl", etc.) -- which is what
+// the shared runner.Setup pipeline (loadBSP, buildHost, loadMiptexPics)
+// expects.
+//
+// The fetch is synchronous and blocks on the underlying HTTP GET (~180 MB
+// pak0 on localhost lands in ~2 s; the registry plus chromium-streaming
+// path is the load-bearing piece). Caller wraps the call in a goroutine
+// + select for the timeout guard.
+func fetchPakFromOCI(ociFS fs.FS) fetchPakResult {
+	f, err := ociFS.Open("pak0.pak")
+	if err != nil {
+		return fetchPakResult{err: fmt.Errorf("open pak0.pak: %w", err)}
+	}
+	defer f.Close()
+	blob, err := io.ReadAll(f)
+	if err != nil {
+		return fetchPakResult{err: fmt.Errorf("read pak0.pak: %w", err)}
+	}
+	if len(blob) <= 12 {
+		return fetchPakResult{err: fmt.Errorf("pak0.pak too small (%d bytes)", len(blob))}
+	}
+	pfs, err := pak.Open(bytes.NewReader(blob))
+	if err != nil {
+		return fetchPakResult{err: fmt.Errorf("pak.Open: %w", err)}
+	}
+	return fetchPakResult{fs: pfs, entries: pfs.Len(), size: len(blob)}
 }
 
 // openOCIAssets mirrors cmd/quake-wasm/main.go's helper.

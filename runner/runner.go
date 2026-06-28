@@ -87,6 +87,16 @@ type SetupOpts struct {
 	// DemoOrbitAutoDisableOnInput, when true, flips DemoOrbit to false
 	// on the first observed user input event. Default false.
 	DemoOrbitAutoDisableOnInput bool
+
+	// MusicOverlayFS is an optional secondary [fs.FS] the music loader
+	// probes BEFORE the embedded fallback. Useful when PakFS lives
+	// inside a .pak archive (which doesn't carry music) but the music
+	// tracks are available alongside in a separate overlay (e.g. the
+	// OCI image's music/track*.ogg layers). The probe path is the
+	// canonical "music/trackNN.ogg" form (PathPrefix+%02d+PathSuffix).
+	// nil = no overlay; the existing PakFS-then-embedmusic chain is
+	// preserved verbatim.
+	MusicOverlayFS fs.FS
 }
 
 // runtimeState carries the per-call mutable knobs the Pre2DDraw closure
@@ -256,7 +266,12 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 			precached, mixerSamples, active)
 	}
 
-	// 11c-bis. Music driver wiring.
+	// 11c-bis. Music driver wiring. Probe order: PakFS first (the user
+	// can override embedded tracks by shipping music/trackXX.ogg INSIDE
+	// pak0), then MusicOverlayFS if any (the OCI-streaming wasmbox build
+	// ships music as separate /v2/blobs/* layers, NOT inside pak0), then
+	// embedmusic as the static fallback.
+	musicOverlay := opts.MusicOverlayFS
 	runner.MusicOpen = func(track int) ([]byte, bool) {
 		if track <= 0 {
 			return nil, false
@@ -264,6 +279,11 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		path := fmt.Sprintf("%s%02d%s", enginemusic.PathPrefix, track, enginemusic.PathSuffix)
 		if pakFS != nil {
 			if blob, ok := tryReadPakFile(pakFS, path); ok && len(blob) > 64 {
+				return blob, true
+			}
+		}
+		if musicOverlay != nil {
+			if blob, ok := tryReadPakFile(musicOverlay, path); ok && len(blob) > 64 {
 				return blob, true
 			}
 		}
