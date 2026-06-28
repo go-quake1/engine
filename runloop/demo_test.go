@@ -466,18 +466,22 @@ func TestRunFrame_DemoEOFRewindsViaRestart(t *testing.T) {
 	}
 }
 
-// applyErrorDemoBlob constructs a header + one tick whose body is
-// SvcSignonNum stage 4 from StateDisconnected -> client.Apply rejects
-// with ErrApplyBadState. Lets the test prove PlayTick errors propagate
-// through playDemoTick verbatim.
-func applyErrorDemoBlob(t *testing.T) []byte {
+// corruptDemoBlob constructs a header + one tick whose body is the
+// SvcServerInfo opcode (=0x0b=11) followed by a single stray byte.
+// The SvcReader's decodeServerInfo helper expects a 4-byte protocol
+// long + a max-clients byte + a game-type byte + a NUL-terminated
+// level name + two NUL-terminated string lists; the 1-byte tail can
+// only ever trip a short-read inside the body -> the parser flags
+// ErrCorruptMessage. Used to drive the playDemoTick swallow-and-
+// stop-demo path the wasmbox tic-210 freeze fix introduced.
+func corruptDemoBlob(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	if err := demo.EncodeHeader(&buf, ""); err != nil {
 		t.Fatalf("EncodeHeader: %v", err)
 	}
 	tick := demo.DemoTick{
-		Message: []byte{0x0b /* SvcSignonNum */, 0x04 /* stage 4 */},
+		Message: []byte{0x0b /* SvcServerInfo opcode */, 0x04 /* stray body byte */},
 	}
 	if err := demo.EncodeTick(&buf, tick); err != nil {
 		t.Fatalf("EncodeTick: %v", err)
@@ -485,7 +489,83 @@ func applyErrorDemoBlob(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-func TestPlayDemoTick_PlayTickErrorPropagates(t *testing.T) {
+// unknownSvcDemoBlob constructs a header + one tick whose body opens
+// with svc opcode 100 -- a value SvcReader does not dispatch (it
+// falls through to ErrUnknownSvc). With PlayerOpts.SkipUnknownSvc =
+// false (the default the runloop substitutes when none is set) the
+// SvcReader surfaces the sentinel, which playDemoTick now treats the
+// same way as ErrCorruptMessage: clear r.Demo + return nil so the
+// game keeps running.
+func unknownSvcDemoBlob(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := demo.EncodeHeader(&buf, ""); err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	tick := demo.DemoTick{
+		Message: []byte{100 /* svc opcode not in dispatch table */},
+	}
+	if err := demo.EncodeTick(&buf, tick); err != nil {
+		t.Fatalf("EncodeTick: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestPlayDemoTick_CorruptMessageSwallowedAndDemoCleared(t *testing.T) {
+	rec := backend.NewRecorder(0, 0)
+	r, _ := newRunner(t, rec)
+	rd, err := demo.NewReader(bytes.NewReader(corruptDemoBlob(t)))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	r.Demo = &Demo{Reader: rd}
+	if err := r.playDemoTick(); err != nil {
+		t.Fatalf("playDemoTick: %v, want nil (ErrCorruptMessage swallowed)", err)
+	}
+	if r.Demo != nil {
+		t.Errorf("ErrCorruptMessage did not clear the demo (the next tic would re-trip the same broken body)")
+	}
+}
+
+func TestPlayDemoTick_UnknownSvcSwallowedAndDemoCleared(t *testing.T) {
+	rec := backend.NewRecorder(0, 0)
+	r, _ := newRunner(t, rec)
+	rd, err := demo.NewReader(bytes.NewReader(unknownSvcDemoBlob(t)))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	r.Demo = &Demo{Reader: rd}
+	if err := r.playDemoTick(); err != nil {
+		t.Fatalf("playDemoTick: %v, want nil (ErrUnknownSvc swallowed)", err)
+	}
+	if r.Demo != nil {
+		t.Errorf("ErrUnknownSvc did not clear the demo (the cursor would stay off-alignment on the next tic)")
+	}
+}
+
+// applyErrorDemoBlob constructs a header + one tick whose body is
+// svc_signonnum stage 4 (opcode 25 = 0x19, payload byte 0x04). From
+// StateDisconnected client.Apply rejects that transition with
+// ErrApplyBadState -- an APPLY-time error, NOT a decode-time error.
+// The fix that swallows ErrCorruptMessage / ErrUnknownSvc must NOT
+// also swallow Apply errors: those signal a genuine fault the
+// embedder wants to see.
+func applyErrorDemoBlob(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := demo.EncodeHeader(&buf, ""); err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	tick := demo.DemoTick{
+		Message: []byte{0x19 /* SvcSignonNum opcode */, 0x04 /* stage 4 */},
+	}
+	if err := demo.EncodeTick(&buf, tick); err != nil {
+		t.Fatalf("EncodeTick: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestPlayDemoTick_ApplyErrorStillPropagates(t *testing.T) {
 	rec := backend.NewRecorder(0, 0)
 	r, _ := newRunner(t, rec)
 	rd, err := demo.NewReader(bytes.NewReader(applyErrorDemoBlob(t)))
@@ -494,25 +574,28 @@ func TestPlayDemoTick_PlayTickErrorPropagates(t *testing.T) {
 	}
 	r.Demo = &Demo{Reader: rd}
 	if err := r.playDemoTick(); err == nil {
-		t.Fatalf("playDemoTick: nil err, want PlayTick failure")
+		t.Fatalf("playDemoTick: nil err, want PlayTick Apply failure")
 	}
 	if r.Demo == nil {
-		t.Errorf("PlayTick error cleared the demo (it shouldn't -- byte stream is fine)")
+		t.Errorf("Apply error cleared the demo (it shouldn't -- only decode errors clear)")
 	}
 }
 
-func TestRunFrame_DemoErrorPropagates(t *testing.T) {
+func TestRunFrame_DemoCorruptMessageDoesNotPropagate(t *testing.T) {
 	rec := backend.NewRecorder(0, 0)
 	r, _ := newRunner(t, rec)
-	rd, err := demo.NewReader(bytes.NewReader(applyErrorDemoBlob(t)))
+	rd, err := demo.NewReader(bytes.NewReader(corruptDemoBlob(t)))
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 	r.Demo = &Demo{Reader: rd}
 	r.Menu = nil
 
-	if err := r.RunFrame(0.05, 1); err == nil {
-		t.Fatalf("RunFrame: nil err, want demo PlayTick failure")
+	if err := r.RunFrame(0.05, 1); err != nil {
+		t.Fatalf("RunFrame: %v, want nil (ErrCorruptMessage must not crash RunUntilQuit)", err)
+	}
+	if r.Demo != nil {
+		t.Errorf("RunFrame did not clear the broken demo")
 	}
 }
 

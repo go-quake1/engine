@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/go-quake1/engine/backend"
+	"github.com/go-quake1/engine/client"
 	"github.com/go-quake1/engine/demo"
 	"github.com/go-quake1/engine/menu"
 )
@@ -146,12 +147,31 @@ func (r *Runner) interruptDemoOnInput(snap backend.InputSnapshot) bool {
 // prefix, etc.) propagates verbatim AFTER clearing Runner.Demo so
 // the next tic doesn't re-trip the same broken stream.
 //
-// PlayTick errors propagate verbatim WITHOUT clearing the demo:
-// the underlying byte stream is fine, so the next tic can decode
-// the next message body cleanly + the embedder can decide whether
-// to log + continue or escalate. (The simpler-but-wrong alternative
-// would silently swallow Apply errors and let the client drift out
-// of sync with the recording.)
+// PlayTick decode-time errors -- [client.ErrCorruptMessage] and
+// [client.ErrUnknownSvc] -- are SWALLOWED + the demo is cleared:
+// a corrupt svc body or an unmapped opcode means the parser's
+// byte cursor has slid off-alignment, and every subsequent tic in
+// the same stream will reproduce the failure. Crashing the whole
+// engine for a best-effort attract-loop entertainment cue is the
+// wrong trade; the runloop falls back to the normal host.Frame +
+// client.Tick path so the game stays live. This bug was first
+// observed on cmd/quake-wasmbox after the OCI pak loaded: the
+// attract demo runs ~200 tics over real pak content, then trips
+// the SvcReader because vanilla demo1.dem carries opcodes
+// (svc_time, svc_lightstyle, svc_setangle, svc_spawnstatic,
+// svc_spawnstaticsound, etc.) the SvcReader does not yet decode;
+// SkipUnknownSvc=true bypasses ErrUnknownSvc but leaves the
+// cursor inside the unknown body, so the next dispatch reads
+// garbage opcodes that eventually decode into an
+// ErrCorruptMessage on a truncated body. Same code on tamago is
+// vulnerable to the same condition; the symptom is rarer there
+// because QEMU clocks slower so the run typically ends before
+// the bad opcode lands, but the fix is upstream of the runtime.
+//
+// All OTHER PlayTick errors still propagate verbatim WITHOUT
+// clearing the demo: the underlying byte stream is intact, so
+// the next tic can decode cleanly + the embedder can decide
+// whether to log + continue or escalate.
 func (r *Runner) playDemoTick() error {
 	tick, err := r.Demo.Reader.NextFrame()
 	if errors.Is(err, io.EOF) {
@@ -166,6 +186,10 @@ func (r *Runner) playDemoTick() error {
 		opts = demo.DefaultPlayerOpts()
 	}
 	if perr := demo.PlayTick(r.Client, &tick, &r.ViewAngles, opts); perr != nil {
+		if errors.Is(perr, client.ErrCorruptMessage) || errors.Is(perr, client.ErrUnknownSvc) {
+			r.Demo = nil
+			return nil
+		}
 		return perr
 	}
 	r.Demo.FrameCount++
