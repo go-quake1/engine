@@ -135,6 +135,7 @@ func run() error {
 			// once -- repainted in place every frame so we don't churn the
 			// wasm GC during the fetch.
 			rgba := make([]byte, fbWidth*fbHeight*4)
+			renderStart := time.Now()
 			renderDone := make(chan struct{})
 			go func() {
 				defer close(renderDone)
@@ -170,6 +171,15 @@ func run() error {
 				}
 			case <-time.After(60 * time.Second):
 				logf("ociassets: pak0.pak fetch timeout after 60s -- falling back")
+			}
+			// 2026-06-28: hold the panel on screen for at least
+			// minLoadingPanelVisible so an instant cache hit doesn't blow
+			// past the loading state in a single frame. Without this the
+			// user sees a 50 ms flash and then the game; with it the panel
+			// is on screen long enough to read.
+			if wait := loadingPanelHoldFor(renderStart, time.Now(), minLoadingPanelVisible); wait > 0 {
+				logf("ociassets: holding loading panel for %v (fetch finished early)", wait)
+				time.Sleep(wait)
 			}
 			done.Store(true)
 			<-renderDone
