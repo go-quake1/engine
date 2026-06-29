@@ -9,6 +9,7 @@ package wasmbox
 import (
 	"sync"
 	"syscall/js"
+	"time"
 )
 
 // ProtocolInput is an InputDevice that translates the wasmbox
@@ -99,12 +100,37 @@ func (p *ProtocolInput) push(ev InputEvent) {
 
 // PollEvents drains + returns the queued events. Safe to call from the
 // main loop.
+//
+// CRITICAL: a brief time.Sleep YIELDS the wasm thread to the JS event
+// loop. The runner's RunUntilQuit is a tight for-loop; without this
+// yield, JS message events from the compositor (input + closed) queue
+// up in the worker but their listener never fires -- the Go runtime
+// scheduler holds the wasm thread continuously between RunFrame calls.
+// PollEvents is the right place: it is invoked once per tic by
+// Backend.PollInput, so the yield rate matches the engine tic rate.
+// Without this, mouse clicks + key presses forwarded by the compositor
+// over the per-worker MessagePort are never delivered to the engine
+// even though the wire reaches port2: the worker JS scope is starved.
 func (p *ProtocolInput) PollEvents() ([]InputEvent, error) {
+	yieldToJSEventLoop()
 	p.mu.Lock()
 	out := p.events
 	p.events = nil
 	p.mu.Unlock()
 	return out, nil
+}
+
+// yieldToJSEventLoop hands the wasm thread back to JS for one event
+// loop tick so queued message events fire + the per-worker port bridge
+// re-dispatches them onto self where the install()'d listener picks
+// them up. time.Sleep on GOOS=js is implemented via setTimeout: when
+// every Go goroutine is parked on a timer the Go runtime releases the
+// wasm thread, letting Chromium drain the message queue, then resumes
+// when setTimeout fires. 1ms is small enough to not eat into the
+// engine's per-tic budget (the runloop targets ~16.7ms/tic at 60Hz)
+// yet long enough for the browser to dispatch any pending messages.
+func yieldToJSEventLoop() {
+	time.Sleep(time.Millisecond)
 }
 
 // jsString returns the string value of a JS field or "" if the field
