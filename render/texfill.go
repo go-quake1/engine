@@ -80,8 +80,16 @@ func FillTexturedPolygon(fb *FrameBuffer, tex *Pic, cm *ColorMap, lightLevel int
 		return ErrPicShape
 	}
 
-	uMax := tex.Width - 1
-	vMax := tex.Height - 1
+	// Tile-wrap dims. Quake textures repeat across surfaces -- world-space
+	// U/V here is in texture-pixel units (often thousands), so the
+	// rasterizer must modulo into [0, W) / [0, H). Clamping (the previous
+	// behaviour) sampled the rightmost column of the miptex on every
+	// face = each surface filled with one palette byte = flat-shaded
+	// polygons. tyrquake's R_DrawSpans uses & (W-1) since miptex dims
+	// are power-of-two; we use a positive-modulo so test fixtures with
+	// non-pow2 dims also wrap cleanly.
+	texW := tex.Width
+	texH := tex.Height
 
 	yMin, yMax := verts[0].Y, verts[0].Y
 	for _, v := range verts[1:] {
@@ -164,16 +172,15 @@ func FillTexturedPolygon(fb *FrameBuffer, tex *Pic, cm *ColorMap, lightLevel int
 				v := vLeft + (xf-xLeft)*dvDx
 				ui := int(math.Floor(float64(u)))
 				vi := int(math.Floor(float64(v)))
-				if ui < 0 {
-					ui = 0
-				} else if ui > uMax {
-					ui = uMax
-				}
-				if vi < 0 {
-					vi = 0
-				} else if vi > vMax {
-					vi = vMax
-				}
+				// Quake textures TILE -- the world-space U/V here is in
+				// texture-pixel units (often thousands), so clamping
+				// would sample the rightmost column of the miptex on
+				// every face = each surface fills with one palette byte
+				// = flat-shaded polygons. Quake miptex dims are always
+				// powers of two, so the cheap & (W-1) / & (H-1) wrap
+				// matches tyrquake's R_DrawSpans behaviour byte-for-byte.
+				ui = ((ui % texW) + texW) % texW
+				vi = ((vi % texH) + texH) % texH
 				texel := tex.Pixels[vi*tex.Width+ui]
 				if cm != nil {
 					texel = cm.LightIndex(lightLevel, texel)
