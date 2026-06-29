@@ -36,6 +36,14 @@ type AliasEntity struct {
 	AngleRoll  float32    // entity roll (degrees; usually 0)
 	FrameIdx   int        // index into model.Frames
 	SkinIdx    int        // (reserved) index into the caller's skin table
+
+	// ClTime is the current client time in seconds, used to pick the
+	// active sub-frame of an mdl FrameGroup via mdl.Frame.PoseAt.
+	// FrameSingle frames ignore it; FrameGroup frames (torches, flames,
+	// armor shimmer, ...) cycle through their sub-frames at the rate
+	// recorded by the mdl's Intervals[]. Zero is a valid value (gives
+	// sub-frame 0 = the first pose of the cycle).
+	ClTime float32
 }
 
 // DrawAlias rasterizes one alias model into fb. For each triangle in
@@ -96,7 +104,7 @@ func DrawAlias(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightLevel int,
 		return ErrAliasBadFrame
 	}
 
-	verts := FramePose(model.Frames[ent.FrameIdx])
+	verts := FramePoseAt(model.Frames[ent.FrameIdx], ent.ClTime)
 	return drawAliasFromPose(fb, rd, cm, lightLevel, model, skin, ent, verts)
 }
 
@@ -216,23 +224,28 @@ func entityRotation(pitch, yaw, roll float32) Mat3 {
 	}
 }
 
-// FramePose returns the per-vertex byte triples for the still pose
-// of a Frame. For FrameSingle the single record's verts are returned
-// verbatim; for FrameGroup the first sub-frame's verts stand in as
-// the still pose (no per-tic interpolation in this commit). If the
-// group is empty (a malformed .mdl) an empty slice is returned --
-// the caller's triangle loop then iterates zero work.
+// FramePose returns the per-vertex byte triples for the time=0
+// pose of a Frame: FrameSingle returns its single record verbatim,
+// FrameGroup returns the FIRST sub-frame. Prefer FramePoseAt(f, t)
+// for FrameGroup-bearing models (torches, flames, armor shimmer)
+// where the sub-frame must cycle with cl.time.
 //
 // Exported so out-of-package callers (e.g. the quake-tamago alias
 // pass) can spot-check ComputeAliasVertexLights against the same
-// pose DrawAliasLit consumed, without duplicating the per-type
-// dispatch.
+// pose DrawAliasLit consumed.
 func FramePose(f mdl.Frame) []mdl.TriVertx {
+	return FramePoseAt(f, 0)
+}
+
+// FramePoseAt returns the per-vertex byte triples for a Frame at the
+// given client time. Delegates to mdl.Frame.PoseAt, which picks the
+// active sub-frame of a FrameGroup based on its Intervals[]. Used by
+// DrawAlias / DrawAliasLit / DrawAliasInterp{,Lit} when the entity
+// carries a non-zero AliasEntity.ClTime.
+func FramePoseAt(f mdl.Frame, time float32) []mdl.TriVertx {
 	if f.Type == mdl.FrameGroup {
-		if f.Group == nil || len(f.Group.Frames) == 0 {
-			return nil
-		}
-		return f.Group.Frames[0].Verts
+		sub := f.PoseAt(time)
+		return sub.Verts
 	}
 	return f.Single.Verts
 }

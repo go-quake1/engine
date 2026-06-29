@@ -66,11 +66,11 @@ func DrawAliasInterp(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightLevel int,
 		return ErrAliasBadFrame
 	}
 
-	vertsA := FramePose(model.Frames[ent.FrameIdx])
+	vertsA := FramePoseAt(model.Frames[ent.FrameIdx], ent.ClTime)
 	if ent.Lerp == 0 || ent.FrameIdxNext == ent.FrameIdx {
 		return drawAliasFromPose(fb, rd, cm, lightLevel, model, skin, ent.AliasEntity, vertsA)
 	}
-	vertsB := FramePose(model.Frames[ent.FrameIdxNext])
+	vertsB := FramePoseAt(model.Frames[ent.FrameIdxNext], ent.ClTime)
 	if ent.Lerp == 1 {
 		return drawAliasFromPose(fb, rd, cm, lightLevel, model, skin, ent.AliasEntity, vertsB)
 	}
@@ -133,7 +133,7 @@ func DrawAliasInterpLit(fb *FrameBuffer, rd *RefDef, cm *ColorMap, shade AliasSh
 		return ErrAliasBadFrame
 	}
 
-	vertsA := FramePose(model.Frames[ent.FrameIdx])
+	vertsA := FramePoseAt(model.Frames[ent.FrameIdx], ent.ClTime)
 	// Mirror DrawAliasLit's empty-pose short-circuit: ComputeAliasVertexLights
 	// errors on a nil slice, but an empty FrameGroup is a no-op draw.
 	if ent.Lerp == 0 || ent.FrameIdxNext == ent.FrameIdx {
@@ -143,7 +143,7 @@ func DrawAliasInterpLit(fb *FrameBuffer, rd *RefDef, cm *ColorMap, shade AliasSh
 		lights, _ := ComputeAliasVertexLights(vertsA, shade)
 		return drawAliasFromPoseLit(fb, rd, cm, lights, model, skin, ent.AliasEntity, vertsA)
 	}
-	vertsB := FramePose(model.Frames[ent.FrameIdxNext])
+	vertsB := FramePoseAt(model.Frames[ent.FrameIdxNext], ent.ClTime)
 	if ent.Lerp == 1 {
 		if vertsB == nil {
 			return nil

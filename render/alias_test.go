@@ -5,6 +5,7 @@
 package render
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -371,5 +372,135 @@ func TestFramePose_SingleReturnsVerts(t *testing.T) {
 func TestFramePose_GroupNilReturnsNil(t *testing.T) {
 	if got := FramePose(mdl.Frame{Type: mdl.FrameGroup, Group: nil}); got != nil {
 		t.Fatalf("FramePose nil-group = %v want nil", got)
+	}
+}
+
+// TestDrawAlias_FrameGroupCyclesWithClTime is the autonomous
+// regression test for torch/flame animation. A FrameGroup whose two
+// sub-frames place the triangle in DIFFERENT screen positions MUST
+// produce different framebuffer bytes at t=0 vs t=0.15s. A regression
+// that pins sub-frame 0 (the prior FramePose behaviour) makes both
+// draws byte-identical, and this test fires.
+//
+// Mirrors the in-game pathology for progs/flame.mdl whose flame
+// sub-frames cycle at 10 Hz: with PoseAt threading off ClTime, the
+// renderer picks a different pose every ~100 ms and the flame
+// appears to flicker.
+func TestDrawAlias_FrameGroupCyclesWithClTime(t *testing.T) {
+	// Two sub-frames with a vertex translated along Y by 20 byte-units.
+	// Both front-facing (signed area negative under the DrawAlias
+	// convention). Cycle = 0.2s; sub-frame 0 at t in [0,0.1), sub-frame
+	// 1 at t in [0.1,0.2).
+	subA := mdl.SingleFrame{Verts: []mdl.TriVertx{
+		{V: [3]byte{0, 15, 10}},
+		{V: [3]byte{0, 5, 10}},
+		{V: [3]byte{0, 10, 15}},
+	}}
+	subB := mdl.SingleFrame{Verts: []mdl.TriVertx{
+		// Shift the y coords up by 20 so the triangle lands at a
+		// different screen Y -> different pixels written.
+		{V: [3]byte{0, 35, 10}},
+		{V: [3]byte{0, 25, 10}},
+		{V: [3]byte{0, 30, 15}},
+	}}
+	m := &mdl.Model{
+		Header: mdl.Header{
+			Scale:       [3]float32{1, 1, 1},
+			ScaleOrigin: [3]float32{0, -10, -10},
+			SkinWidth:   16,
+			SkinHeight:  16,
+			NumVerts:    3,
+			NumTris:     1,
+			NumFrames:   1,
+		},
+		STVerts: []mdl.STVert{{S: 0, T: 0}, {S: 15, T: 0}, {S: 0, T: 15}},
+		Triangles: []mdl.Triangle{
+			{FacesFront: 1, VertIndex: [3]int32{0, 1, 2}},
+		},
+		Frames: []mdl.Frame{
+			{Type: mdl.FrameGroup, Group: &mdl.GroupFrame{
+				Intervals: []float32{0.1, 0.2},
+				Frames:    []mdl.SingleFrame{subA, subB},
+			}},
+		},
+	}
+	skin := newAliasSkin(0x42, 16, 16)
+
+	drawAt := func(time float32) []byte {
+		fb, _ := NewFrameBuffer(320, 200)
+		rd, _ := NewRefDef(VRect{Width: 320, Height: 200}, [3]float32{0, 0, 0}, [3]float32{0, 0, 0}, 90)
+		ent := AliasEntity{Origin: [3]float32{100, 0, 0}, ClTime: time}
+		if err := DrawAlias(fb, rd, nil, 0, m, skin, ent); err != nil {
+			t.Fatalf("DrawAlias(t=%v): %v", time, err)
+		}
+		out := make([]byte, len(fb.Pixels))
+		copy(out, fb.Pixels)
+		return out
+	}
+
+	at0 := drawAt(0)     // sub-frame A
+	at15 := drawAt(0.15) // sub-frame B (in [0.1, 0.2))
+	if bytes.Equal(at0, at15) {
+		t.Fatal("FrameGroup did NOT cycle: ClTime=0 produced same bytes as ClTime=0.15 (PoseAt regression?)")
+	}
+
+	// And the cycle MUST wrap: t=0.25 (> total 0.2) modulo 0.2 = 0.05
+	// -> back to sub-frame A. Bytes must match the t=0 draw.
+	at25 := drawAt(0.25)
+	if !bytes.Equal(at0, at25) {
+		t.Fatal("FrameGroup cycle did NOT wrap modulo total: t=0 and t=0.25 differ")
+	}
+}
+
+// TestDrawAliasLit_FrameGroupCyclesWithClTime mirrors the above for
+// the lit renderer (the one the runner actually calls via
+// DrawAliasInterpLit). Catches a regression where Lit path forgot to
+// thread ClTime through PoseAt.
+func TestDrawAliasLit_FrameGroupCyclesWithClTime(t *testing.T) {
+	subA := mdl.SingleFrame{Verts: []mdl.TriVertx{
+		{V: [3]byte{0, 15, 10}},
+		{V: [3]byte{0, 5, 10}},
+		{V: [3]byte{0, 10, 15}},
+	}}
+	subB := mdl.SingleFrame{Verts: []mdl.TriVertx{
+		{V: [3]byte{0, 35, 10}},
+		{V: [3]byte{0, 25, 10}},
+		{V: [3]byte{0, 30, 15}},
+	}}
+	m := &mdl.Model{
+		Header: mdl.Header{
+			Scale:       [3]float32{1, 1, 1},
+			ScaleOrigin: [3]float32{0, -10, -10},
+			SkinWidth:   16,
+			SkinHeight:  16,
+			NumVerts:    3,
+			NumTris:     1,
+			NumFrames:   1,
+		},
+		STVerts:   []mdl.STVert{{S: 0, T: 0}, {S: 15, T: 0}, {S: 0, T: 15}},
+		Triangles: []mdl.Triangle{{FacesFront: 1, VertIndex: [3]int32{0, 1, 2}}},
+		Frames: []mdl.Frame{
+			{Type: mdl.FrameGroup, Group: &mdl.GroupFrame{
+				Intervals: []float32{0.1, 0.2},
+				Frames:    []mdl.SingleFrame{subA, subB},
+			}},
+		},
+	}
+	skin := newAliasSkin(0x42, 16, 16)
+
+	drawAt := func(time float32) []byte {
+		fb, _ := NewFrameBuffer(320, 200)
+		rd, _ := NewRefDef(VRect{Width: 320, Height: 200}, [3]float32{0, 0, 0}, [3]float32{0, 0, 0}, 90)
+		ent := AliasEntity{Origin: [3]float32{100, 0, 0}, ClTime: time}
+		if err := DrawAliasLit(fb, rd, nil, DefaultAliasShade(), m, skin, ent); err != nil {
+			t.Fatalf("DrawAliasLit(t=%v): %v", time, err)
+		}
+		out := make([]byte, len(fb.Pixels))
+		copy(out, fb.Pixels)
+		return out
+	}
+	a, b := drawAt(0), drawAt(0.15)
+	if bytes.Equal(a, b) {
+		t.Fatal("DrawAliasLit FrameGroup did NOT cycle with ClTime")
 	}
 }

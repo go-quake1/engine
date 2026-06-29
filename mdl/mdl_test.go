@@ -615,3 +615,161 @@ func TestSliceN_OverflowEnd(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+// --- PoseAt ----------------------------------------------------------------
+
+func TestPoseAt_SingleFrameIgnoresTime(t *testing.T) {
+	single := SingleFrame{Name: "still", Verts: []TriVertx{{V: [3]byte{7, 0, 0}}}}
+	f := Frame{Type: FrameSingle, Single: single}
+	for _, tm := range []float32{0, 0.5, 99} {
+		got := f.PoseAt(tm)
+		if got.Name != "still" || len(got.Verts) != 1 || got.Verts[0].V[0] != 7 {
+			t.Fatalf("PoseAt(%v) = %+v, want single 'still' verts[0].X=7", tm, got)
+		}
+	}
+}
+
+// Classic 3-frame group at 10 Hz: intervals = {0.1, 0.2, 0.3}. The
+// sub-frame chosen depends on time mod 0.3.
+func TestPoseAt_GroupCyclesAtConfiguredRate(t *testing.T) {
+	g := &GroupFrame{
+		Intervals: []float32{0.1, 0.2, 0.3},
+		Frames: []SingleFrame{
+			{Name: "f0", Verts: []TriVertx{{V: [3]byte{0, 0, 0}}}},
+			{Name: "f1", Verts: []TriVertx{{V: [3]byte{1, 0, 0}}}},
+			{Name: "f2", Verts: []TriVertx{{V: [3]byte{2, 0, 0}}}},
+		},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	cases := []struct {
+		time float32
+		want string
+	}{
+		{0, "f0"},
+		{0.05, "f0"},
+		{0.1, "f1"},
+		{0.15, "f1"},
+		{0.25, "f2"},
+		{0.3 + 0.05, "f0"}, // wraps modulo 0.3
+		{0.3 + 0.15, "f1"},
+		{0.3*3 + 0.25, "f2"},
+	}
+	for _, c := range cases {
+		got := f.PoseAt(c.time)
+		if got.Name != c.want {
+			t.Errorf("PoseAt(%v) = %q, want %q", c.time, got.Name, c.want)
+		}
+	}
+}
+
+// Animation liveness test: at uniformly-sampled times across the
+// cycle the helper must visit ALL sub-frames. A regression that
+// hardcodes Frames[0] (the previous behaviour) would only visit one
+// name and this test fires.
+func TestPoseAt_VisitsAllSubFramesOverCycle(t *testing.T) {
+	g := &GroupFrame{
+		Intervals: []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6},
+		Frames: []SingleFrame{
+			{Name: "a"}, {Name: "b"}, {Name: "c"},
+			{Name: "d"}, {Name: "e"}, {Name: "f"},
+		},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	seen := map[string]bool{}
+	for i := 0; i < 60; i++ {
+		tm := float32(i) * 0.01
+		seen[f.PoseAt(tm).Name] = true
+	}
+	if len(seen) != len(g.Frames) {
+		t.Fatalf("PoseAt cycle visited %d/%d sub-frames: %v (expected all six)",
+			len(seen), len(g.Frames), seen)
+	}
+}
+
+// Malformed group: empty Frames -> empty SingleFrame, no panic.
+func TestPoseAt_EmptyGroup(t *testing.T) {
+	f := Frame{Type: FrameGroup, Group: &GroupFrame{}}
+	got := f.PoseAt(1.0)
+	if got.Name != "" || got.Verts != nil {
+		t.Fatalf("empty group: PoseAt = %+v, want zero SingleFrame", got)
+	}
+}
+
+// Nil group: empty SingleFrame, no nil-deref.
+func TestPoseAt_NilGroup(t *testing.T) {
+	f := Frame{Type: FrameGroup, Group: nil}
+	got := f.PoseAt(1.0)
+	if got.Name != "" || got.Verts != nil {
+		t.Fatalf("nil group: PoseAt = %+v, want zero SingleFrame", got)
+	}
+}
+
+// Empty Intervals -> falls back to Frames[0].
+func TestPoseAt_NoIntervalsFallback(t *testing.T) {
+	g := &GroupFrame{
+		Frames: []SingleFrame{{Name: "only"}},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	if got := f.PoseAt(99); got.Name != "only" {
+		t.Fatalf("no-intervals fallback: got %q, want 'only'", got.Name)
+	}
+}
+
+// Non-positive total interval -> fallback to Frames[0] (defensive
+// against malformed mdl files).
+func TestPoseAt_ZeroTotalFallback(t *testing.T) {
+	g := &GroupFrame{
+		Intervals: []float32{0, 0},
+		Frames: []SingleFrame{
+			{Name: "a"}, {Name: "b"},
+		},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	if got := f.PoseAt(5); got.Name != "a" {
+		t.Fatalf("zero-total fallback: got %q, want 'a'", got.Name)
+	}
+}
+
+// Negative time clamps to 0 (first sub-frame).
+func TestPoseAt_NegativeTimeClampsToZero(t *testing.T) {
+	g := &GroupFrame{
+		Intervals: []float32{0.1, 0.2},
+		Frames:    []SingleFrame{{Name: "first"}, {Name: "second"}},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	if got := f.PoseAt(-3.5); got.Name != "first" {
+		t.Fatalf("negative-time clamp: got %q, want 'first'", got.Name)
+	}
+}
+
+// Floating-point edge: time exactly == total returns last sub-frame
+// (not panics on the t<end loop exhausting).
+func TestPoseAt_TimeExactlyTotalReturnsLast(t *testing.T) {
+	g := &GroupFrame{
+		Intervals: []float32{0.1, 0.3},
+		Frames:    []SingleFrame{{Name: "first"}, {Name: "last"}},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	// 0.3 mod 0.3 == 0 with int truncation; but we also want the loop
+	// to handle t-just-under-total correctly. Test the just-under case.
+	if got := f.PoseAt(0.29999); got.Name != "last" {
+		t.Fatalf("near-total: got %q, want 'last'", got.Name)
+	}
+}
+
+// Malformed: Intervals has more entries than Frames. The loop's
+// `i < len(Frames)` guard skips the extra intervals; if t exceeds the
+// last in-range interval, the safety-net return fires.
+func TestPoseAt_IntervalsLongerThanFrames(t *testing.T) {
+	g := &GroupFrame{
+		Intervals: []float32{0.1, 0.2, 0.3, 0.4},
+		Frames:    []SingleFrame{{Name: "a"}, {Name: "b"}},
+	}
+	f := Frame{Type: FrameGroup, Group: g}
+	// t=0.35 is past Intervals[1]=0.2 (the last with a matching
+	// frame); Intervals[2]/[3] are skipped by the i<len(Frames)
+	// guard; safety-net returns last Frames[1]="b".
+	if got := f.PoseAt(0.35); got.Name != "b" {
+		t.Fatalf("intervals>frames: got %q, want 'b'", got.Name)
+	}
+}

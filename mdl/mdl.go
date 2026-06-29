@@ -143,6 +143,54 @@ type Frame struct {
 	Group  *GroupFrame // non-nil when Type == FrameGroup
 }
 
+// PoseAt returns the SingleFrame the renderer should sample at the
+// given client time. tyrquake equivalent: R_AliasSetupFrame's
+// "if (frame->type == ALIAS_GROUP)" branch in r_alias.c which picks
+// the sub-frame whose cumulative interval > (time mod total).
+//
+// For FrameSingle Type the time argument is ignored.
+//
+// For FrameGroup Type with non-empty Frames + matching Intervals,
+// time is reduced modulo the group's total duration and the first
+// sub-frame whose Intervals[i] > (time mod total) is returned. The
+// progs/flame.mdl + progs/torch.mdl shipped with Quake are
+// single-element top-level FrameGroups whose sub-frames cycle the
+// torch flame at ~10 Hz; without this method (the renderer
+// previously pinned sub-frame 0 unconditionally) the flame appears
+// frozen even though the model carries the animation data.
+//
+// Malformed groups (Frames empty, fewer Intervals than Frames, or
+// non-positive total) fall back to Frames[0] so the renderer always
+// has a defined pose.
+func (f Frame) PoseAt(time float32) SingleFrame {
+	if f.Type != FrameGroup {
+		return f.Single
+	}
+	if f.Group == nil || len(f.Group.Frames) == 0 {
+		return SingleFrame{}
+	}
+	if len(f.Group.Intervals) == 0 {
+		return f.Group.Frames[0]
+	}
+	total := f.Group.Intervals[len(f.Group.Intervals)-1]
+	if total <= 0 {
+		return f.Group.Frames[0]
+	}
+	t := time
+	if t < 0 {
+		t = 0
+	}
+	// time mod total (positive-modulo).
+	t -= total * float32(int(t/total))
+	for i, end := range f.Group.Intervals {
+		if t < end && i < len(f.Group.Frames) {
+			return f.Group.Frames[i]
+		}
+	}
+	// Floating-point edge: t == total. Last sub-frame.
+	return f.Group.Frames[len(f.Group.Frames)-1]
+}
+
 // Model is a fully-decoded .mdl file.
 type Model struct {
 	Header    Header

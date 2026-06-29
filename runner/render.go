@@ -572,6 +572,7 @@ func setupRenderer(opts setupRendererOpts) error {
 					AngleRoll:  es.Angles[2],
 					FrameIdx:   prevIdx,
 					SkinIdx:    es.SkinNum,
+					ClTime:     turbTimeSec, // mdl FrameGroup sub-frame cycler (torches, flames)
 				},
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
