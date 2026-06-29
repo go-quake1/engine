@@ -240,6 +240,134 @@ func TestTransformFace_UV_WithOffsets(t *testing.T) {
 	}
 }
 
+// --- TransformFacePerspective -----------------------------------------------
+
+func TestTransformFacePerspective_TooFewVerts(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	fv := bsprender.FaceVerts{NumVerts: 2, Vert: func(i int) [3]float32 { return [3]float32{} }}
+	if _, err := bsprender.TransformFacePerspective(render.Affine{}, fb, 90, fv); !errors.Is(err, bsprender.ErrFaceTooFewVerts) {
+		t.Errorf("got %v, want ErrFaceTooFewVerts", err)
+	}
+}
+
+func TestTransformFacePerspective_TooManyVerts(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	fv := bsprender.FaceVerts{NumVerts: render.MaxPolyVerts + 1, Vert: func(i int) [3]float32 { return [3]float32{} }}
+	if _, err := bsprender.TransformFacePerspective(render.Affine{}, fb, 90, fv); !errors.Is(err, bsprender.ErrFaceTooManyVerts) {
+		t.Errorf("got %v, want ErrFaceTooManyVerts", err)
+	}
+}
+
+func TestTransformFacePerspective_BehindCamera(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	face := triangleVerts([3]float32{-10, -10, -100}, [3]float32{10, -10, -100}, [3]float32{0, 10, -100})
+	fv := bsprender.FaceVerts{NumVerts: 3, Vert: face}
+	if _, err := bsprender.TransformFacePerspective(identityAffine(), fb, 90, fv); !errors.Is(err, bsprender.ErrFaceBehindCamera) {
+		t.Errorf("got %v, want ErrFaceBehindCamera", err)
+	}
+}
+
+// Happy path: confirms screen coords are reasonable AND that the Z
+// field is propagated as the in-front view-space depth.
+func TestTransformFacePerspective_DeadAhead_CarriesZ(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	face := triangleVerts(
+		[3]float32{-1, -1, 100},
+		[3]float32{1, -1, 100},
+		[3]float32{0, 1, 100},
+	)
+	fv := bsprender.FaceVerts{NumVerts: 3, Vert: face}
+	out, err := bsprender.TransformFacePerspective(identityAffine(), fb, 90, fv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("len(out)=%d, want 3", len(out))
+	}
+	halfW := float32(fb.Width) / 2
+	halfH := float32(fb.Height) / 2
+	for i, v := range out {
+		if abs(v.X-halfW) > 5 {
+			t.Errorf("vert %d X=%v, want near halfW=%v", i, v.X, halfW)
+		}
+		if abs(v.Y-halfH) > 5 {
+			t.Errorf("vert %d Y=%v, want near halfH=%v", i, v.Y, halfH)
+		}
+		if v.Z != 100 {
+			t.Errorf("vert %d Z=%v, want 100 (view-space depth)", i, v.Z)
+		}
+	}
+}
+
+// Partial-behind exercises the depth-clamp branch and the Z
+// propagation for clamped verts (Z = ParticleNearClip on the rear vert).
+func TestTransformFacePerspective_PartialBehind_ClampsZ(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	pts := [][3]float32{
+		{-1, -1, -50}, // behind camera -> Z must be clamped, not propagated as -50
+		{1, -1, 100},
+		{0, 1, 100},
+	}
+	fv := bsprender.FaceVerts{NumVerts: 3, Vert: func(i int) [3]float32 { return pts[i] }}
+	out, err := bsprender.TransformFacePerspective(identityAffine(), fb, 90, fv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("len(out)=%d, want 3", len(out))
+	}
+	if out[0].Z != render.ParticleNearClip {
+		t.Errorf("rear vert Z=%v, want clamped to %v", out[0].Z, render.ParticleNearClip)
+	}
+	if out[1].Z != 100 || out[2].Z != 100 {
+		t.Errorf("front verts Z=(%v,%v), want (100,100)", out[1].Z, out[2].Z)
+	}
+}
+
+// Degenerate fov path: tanHalfX <= 0 guard falls back to scale=1.
+func TestTransformFacePerspective_DegenerateFOV_DoesNotCrash(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	face := triangleVerts(
+		[3]float32{-1, -1, 100},
+		[3]float32{1, -1, 100},
+		[3]float32{0, 1, 100},
+	)
+	fv := bsprender.FaceVerts{NumVerts: 3, Vert: face}
+	out, err := bsprender.TransformFacePerspective(identityAffine(), fb, 0, fv)
+	if err != nil {
+		t.Fatalf("expected success under degenerate fov, got %v", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("len(out)=%d, want 3", len(out))
+	}
+}
+
+// UV axes + offsets are emitted unchanged (same math as TransformFace).
+func TestTransformFacePerspective_UV_AxisAlignedWithOffsets(t *testing.T) {
+	fb := mustFB(t, 320, 200)
+	pts := [][3]float32{{2, 3, 100}, {7, 11, 100}, {13, 17, 100}}
+	fv := bsprender.FaceVerts{
+		NumVerts: 3,
+		Vert:     func(i int) [3]float32 { return pts[i] },
+		UVAxisS:  [3]float32{1, 0, 0},
+		UVOffS:   5,
+		UVAxisT:  [3]float32{0, 1, 0},
+		UVOffT:   7,
+	}
+	out, err := bsprender.TransformFacePerspective(identityAffine(), fb, 90, fv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range out {
+		if v.U != pts[i][0]+5 {
+			t.Errorf("vert %d U=%v, want %v", i, v.U, pts[i][0]+5)
+		}
+		if v.V != pts[i][1]+7 {
+			t.Errorf("vert %d V=%v, want %v", i, v.V, pts[i][1]+7)
+		}
+	}
+}
+
 // --- NewBrushFaceVerts -------------------------------------------------------
 
 func TestNewBrushFaceVerts_NilModel(t *testing.T) {

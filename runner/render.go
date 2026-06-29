@@ -442,10 +442,6 @@ func setupRenderer(opts setupRendererOpts) error {
 			if err != nil {
 				continue
 			}
-			verts, err := bsprender.TransformFace(view, fb, fovX, fv)
-			if err != nil {
-				continue
-			}
 			tex := fallbackTex
 			var name string
 			if mtIdx, ok, _ := bm.FaceMipTexIdx(ref.FaceIdx); ok && mtIdx >= 0 && mtIdx < len(miptexPics) {
@@ -466,11 +462,27 @@ func setupRenderer(opts setupRendererOpts) error {
 			}
 			switch {
 			case strings.HasPrefix(name, "sky"):
+				verts, err := bsprender.TransformFace(view, fb, fovX, fv)
+				if err != nil {
+					continue
+				}
 				_ = render.FillSkyPolygon(fb, tex, verts, skyTimeSec)
 			case strings.HasPrefix(name, "*"):
+				verts, err := bsprender.TransformFace(view, fb, fovX, fv)
+				if err != nil {
+					continue
+				}
 				_ = render.FillTurbulentPolygon(fb, tex, &cm, 0, verts, turbTimeSec)
 			default:
-				_ = render.FillTexturedPolygon(fb, tex, &cm, 0, verts)
+				// Perspective-correct UV: world surfaces sampled with
+				// 1/z interpolation across 8-pixel sub-spans (tyrquake
+				// R_DrawSurface). The affine path made large polygons
+				// (floors, big walls) "swim" as the camera moved.
+				pverts, err := bsprender.TransformFacePerspective(view, fb, fovX, fv)
+				if err != nil {
+					continue
+				}
+				_ = render.FillPerspectiveTexturedPolygon(fb, tex, &cm, 0, pverts)
 			}
 		}
 
