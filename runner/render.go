@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"strings"
 
+	"github.com/go-quake1/engine/assets"
 	"github.com/go-quake1/engine/bspfile"
 	"github.com/go-quake1/engine/bsprender"
 	"github.com/go-quake1/engine/client"
@@ -23,12 +24,14 @@ import (
 	"github.com/go-quake1/engine/runloop"
 	enginesound "github.com/go-quake1/engine/sound"
 	enginespr "github.com/go-quake1/engine/spr"
+	"github.com/go-quake1/engine/vfs"
 )
 
 // setupRendererOpts bundles the (many) parameters [setupRenderer] consumes.
 type setupRendererOpts struct {
 	runner          *runloop.Runner
 	pakFS           fs.FS
+	searchPath      *vfs.SearchPath
 	realHost        *enginehost.Host
 	playerSlot      int
 	aliasPrecache   []string
@@ -110,10 +113,29 @@ func setupRenderer(opts setupRendererOpts) error {
 	logf("miptex specials -- sky=%d liquid=%d anim=%d (chains=%d)",
 		nSky, nTurb, nAnim, miptexChains.NumChains())
 
+	// Real Quake colormap from gfx.wad: a 64x256 LUT that darkens
+	// each palette index across 64 light rows. Without this LUT the
+	// per-pixel lightmap math runs but every row is identity over
+	// the source byte -- so lightmaps have NO visual effect. Fall
+	// back to the synthetic identity colormap only if the load
+	// fails (synth-only test runs without a real pak).
 	var cm render.ColorMap
-	for light := 0; light < render.ColorMapRows; light++ {
-		for src := 0; src < render.ColorMapCols; src++ {
-			cm[light][src] = byte(src)
+	if opts.searchPath != nil {
+		if loaded, err := assets.LoadColorMapFrom(opts.searchPath); err == nil && loaded != nil {
+			cm = *loaded
+		} else {
+			logf("LoadColorMapFrom failed, falling back to identity: %v", err)
+			for light := 0; light < render.ColorMapRows; light++ {
+				for src := 0; src < render.ColorMapCols; src++ {
+					cm[light][src] = byte(src)
+				}
+			}
+		}
+	} else {
+		for light := 0; light < render.ColorMapRows; light++ {
+			for src := 0; src < render.ColorMapCols; src++ {
+				cm[light][src] = byte(src)
+			}
 		}
 	}
 

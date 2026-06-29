@@ -424,6 +424,7 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 	if err := setupRenderer(setupRendererOpts{
 		runner:          runner,
 		pakFS:           pakFS,
+		searchPath:      v,
 		realHost:        realHost,
 		playerSlot:      playerSlot,
 		aliasPrecache:   aliasPrecache,
