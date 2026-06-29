@@ -173,9 +173,11 @@ func TestFillTexturedPolygon_UVWrapHigh(t *testing.T) {
 	if err := FillTexturedPolygon(fb, tex, nil, 0, verts); err != nil {
 		t.Fatalf("FillTexturedPolygon: %v", err)
 	}
-	// Mid pixel (2,2) samples UV mapped from screen (2,2) → tex (8,8) → wraps to (0,0) → 0x00.
-	if got := fb.Pixels[2*fb.Pitch+2]; got != 0x00 {
-		t.Fatalf("UV-wrap mid = %#02x want 0x00 (wrap to tex[0,0])", got)
+	// Screen pixel (2,2) center: U = 0 + 2.5*4 = 10, V = 10. Floor (10,10).
+	// Wrap mod 4: (2, 2). Texture byte at (2,2) = vi<<4|ui = 0x22.
+	// Old clamp behavior would have returned 0x33 (right-bottom corner).
+	if got := fb.Pixels[2*fb.Pitch+2]; got != 0x22 {
+		t.Fatalf("UV-wrap mid = %#02x want 0x22 (wrap of (10,10) into 4x4 = (2,2))", got)
 	}
 }
 
