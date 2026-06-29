@@ -113,31 +113,7 @@ func setupRenderer(opts setupRendererOpts) error {
 	logf("miptex specials -- sky=%d liquid=%d anim=%d (chains=%d)",
 		nSky, nTurb, nAnim, miptexChains.NumChains())
 
-	// Real Quake colormap from gfx.wad: a 64x256 LUT that darkens
-	// each palette index across 64 light rows. Without this LUT the
-	// per-pixel lightmap math runs but every row is identity over
-	// the source byte -- so lightmaps have NO visual effect. Fall
-	// back to the synthetic identity colormap only if the load
-	// fails (synth-only test runs without a real pak).
-	var cm render.ColorMap
-	if opts.searchPath != nil {
-		if loaded, err := assets.LoadColorMapFrom(opts.searchPath); err == nil && loaded != nil {
-			cm = *loaded
-		} else {
-			logf("LoadColorMapFrom failed, falling back to identity: %v", err)
-			for light := 0; light < render.ColorMapRows; light++ {
-				for src := 0; src < render.ColorMapCols; src++ {
-					cm[light][src] = byte(src)
-				}
-			}
-		}
-	} else {
-		for light := 0; light < render.ColorMapRows; light++ {
-			for src := 0; src < render.ColorMapCols; src++ {
-				cm[light][src] = byte(src)
-			}
-		}
-	}
+	cm := loadColorMapOrFallback(opts.searchPath, logf)
 
 	walkCtx := bsprender.NewWalkContext(bm)
 	if isSynth {
@@ -511,7 +487,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				if err != nil {
 					continue
 				}
-				plane := buildLightmapPlane(lmInfo, lightingLump)
+				plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec)
 				_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
 			}
 		}
@@ -745,23 +721,107 @@ func setupRenderer(opts setupRendererOpts) error {
 	return nil
 }
 
+// loadColorMapOrFallback resolves the runtime colormap. Real Quake
+// renders correctly ONLY with the gfx.wad COLORMAP lump (a 64x256
+// LUT whose row 0 is identity and row 63 is heavily darkened); the
+// previous in-place synthesis of cm[r][s] = byte(s) made every row
+// identity, which silently broke per-pixel lighting (lightmap row had
+// zero effect because the LUT didn't darken). Pulled into its own
+// function so the runtime contract -- "this returns a NON-IDENTITY
+// colormap whenever the search path supplies one" -- is unit-testable
+// in isolation, without driving the whole setupRenderer.
+//
+// Fallback to synthetic identity only when no SearchPath is supplied
+// (e.g. synth-only test runs that don't ship a real pak) OR when the
+// load fails. The fallback is loud (logged) so the surface is visibly
+// flat -- the bug is then immediately obvious instead of subtle.
+func loadColorMapOrFallback(searchPath *vfs.SearchPath, logf func(string, ...any)) render.ColorMap {
+	var cm render.ColorMap
+	if searchPath != nil {
+		if loaded, err := assets.LoadColorMapFrom(searchPath); err == nil && loaded != nil {
+			return *loaded
+		} else if err != nil && logf != nil {
+			logf("LoadColorMapFrom failed, falling back to identity (lighting will look flat): %v", err)
+		}
+	}
+	for light := 0; light < render.ColorMapRows; light++ {
+		for src := 0; src < render.ColorMapCols; src++ {
+			cm[light][src] = byte(src)
+		}
+	}
+	return cm
+}
+
+// defaultLightStyles is tyrquake's R_AnimateLight() built-in table:
+// 11 standard Quake lightstyles indexed by Face.Styles[i]. Each char
+// 'a'..'z' encodes a brightness 0..25; the engine samples it at 10 Hz
+// from cl.time and multiplies by 22 to yield a 0..550 light scale
+// (256 = ~='m', the resting level used by static lights).
+//
+// Style 0 is hard-set "m" (full-bright steady, NOT in this table) by
+// engine convention; this slice holds 1..11.
+//
+// Source: tyrquake's r_light.c R_AnimateLight + the lightstyle string
+// table in NQ/cl_main.c CL_ClearState / S_INIT.
+var defaultLightStyles = [...]string{
+	"m",                                                  // 0 - normal (steady)
+	"mmnmmommommnonmmonqnmmo",                            // 1 - FLICKER (torches)
+	"abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba", // 2 - SLOW PULSE
+	"mmmmmaaaaammmmmaaaaaabcdefgabcdefg",                 // 3 - CANDLE 1
+	"mamamamamama",                                       // 4 - FAST STROBE
+	"jklmnopqrstuvwxyzyxwvutsrqponmlkj",                  // 5 - GENTLE PULSE
+	"nmonqnmomnmomomno",                                  // 6 - FLICKER 2
+	"mmmaaaabcdefgmmmmaaaammmaamm",                       // 7 - CANDLE 2
+	"mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa",         // 8 - CANDLE 3
+	"aaaaaaaazzzzzzzz",                                   // 9 - SLOW STROBE
+	"mmamammmmammamamaaamammma",                          // 10 - FLUORESCENT
+	"abcdefghijklmnopqrrqponmlkjihgfedcba",               // 11 - SLOW PULSE 2
+}
+
+// lightStyleBrightness returns the per-style brightness (0..550) at
+// the given time, sampling the style's Anim string at 10 Hz. style 0
+// is the constant full-bright. Unknown / out-of-range styles fall
+// back to the static-style brightness 256 so a face with a style not
+// in the default table still renders.
+func lightStyleBrightness(style byte, t float32) int {
+	if style == 0 {
+		return 264 // 'm' = 12, * 22 = 264
+	}
+	if int(style) >= len(defaultLightStyles) {
+		return 256
+	}
+	anim := defaultLightStyles[style]
+	if anim == "" {
+		return 256
+	}
+	idx := int(t*10) % len(anim)
+	if idx < 0 {
+		idx += len(anim)
+	}
+	ch := anim[idx]
+	if ch < 'a' || ch > 'z' {
+		return 256
+	}
+	return int(ch-'a') * 22
+}
+
 // buildLightmapPlane assembles the per-face W*H lightmap byte plane
 // the lightmapped rasterizer samples from. tyrquake equivalent:
 // R_BuildLightMap in r_surf.c.
 //
 // The BSP packs up to 4 lightstyle layers back-to-back at
 // info.LightOfs in the Lighting() lump; each layer is W*H bytes.
-// We sum every active layer (style != 255) into the returned plane,
-// using a per-style brightness of 256 (the "all-styles-at-rest"
-// constant value) -- enough for the static lighting that dominates
-// every Quake map. Animated lightstyles (style 1+ pulsing the value
-// over time) are a follow-up: the per-frame cl.LightStyles[] table
-// would replace the fixed 256.
+// For each active layer (Styles[i] != 255) we accumulate
+// `lightmap[j] * lightStyleBrightness(Styles[i], t)` into a per-pixel
+// int sum, then convert that sum back into a byte (clamped at 255).
+// `t` is the client time in seconds (cl.time); it drives the 10 Hz
+// sampling of each style's Anim string so torches flicker and
+// fluorescents pulse over time.
 //
 // LightOfs == -1 OR an out-of-range offset means "no static lighting"
 // (sky / turbulent / faces past the lump end); we return a fully-lit
 // plane (255 everywhere) so the rasterizer renders full-bright.
-func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte) []byte {
+func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte, t float32) []byte {
 	pix := info.Width * info.Height
 	plane := make([]byte, pix)
 	if info.LightOfs < 0 {
@@ -780,7 +840,6 @@ func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte) []byte {
 	// Per-style accumulator: int so we can sum past 255 before
 	// clamping at the end.
 	accum := make([]int, pix)
-	const brightness = 256 // fixed-rate active style; follow-up: per-frame cl.LightStyles
 	for s := 0; s < len(info.Styles); s++ {
 		if info.Styles[s] == 255 {
 			continue
@@ -789,8 +848,9 @@ func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte) []byte {
 		if layerOff+pix > len(lighting) {
 			break
 		}
+		scale := lightStyleBrightness(info.Styles[s], t)
 		for j := 0; j < pix; j++ {
-			accum[j] += int(lighting[layerOff+j]) * brightness >> 8
+			accum[j] += int(lighting[layerOff+j]) * scale >> 8
 		}
 	}
 	// Floor at the engine "ambient" of 0 (caller can light-up via
