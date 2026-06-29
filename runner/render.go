@@ -436,6 +436,9 @@ func setupRenderer(opts setupRendererOpts) error {
 			skyTimeSec = float32(realHost.Server.Time)
 			turbTimeSec = float32(realHost.Server.Time)
 		}
+		// Cache the Lighting() lump once per frame; FaceLightmapInfo
+		// hands back byte offsets into this slice.
+		lightingLump := bm.File.Lighting()
 		for i := 0; i < surfaces.Len(); i++ {
 			ref := surfaces.Refs[i]
 			fv, err := bsprender.NewBrushFaceVerts(bm, ref.FaceIdx)
@@ -474,15 +477,20 @@ func setupRenderer(opts setupRendererOpts) error {
 				}
 				_ = render.FillTurbulentPolygon(fb, tex, &cm, 0, verts, turbTimeSec)
 			default:
-				// Perspective-correct UV: world surfaces sampled with
-				// 1/z interpolation across 8-pixel sub-spans (tyrquake
-				// R_DrawSurface). The affine path made large polygons
-				// (floors, big walls) "swim" as the camera moved.
-				pverts, err := bsprender.TransformFacePerspective(view, fb, fovX, fv)
+				// World surface: per-face lightmap + perspective-correct
+				// UV (tyrquake R_DrawSurface). Lightmap data lives in
+				// the BSP's Lighting() lump, indexed by Face.LightOfs;
+				// up to 4 lightstyle layers stacked W*H bytes each.
+				lmInfo, lmErr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx)
+				if lmErr != nil {
+					continue
+				}
+				lverts, err := bsprender.TransformFaceLightmapped(view, fb, fovX, fv, lmInfo)
 				if err != nil {
 					continue
 				}
-				_ = render.FillPerspectiveTexturedPolygon(fb, tex, &cm, 0, pverts)
+				plane := buildLightmapPlane(lmInfo, lightingLump)
+				_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
 			}
 		}
 
@@ -713,6 +721,66 @@ func setupRenderer(opts setupRendererOpts) error {
 		return nil
 	}
 	return nil
+}
+
+// buildLightmapPlane assembles the per-face W*H lightmap byte plane
+// the lightmapped rasterizer samples from. tyrquake equivalent:
+// R_BuildLightMap in r_surf.c.
+//
+// The BSP packs up to 4 lightstyle layers back-to-back at
+// info.LightOfs in the Lighting() lump; each layer is W*H bytes.
+// We sum every active layer (style != 255) into the returned plane,
+// using a per-style brightness of 256 (the "all-styles-at-rest"
+// constant value) -- enough for the static lighting that dominates
+// every Quake map. Animated lightstyles (style 1+ pulsing the value
+// over time) are a follow-up: the per-frame cl.LightStyles[] table
+// would replace the fixed 256.
+//
+// LightOfs == -1 OR an out-of-range offset means "no static lighting"
+// (sky / turbulent / faces past the lump end); we return a fully-lit
+// plane (255 everywhere) so the rasterizer renders full-bright.
+func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte) []byte {
+	pix := info.Width * info.Height
+	plane := make([]byte, pix)
+	if info.LightOfs < 0 {
+		for i := range plane {
+			plane[i] = 255
+		}
+		return plane
+	}
+	base := int(info.LightOfs)
+	if base >= len(lighting) {
+		for i := range plane {
+			plane[i] = 255
+		}
+		return plane
+	}
+	// Per-style accumulator: int so we can sum past 255 before
+	// clamping at the end.
+	accum := make([]int, pix)
+	const brightness = 256 // fixed-rate active style; follow-up: per-frame cl.LightStyles
+	for s := 0; s < len(info.Styles); s++ {
+		if info.Styles[s] == 255 {
+			continue
+		}
+		layerOff := base + s*pix
+		if layerOff+pix > len(lighting) {
+			break
+		}
+		for j := 0; j < pix; j++ {
+			accum[j] += int(lighting[layerOff+j]) * brightness >> 8
+		}
+	}
+	// Floor at the engine "ambient" of 0 (caller can light-up via
+	// colormap row 0 when all styles are absent). Clamp at 255.
+	for j := 0; j < pix; j++ {
+		v := accum[j]
+		if v > 255 {
+			v = 255
+		}
+		plane[j] = byte(v)
+	}
+	return plane
 }
 
 // observedAnyInput returns true iff the runloop has seen any movement
