@@ -32,6 +32,7 @@ import (
 	"io"
 	"io/fs"
 	"sync/atomic"
+	"syscall/js"
 	"time"
 
 	"github.com/go-quake1/engine/assets"
@@ -57,13 +58,23 @@ import (
 // placeholders.
 var OCIReference = ""
 
-// fbWidth / fbHeight match the vanilla DOS Quake framebuffer so the
-// software rasterizer's per-pixel work stays affordable in a wasm
-// runtime.
-const (
-	fbWidth  = 320
-	fbHeight = 240
-)
+// jsGlobalFBSize reads the (width, height) the worker.js shim wrote
+// into self.__quake_fb_w / __quake_fb_h before importing quake.wasm.
+// Missing / non-integer / zero values come back as (0, 0) so chooseFB
+// can fold them into the default. A panic anywhere in the js.Value
+// dance (host page intentionally cleared the globals between
+// importScripts() + go.run, missing js.Global, etc.) is treated as
+// "no JS dims available" so the engine still boots at the default.
+func jsGlobalFBSize() (int, int) {
+	defer func() { _ = recover() }()
+	g := js.Global()
+	w := g.Get("__quake_fb_w")
+	h := g.Get("__quake_fb_h")
+	if w.Type() != js.TypeNumber || h.Type() != js.TypeNumber {
+		return 0, 0
+	}
+	return w.Int(), h.Int()
+}
 
 // stubHost satisfies [runloop.HostFramer] for the synth-only fallback.
 type stubHost struct{}
@@ -86,14 +97,30 @@ func main() {
 // so the worker console carries the failure reason; main then blocks
 // on receipt.
 func run() error {
-	// 1. Handshake with the wasmbox compositor + build the backend.
+	// 1. Pick the framebuffer dims. worker.js (the JS shim that loaded
+	//    this wasm) reads localStorage["wasmbox.layout"] BEFORE go.run
+	//    and publishes the chosen surface size on two globals; chooseFB
+	//    folds those + the defaults + the [min..max] clamps into the
+	//    final (w, h). Native-rendering at the saved window size means
+	//    the compositor no longer has to scale-fit a 320x240 SAB up to
+	//    a 900x700 frame, eliminating a costly per-pixel upscale + the
+	//    aliasing that came with it.
+	jsW, jsH := jsGlobalFBSize()
+	fbWidth, fbHeight := chooseFB(jsW, jsH)
+	logf("fb dims: js=(%d,%d) chosen=%dx%d", jsW, jsH, fbWidth, fbHeight)
+
+	// 2. Handshake with the wasmbox compositor + build the backend.
 	be, err := wasmbox.NewClient("quake (wasm)", fbWidth, fbHeight)
 	if err != nil {
 		return fmt.Errorf("wasmbox.NewClient: %w", err)
 	}
+	// The compositor MAY clamp the requested dims (e.g. MIN_W / MIN_H).
+	// Trust the granted size from here on so the loading-panel paint,
+	// the run-loop FBWidth/FBHeight + PresentFrame stride all agree.
+	fbWidth, fbHeight = be.Size()
 	logf("backend up -- wasmbox surface=%dx%d", fbWidth, fbHeight)
 
-	// 2. OCI streaming first (when -ldflags '-X main.OCIReference=...'
+	// 3. OCI streaming first (when -ldflags '-X main.OCIReference=...'
 	//    has been set at build time). The OCI FS exposes top-level entries
 	//    named pak0.pak + music/track*.ogg. The pak0.pak entry is the .pak
 	//    archive itself -- we need to fetch its bytes + reparse via
@@ -186,7 +213,7 @@ func run() error {
 		}
 	}
 
-	// 3. Embedded pak fallback (placeholder = 12 bytes -> error
+	// 4. Embedded pak fallback (placeholder = 12 bytes -> error
 	//    -> drop through to the synthetic-asset path).
 	if pakFS == nil {
 		fsys, pakErr := embedpak.OpenAsFS()
@@ -197,7 +224,7 @@ func run() error {
 		}
 	}
 
-	// 4. Probe for a real BSP. With pak0.pak materialised in step 2 the
+	// 5. Probe for a real BSP. With pak0.pak materialised in step 3 the
 	//    probe is a straight in-memory lookup; with the embedpak
 	//    placeholder it will fail (the placeholder has no entries).
 	isReal := false
@@ -214,7 +241,7 @@ func run() error {
 	_ = ociErr // ociErr already logged above; keep var for clarity.
 
 	if isReal {
-		// 5a. Real-pak path: hand off to the shared runner. MusicOverlayFS
+		// 6a. Real-pak path: hand off to the shared runner. MusicOverlayFS
 		// = the OCI manifest FS so music/track*.ogg layers stream from the
 		// registry (pak0.pak does NOT carry music).
 		r, err := runner.Setup(runner.SetupOpts{
@@ -236,7 +263,7 @@ func run() error {
 		}
 	}
 
-	// 5b. Synth fallback. The original wasmbox bring-up path: hand-built
+	// 6b. Synth fallback. The original wasmbox bring-up path: hand-built
 	//     VFS over synthetic palette/colormap/conchars + an in-process
 	//     synthbsp renderer.
 	return runSynth(be, pakFS)
