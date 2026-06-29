@@ -95,16 +95,20 @@ func setupRenderer(opts setupRendererOpts) error {
 	}
 	logf("loaded %d miptexes from BSP (total slots: %d, loaded: %d, null: %d)",
 		loaded, total, loaded, total-loaded)
-	var nSky, nTurb int
+	var nSky, nTurb, nAnim int
 	for _, n := range miptexNames {
 		switch {
 		case strings.HasPrefix(n, "sky"):
 			nSky++
 		case strings.HasPrefix(n, "*"):
 			nTurb++
+		case strings.HasPrefix(n, "+"):
+			nAnim++
 		}
 	}
-	logf("miptex specials -- sky=%d liquid=%d", nSky, nTurb)
+	miptexChains := BuildMiptexChains(miptexNames)
+	logf("miptex specials -- sky=%d liquid=%d anim=%d (chains=%d)",
+		nSky, nTurb, nAnim, miptexChains.NumChains())
 
 	var cm render.ColorMap
 	for light := 0; light < render.ColorMapRows; light++ {
@@ -445,7 +449,17 @@ func setupRenderer(opts setupRendererOpts) error {
 			tex := fallbackTex
 			var name string
 			if mtIdx, ok, _ := bm.FaceMipTexIdx(ref.FaceIdx); ok && mtIdx >= 0 && mtIdx < len(miptexPics) {
-				if p := miptexPics[mtIdx]; p != nil {
+				// Resolve animated chains via cl.time at 5 Hz
+				// (tyrquake R_TextureAnimation). Non-animated
+				// slots resolve to themselves.
+				effIdx := miptexChains.Pic(mtIdx, turbTimeSec)
+				if effIdx < 0 || effIdx >= len(miptexPics) {
+					effIdx = mtIdx
+				}
+				if p := miptexPics[effIdx]; p != nil {
+					tex = p
+					name = miptexNames[effIdx]
+				} else if p := miptexPics[mtIdx]; p != nil {
 					tex = p
 					name = miptexNames[mtIdx]
 				}
