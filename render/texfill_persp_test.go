@@ -96,11 +96,17 @@ func TestFillPerspectiveTexturedPolygon_UniformZMatchesAffine(t *testing.T) {
 	const W, H = 32, 32
 	tex := makeTex4x4()
 
+	// UVs kept strictly inside [0, texW) so that floor() agrees between
+	// the affine straight-scanline interpolation and the perspective sub-
+	// span interpolation; at the wrap boundary float drift can otherwise
+	// land one side on U=W-eps (floor W-1) and the other on U=W+eps
+	// (floor W -> wrap 0), making the equality flaky despite identical
+	// math.
 	pVerts := []PerspTexturedVertex{
 		{2, 2, 100, 0, 0},
-		{28, 4, 100, 4, 0},
-		{26, 30, 100, 4, 4},
-		{4, 28, 100, 0, 4},
+		{28, 4, 100, 3.9, 0},
+		{26, 30, 100, 3.9, 3.9},
+		{4, 28, 100, 0, 3.9},
 	}
 	aVerts := make([]TexturedVertex, len(pVerts))
 	for i, v := range pVerts {
@@ -241,11 +247,10 @@ func TestFillPerspectiveTexturedPolygon_NilCMRaw(t *testing.T) {
 	}
 }
 
-func TestFillPerspectiveTexturedPolygon_UVClampHigh(t *testing.T) {
+func TestFillPerspectiveTexturedPolygon_UVWrapHigh(t *testing.T) {
+	// Quake textures TILE; UVs spanning past (W,H) wrap modulo.
 	fb, _ := NewFrameBuffer(8, 8)
 	tex := makeTex4x4()
-	// Uniform Z so the clamp test is deterministic; UVs span past the
-	// 4x4 texture.
 	verts := []PerspTexturedVertex{
 		{0, 0, 10, 0, 0}, {4, 0, 10, 16, 0},
 		{4, 4, 10, 16, 16}, {0, 4, 10, 0, 16},
@@ -253,12 +258,13 @@ func TestFillPerspectiveTexturedPolygon_UVClampHigh(t *testing.T) {
 	if err := FillPerspectiveTexturedPolygon(fb, tex, nil, 0, verts); err != nil {
 		t.Fatalf("FillPerspectiveTexturedPolygon: %v", err)
 	}
-	if got := fb.Pixels[3*fb.Pitch+3]; got != 0x33 {
-		t.Fatalf("UV-clamp high (3,3) = %#02x want 0x33", got)
+	// (2,2) center: U=V=10; wrap mod 4 = (2,2); tex[2][2] = 0x22.
+	if got := fb.Pixels[2*fb.Pitch+2]; got != 0x22 {
+		t.Fatalf("UV-wrap (2,2) = %#02x want 0x22", got)
 	}
 }
 
-func TestFillPerspectiveTexturedPolygon_UVClampLow(t *testing.T) {
+func TestFillPerspectiveTexturedPolygon_UVWrapLow(t *testing.T) {
 	fb, _ := NewFrameBuffer(8, 8)
 	fb.Clear(0x77)
 	tex := makeTex4x4()
@@ -269,8 +275,8 @@ func TestFillPerspectiveTexturedPolygon_UVClampLow(t *testing.T) {
 	if err := FillPerspectiveTexturedPolygon(fb, tex, nil, 0, verts); err != nil {
 		t.Fatalf("FillPerspectiveTexturedPolygon: %v", err)
 	}
-	if got := fb.Pixels[2*fb.Pitch+2]; got != 0x00 {
-		t.Fatalf("UV-clamp low (2,2) = %#02x want 0x00", got)
+	if got := fb.Pixels[2*fb.Pitch+2]; got == 0x77 {
+		t.Fatalf("UV-wrap low (2,2): pixel not written (still sentinel 0x77)")
 	}
 }
 

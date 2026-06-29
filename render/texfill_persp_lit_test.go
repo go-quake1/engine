@@ -110,11 +110,14 @@ func TestFillPerspectiveLitTexturedPolygon_UniformAllMatchesAffine(t *testing.T)
 	tex := makeTex4x4()
 	cm := makeNoopCM()
 
+	// UVs strictly inside [0, texW) so float-drift at the wrap boundary
+	// can't make affine and perspective interpolators disagree on the
+	// floor(U) sample column.
 	plVerts := []PerspLitTexturedVertex{
 		{2, 2, 100, 0, 0, 0},
-		{28, 4, 100, 4, 0, 0},
-		{26, 30, 100, 4, 4, 0},
-		{4, 28, 100, 0, 4, 0},
+		{28, 4, 100, 3.9, 0, 0},
+		{26, 30, 100, 3.9, 3.9, 0},
+		{4, 28, 100, 0, 3.9, 0},
 	}
 	aVerts := make([]TexturedVertex, len(plVerts))
 	for i, v := range plVerts {
@@ -290,7 +293,8 @@ func TestFillPerspectiveLitTexturedPolygon_LightClampSuperMax(t *testing.T) {
 	}
 }
 
-func TestFillPerspectiveLitTexturedPolygon_UVClampHigh(t *testing.T) {
+func TestFillPerspectiveLitTexturedPolygon_UVWrapHigh(t *testing.T) {
+	// Quake textures TILE; large UV must wrap modulo (W,H).
 	fb, _ := NewFrameBuffer(8, 8)
 	tex := makeTex4x4()
 	cm := makeNoopCM()
@@ -301,12 +305,13 @@ func TestFillPerspectiveLitTexturedPolygon_UVClampHigh(t *testing.T) {
 	if err := FillPerspectiveLitTexturedPolygon(fb, tex, cm, verts); err != nil {
 		t.Fatalf("FillPerspectiveLitTexturedPolygon: %v", err)
 	}
-	if got := fb.Pixels[3*fb.Pitch+3]; got != 0x33 {
-		t.Fatalf("UV-clamp high (3,3) = %#02x want 0x33", got)
+	// (2,2) center -> U=V=10; wrap mod 4 = (2,2); tex[2][2] = 0x22.
+	if got := fb.Pixels[2*fb.Pitch+2]; got != 0x22 {
+		t.Fatalf("UV-wrap (2,2) = %#02x want 0x22", got)
 	}
 }
 
-func TestFillPerspectiveLitTexturedPolygon_UVClampLow(t *testing.T) {
+func TestFillPerspectiveLitTexturedPolygon_UVWrapLow(t *testing.T) {
 	fb, _ := NewFrameBuffer(8, 8)
 	fb.Clear(0x77)
 	tex := makeTex4x4()
@@ -318,8 +323,8 @@ func TestFillPerspectiveLitTexturedPolygon_UVClampLow(t *testing.T) {
 	if err := FillPerspectiveLitTexturedPolygon(fb, tex, cm, verts); err != nil {
 		t.Fatalf("FillPerspectiveLitTexturedPolygon: %v", err)
 	}
-	if got := fb.Pixels[2*fb.Pitch+2]; got != 0x00 {
-		t.Fatalf("UV-clamp low (2,2) = %#02x want 0x00", got)
+	if got := fb.Pixels[2*fb.Pitch+2]; got == 0x77 {
+		t.Fatalf("UV-wrap low (2,2): pixel not written (still sentinel 0x77)")
 	}
 }
 

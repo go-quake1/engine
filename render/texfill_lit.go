@@ -72,8 +72,8 @@ func FillLitTexturedPolygon(fb *FrameBuffer, tex *Pic, cm *ColorMap, verts []Lit
 		return ErrPicShape
 	}
 
-	uMax := tex.Width - 1
-	vMax := tex.Height - 1
+	texW := tex.Width
+	texH := tex.Height
 
 	yMin, yMax := verts[0].Y, verts[0].Y
 	for _, v := range verts[1:] {
@@ -160,16 +160,9 @@ func FillLitTexturedPolygon(fb *FrameBuffer, tex *Pic, cm *ColorMap, verts []Lit
 				l := lLeft + (xf-xLeft)*dlDx
 				ui := int(math.Floor(float64(u)))
 				vi := int(math.Floor(float64(v)))
-				if ui < 0 {
-					ui = 0
-				} else if ui > uMax {
-					ui = uMax
-				}
-				if vi < 0 {
-					vi = 0
-				} else if vi > vMax {
-					vi = vMax
-				}
+				// Tile-wrap: Quake textures repeat across surfaces.
+				ui = ((ui % texW) + texW) % texW
+				vi = ((vi % texH) + texH) % texH
 				texel := tex.Pixels[vi*tex.Width+ui]
 				fb.Pixels[row+x] = cm.LightIndex(int(math.Floor(float64(l))), texel)
 			}

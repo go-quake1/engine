@@ -84,8 +84,8 @@ func FillPerspectiveLitTexturedPolygon(fb *FrameBuffer, tex *Pic, cm *ColorMap, 
 		}
 	}
 
-	uMax := tex.Width - 1
-	vMax := tex.Height - 1
+	texW := tex.Width
+	texH := tex.Height
 
 	// Pre-compute homogeneous coords per vertex.
 	var hOoz, hUoz, hVoz, hLoz [MaxPolyVerts]float32
@@ -245,16 +245,9 @@ func FillPerspectiveLitTexturedPolygon(fb *FrameBuffer, tex *Pic, cm *ColorMap, 
 				for k := 0; k < spanLen; k++ {
 					ui := int(math.Floor(float64(cu)))
 					vi := int(math.Floor(float64(cv)))
-					if ui < 0 {
-						ui = 0
-					} else if ui > uMax {
-						ui = uMax
-					}
-					if vi < 0 {
-						vi = 0
-					} else if vi > vMax {
-						vi = vMax
-					}
+					// Tile-wrap: Quake textures repeat across surfaces.
+					ui = ((ui % texW) + texW) % texW
+					vi = ((vi % texH) + texH) % texH
 					texel := tex.Pixels[vi*tex.Width+ui]
 					fb.Pixels[row+pix+k] = cm.LightIndex(int(math.Floor(float64(cl))), texel)
 					cu += du
