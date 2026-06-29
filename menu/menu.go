@@ -462,7 +462,10 @@ func (m *Menu) Draw(fb *render.FrameBuffer, chars *render.Pic, assets *Assets, n
 	// framebuffer with palette index 0 (black) at 50% alpha; the
 	// pure-Go port doesn't have alpha so we use a solid fill in the
 	// border + leave the body region untouched for the row pics.
-	_ = render.DrawFill(fb, 0, 0, fb.Width, fb.Height, MenuFillIdx)
+	// VWidth / VHeight: wash the WHOLE virtual surface so the menu
+	// overlay reads against a uniform backdrop regardless of HUDScale.
+	// At HUDScale == 1 this is identical to fb.Width / fb.Height.
+	_ = render.DrawFill(fb, 0, 0, fb.VWidth(), fb.VHeight(), MenuFillIdx)
 
 	// 1) QPlaque (left edge). When the asset is missing draw a
 	//    vertical "Q U A K E" text string instead so the screen
@@ -490,7 +493,7 @@ func (m *Menu) Draw(fb *render.FrameBuffer, chars *render.Pic, assets *Assets, n
 		// DrawCenteredString -> DrawCharacter validates the
 		// 128x128 shape; chars already passed the nil check
 		// above, and any further error is propagated.
-		_ = render.DrawCenteredString(fb, chars, fb.Width/2, titleY(fb), titleLabel)
+		_ = render.DrawCenteredString(fb, chars, fb.VWidth()/2, titleY(fb), titleLabel)
 	}
 
 	// 3) Rows + cursor. The per-row text-draw + cursor-glyph
@@ -536,9 +539,10 @@ func plaqueY(_ *render.FrameBuffer, _ *render.Pic) int { return MenuPlaqueY }
 
 // titleAnchorX returns the x coordinate of the title banner's
 // top-left. Centered horizontally with a slight right shift to
-// account for the QPlaque on the left.
+// account for the QPlaque on the left. Virtual-space coords so
+// the banner stays centered in the 2D layer regardless of HUDScale.
 func titleAnchorX(fb *render.FrameBuffer) int {
-	return fb.Width/2 - 64
+	return fb.VWidth()/2 - 64
 }
 
 // titleY returns the y coordinate of the title banner.
@@ -636,9 +640,13 @@ func twoDigit(n int) string {
 // the bring-up build doesn't depend on the wad shipping them.
 func (m *Menu) drawRows(fb *render.FrameBuffer, chars *render.Pic, _ *Assets) error {
 	labels := m.rowLabels()
+	// VHeight: row layout is virtual-space; rows that exceed the
+	// virtual surface are clipped here so the underlying draw
+	// primitives don't get asked for an over-scaled physical blit.
+	vH := fb.VHeight()
 	for i, lbl := range labels {
 		y := MenuRowsY + i*MenuRowStep
-		if y+render.CharHeight > fb.Height {
+		if y+render.CharHeight > vH {
 			break
 		}
 		if err := render.DrawString(fb, chars, MenuRowsX, y, lbl); err != nil {
@@ -665,7 +673,7 @@ func (m *Menu) drawCursor(fb *render.FrameBuffer, chars *render.Pic, assets *Ass
 		idx = rows - 1
 	}
 	y := MenuRowsY + idx*MenuRowStep
-	if y < 0 || y+render.CharHeight > fb.Height {
+	if y < 0 || y+render.CharHeight > fb.VHeight() {
 		return nil
 	}
 	if assets != nil && len(assets.MenuDots) > 0 {

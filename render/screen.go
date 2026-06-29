@@ -156,7 +156,10 @@ func (s *Screen) DrawConsole(fb *FrameBuffer, con *Console, chars *Pic) error {
 	// console width). The framebuffer may be narrower than the
 	// console's column count on small video modes.
 	cols := con.Width
-	if maxCols := (fb.Width - colXOffset) / CharWidth; maxCols < cols {
+	// VWidth so the column count is in the 2D layer's virtual
+	// coordinate space (HUDScale-aware). At HUDScale == 1 it's
+	// identical to fb.Width.
+	if maxCols := (fb.VWidth() - colXOffset) / CharWidth; maxCols < cols {
 		cols = maxCols
 	}
 	if cols <= 0 {
@@ -220,7 +223,10 @@ func (s *Screen) DrawNotify(fb *FrameBuffer, con *Console, chars *Pic, now, life
 	}
 	const colXOffset = CharWidth
 	cols := con.Width
-	if maxCols := (fb.Width - colXOffset) / CharWidth; maxCols < cols {
+	// VWidth: column count in virtual-coordinate space (the
+	// physical fb.Width is upscaled by HUDScale, the virtual is
+	// what the 2D layer addresses). At HUDScale == 1 it's a no-op.
+	if maxCols := (fb.VWidth() - colXOffset) / CharWidth; maxCols < cols {
 		cols = maxCols
 	}
 	if cols <= 0 {

@@ -307,3 +307,62 @@ func TestExpandTo32DstTooSmall(t *testing.T) {
 		t.Errorf("got %v, want ErrFBDstTooSmall", err)
 	}
 }
+
+// TestFrameBufferHUDScaleDefault: a freshly-constructed FrameBuffer
+// has HUDScale == 0 which EffectiveScale folds to 1 + VWidth/VHeight
+// equal Width/Height verbatim (vanilla 1:1 behaviour).
+func TestFrameBufferHUDScaleDefault(t *testing.T) {
+	fb, err := NewFrameBuffer(320, 240)
+	if err != nil {
+		t.Fatalf("NewFrameBuffer: %v", err)
+	}
+	if fb.HUDScale != 0 {
+		t.Errorf("default HUDScale: got %d, want 0", fb.HUDScale)
+	}
+	if fb.EffectiveScale() != 1 {
+		t.Errorf("EffectiveScale: got %d, want 1", fb.EffectiveScale())
+	}
+	if fb.VWidth() != 320 || fb.VHeight() != 240 {
+		t.Errorf("VWidth/VHeight: got (%d,%d), want (320,240)", fb.VWidth(), fb.VHeight())
+	}
+}
+
+// TestFrameBufferHUDScaleNegativeFoldsToOne: a hostile / mis-wired
+// HUDScale <= 0 (e.g. an embedder that subtracts and underflows)
+// must NOT trigger a divide-by-zero in VWidth/VHeight.
+func TestFrameBufferHUDScaleNegativeFoldsToOne(t *testing.T) {
+	fb, err := NewFrameBuffer(640, 480)
+	if err != nil {
+		t.Fatalf("NewFrameBuffer: %v", err)
+	}
+	for _, s := range []int{-1, -100, 0} {
+		fb.HUDScale = s
+		if fb.EffectiveScale() != 1 {
+			t.Errorf("HUDScale=%d: EffectiveScale = %d, want 1", s, fb.EffectiveScale())
+		}
+		if fb.VWidth() != 640 || fb.VHeight() != 480 {
+			t.Errorf("HUDScale=%d: V dims = (%d,%d), want (640,480)",
+				s, fb.VWidth(), fb.VHeight())
+		}
+	}
+}
+
+// TestFrameBufferHUDScaleTwo: HUDScale == 2 halves the virtual dims
+// (900x700 -> 450x350) so the 2D layer's coordinate space stays
+// aligned with the upscaled blits.
+func TestFrameBufferHUDScaleTwo(t *testing.T) {
+	fb, err := NewFrameBuffer(900, 700)
+	if err != nil {
+		t.Fatalf("NewFrameBuffer: %v", err)
+	}
+	fb.HUDScale = 2
+	if fb.EffectiveScale() != 2 {
+		t.Errorf("EffectiveScale: got %d, want 2", fb.EffectiveScale())
+	}
+	if fb.VWidth() != 450 {
+		t.Errorf("VWidth: got %d, want 450", fb.VWidth())
+	}
+	if fb.VHeight() != 350 {
+		t.Errorf("VHeight: got %d, want 350", fb.VHeight())
+	}
+}

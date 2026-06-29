@@ -40,6 +40,47 @@ import (
 	"github.com/go-quake1/engine/vfs"
 )
 
+// hudVirtualWidth + hudVirtualHeight are the canonical "virtual"
+// 2D-layout dims the engine's HUD / menu / console / centerprint were
+// designed against (vanilla DOS Quake 320x240). HUDScaleFor folds an
+// arbitrary physical (FBWidth, FBHeight) into the largest integer
+// upscale that keeps the 2D layer inside the virtual envelope.
+const (
+	hudVirtualWidth  = 320
+	hudVirtualHeight = 240
+)
+
+// HUDScaleFor returns the integer HUDScale (>=1) the 2D layer should
+// render at for a framebuffer of (fbWidth, fbHeight) physical pixels.
+//
+// Rule: pick the largest integer s such that s * hudVirtualWidth <=
+// fbWidth AND s * hudVirtualHeight <= fbHeight. Examples:
+//
+//	320x240   -> 1 (vanilla)
+//	640x480   -> 2 (canonical "high-res" tyrquake mode)
+//	900x700   -> 2 (900/320=2.8 floored to 2; 700/240=2.9 floored to 2)
+//	1280x960  -> 4
+//	1920x1080 -> 4 (1920/320=6 but 1080/240=4.5 floored to 4)
+//
+// Non-positive inputs collapse to 1 so a degenerate framebuffer cannot
+// trigger a zero-scale upscale (which would divide by zero in the
+// virtual-coordinate math).
+func HUDScaleFor(fbWidth, fbHeight int) int {
+	if fbWidth <= 0 || fbHeight <= 0 {
+		return 1
+	}
+	sx := fbWidth / hudVirtualWidth
+	sy := fbHeight / hudVirtualHeight
+	s := sx
+	if sy < s {
+		s = sy
+	}
+	if s < 1 {
+		return 1
+	}
+	return s
+}
+
 // DemoYawPeriodFrames is the frame count over which the demo-orbit Yaw
 // winds from 0 to 360. One degree per frame at 60 Hz gives a 6-second
 // panorama -- fast enough for headless capture runs to catch many angles,
@@ -217,7 +258,11 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 	// 9b. Changelevel wrapper.
 	var hostFramer runloop.HostFramer = &changelevelHostFramer{host: realHost, logf: logf}
 
-	// 10. Runner construction.
+	// 10. Runner construction. HUDScale picks an integer upscale
+	// for the 2D layer (HUD, menu, console, centerprint) so on a
+	// 900x700 fb the bottom bar reads at the same apparent size as
+	// the canonical 320x240 surface. The 3D world pass continues
+	// to render at native fb.Width x fb.Height.
 	runner, err := runloop.NewRunnerFromVFS(runloop.SetupOpts{
 		VFS:            v,
 		Host:           hostFramer,
@@ -228,6 +273,7 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		NotifyLifetime: 3,
 		MaxNotifyRows:  4,
 		SoundChannels:  8,
+		HUDScale:       HUDScaleFor(opts.FBWidth, opts.FBHeight),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("NewRunnerFromVFS: %w", err)

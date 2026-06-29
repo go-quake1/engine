@@ -32,6 +32,16 @@ type SetupOpts struct {
 	NotifyLifetime float32 // default 3 seconds
 	MaxNotifyRows  int     // default 4
 	SoundChannels  int     // default 0 (no sound mixing)
+
+	// HUDScale, when > 0, is the integer upscale the 2D layer
+	// (HUD, menu, console, centerprint, intermission) is rendered
+	// at. zero / negative is treated as 1 (vanilla 1:1 layout).
+	// On a 900x700 surface a scale of 2 makes the HUD blit as
+	// 640x48 (sbar BG = 320x24 * 2x2) so the bar reads at the
+	// same apparent size as on the canonical 320x240 surface.
+	// The 3D viewport is NOT scaled -- it always fills the full
+	// fb.Width x fb.Height at native resolution.
+	HUDScale int
 }
 
 var (
@@ -77,16 +87,27 @@ func NewRunnerFromVFS(opts SetupOpts) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	hudScale := opts.HUDScale
+	if hudScale <= 0 {
+		hudScale = 1
+	}
+	fb.HUDScale = hudScale
 
+	// Virtual-space dims for the 2D layer. HUDScale > 1 shrinks
+	// the addressable width so the console + screen column / row
+	// math lines up with the upscaled HUD blits. At HUDScale == 1
+	// vW / vH equal w / h verbatim (vanilla 1:1 behaviour).
+	vW := fb.VWidth()
+	vH := fb.VHeight()
 	conW := render.MinConsoleWidth
-	if maxCols := w / render.CharWidth; maxCols > conW {
+	if maxCols := vW / render.CharWidth; maxCols > conW {
 		conW = maxCols
 	}
 	// NewConsole + NewScreen never fail when their dimensions
 	// passed NewFrameBuffer's check above (conW >= MinConsoleWidth
 	// by the max guard; lines = MinConsoleLines*4 > MinConsoleLines).
 	con, _ := render.NewConsole(conW, render.MinConsoleLines*4)
-	screen, _ := render.NewScreen(w, h)
+	screen, _ := render.NewScreen(vW, vH)
 
 	// Defaults for optional fields.
 	notifyLifetime := opts.NotifyLifetime

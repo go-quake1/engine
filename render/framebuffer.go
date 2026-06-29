@@ -21,11 +21,49 @@ var (
 // out-of-band; the framebuffer carries no palette of its own --
 // callers thread the palette through Expand calls). tyrquake: the
 // `vid.buffer` byte array + `vid.width` / `vid.height` in vid.h.
+//
+// HUDScale is the integer upscale the 2D layer (HUD, menu, console,
+// centerprint, intermission) renders at: 1 = vanilla 320-wide layout
+// at 1:1 (everything painted natively); 2 = each virtual-coordinate
+// pixel becomes a 2x2 block on physical fb.Pixels so the bottom-bar
+// + menu + text overlays read at the same apparent size on a 900x700
+// surface as they did at 320x240. The 3D renderer (BSP walk, alias
+// models, sky, turbulent) is NOT affected by HUDScale -- it always
+// fills the full Width x Height viewport at native resolution.
+// HUDScale <= 0 is treated as 1 (no upscale, vanilla layout).
+//
+// VWidth / VHeight return the "virtual" framebuffer dimensions the 2D
+// layer should lay out against -- callers do their layout math against
+// the virtuals and the low-level draw primitives (DrawPic, DrawTransPic,
+// DrawCharacter, DrawFill) project to physical via HUDScale.
 type FrameBuffer struct {
-	Width  int
-	Height int
-	Pitch  int    // bytes per scanline (>= Width; allows >stride layouts)
-	Pixels []byte // length == Pitch * Height
+	Width    int
+	Height   int
+	Pitch    int    // bytes per scanline (>= Width; allows >stride layouts)
+	Pixels   []byte // length == Pitch * Height
+	HUDScale int    // integer upscale for the 2D layer; <= 0 means 1
+}
+
+// EffectiveScale returns the integer scale factor the 2D primitives
+// apply, normalising HUDScale <= 0 to 1.
+func (fb *FrameBuffer) EffectiveScale() int {
+	if fb.HUDScale <= 0 {
+		return 1
+	}
+	return fb.HUDScale
+}
+
+// VWidth is the virtual-coordinate width the 2D layer lays out
+// against. With HUDScale == 1 it equals Width verbatim; with
+// HUDScale == 2 on a 900x700 fb it is 450.
+func (fb *FrameBuffer) VWidth() int {
+	return fb.Width / fb.EffectiveScale()
+}
+
+// VHeight is the virtual-coordinate height the 2D layer lays out
+// against. Mirror of VWidth.
+func (fb *FrameBuffer) VHeight() int {
+	return fb.Height / fb.EffectiveScale()
 }
 
 // NewFrameBuffer returns a FrameBuffer with Width=w, Height=h,

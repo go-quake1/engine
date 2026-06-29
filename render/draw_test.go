@@ -540,3 +540,162 @@ func TestDrawConstants(t *testing.T) {
 		t.Fatalf("TransparentIndex = %d want 255", TransparentIndex)
 	}
 }
+
+// TestDrawPicHUDScaleTwo: with HUDScale == 2, a 2x2 source Pic blits
+// as a 4x4 block on the physical surface (each src pixel replicated
+// scale x scale times). The input (x, y) is in VIRTUAL coords:
+// passing (1, 1) lands at physical (2, 2).
+func TestDrawPicHUDScaleTwo(t *testing.T) {
+	fb, _ := NewFrameBuffer(16, 16)
+	fb.HUDScale = 2
+	src := &Pic{
+		Width:  2,
+		Height: 2,
+		Pixels: []byte{1, 2, 3, 4},
+	}
+	if err := DrawPic(fb, 1, 1, src); err != nil {
+		t.Fatalf("DrawPic: %v", err)
+	}
+	// Expected: src (1,1) -> physical block (2,2)..(5,5), pixel
+	// replication = each src cell becomes 2x2.
+	//
+	//   (2,2) (3,2) | (4,2) (5,2)        1 1 | 2 2
+	//   (2,3) (3,3) | (4,3) (5,3)   =>   1 1 | 2 2
+	//   ----------- + -----------        ---- + ----
+	//   (2,4) (3,4) | (4,4) (5,4)        3 3 | 4 4
+	//   (2,5) (3,5) | (4,5) (5,5)        3 3 | 4 4
+	want := map[[2]int]byte{
+		{2, 2}: 1, {3, 2}: 1, {4, 2}: 2, {5, 2}: 2,
+		{2, 3}: 1, {3, 3}: 1, {4, 3}: 2, {5, 3}: 2,
+		{2, 4}: 3, {3, 4}: 3, {4, 4}: 4, {5, 4}: 4,
+		{2, 5}: 3, {3, 5}: 3, {4, 5}: 4, {5, 5}: 4,
+	}
+	for pos, b := range want {
+		got, _ := fb.GetPixel(pos[0], pos[1])
+		if got != b {
+			t.Errorf("DrawPic@(%d,%d) = %d, want %d", pos[0], pos[1], got, b)
+		}
+	}
+	// Spot-check that pixels OUTSIDE the upscaled block are
+	// untouched (still 0).
+	for _, pos := range [][2]int{{0, 0}, {1, 1}, {6, 6}, {15, 15}} {
+		got, _ := fb.GetPixel(pos[0], pos[1])
+		if got != 0 {
+			t.Errorf("DrawPic leaked into (%d,%d) = %d, want 0", pos[0], pos[1], got)
+		}
+	}
+}
+
+// TestDrawTransPicHUDScaleTwo: same upscale as DrawPic, plus the
+// transparent-index skip survives the per-cell replication so the
+// pre-existing dst pixels show through a transparent src cell.
+func TestDrawTransPicHUDScaleTwo(t *testing.T) {
+	fb, _ := NewFrameBuffer(16, 16)
+	fb.HUDScale = 2
+	// Pre-fill with sentinel 99 so we can see what got overwritten.
+	fb.Clear(99)
+	src := &Pic{
+		Width:  2,
+		Height: 2,
+		Pixels: []byte{1, TransparentIndex, TransparentIndex, 4},
+	}
+	if err := DrawTransPic(fb, 0, 0, src); err != nil {
+		t.Fatalf("DrawTransPic: %v", err)
+	}
+	// (0,0) cell = 1 -> 2x2 block at (0..1, 0..1)
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			got, _ := fb.GetPixel(x, y)
+			if got != 1 {
+				t.Errorf("opaque cell @(%d,%d) = %d, want 1", x, y, got)
+			}
+		}
+	}
+	// (1,0) cell = transparent -> block (2..3, 0..1) untouched
+	for y := 0; y < 2; y++ {
+		for x := 2; x < 4; x++ {
+			got, _ := fb.GetPixel(x, y)
+			if got != 99 {
+				t.Errorf("transparent cell @(%d,%d) leaked = %d, want 99", x, y, got)
+			}
+		}
+	}
+	// (1,1) cell = 4 -> block (2..3, 2..3)
+	for y := 2; y < 4; y++ {
+		for x := 2; x < 4; x++ {
+			got, _ := fb.GetPixel(x, y)
+			if got != 4 {
+				t.Errorf("opaque cell @(%d,%d) = %d, want 4", x, y, got)
+			}
+		}
+	}
+}
+
+// TestDrawCharacterHUDScaleTwo: a single 8x8 glyph blits as 16x16 on
+// the physical surface at HUDScale == 2. Position is virtual: (1, 1)
+// virtual = (2, 2) physical.
+func TestDrawCharacterHUDScaleTwo(t *testing.T) {
+	fb, _ := NewFrameBuffer(64, 64)
+	fb.HUDScale = 2
+	// Build a 128x128 conchars sheet where the glyph for 'A' (0x41)
+	// is filled with palette index 7 so we can locate the upscaled
+	// block by its colour.
+	chars := &Pic{
+		Width:  128,
+		Height: 128,
+		Pixels: make([]byte, 128*128),
+	}
+	// Pre-fill chars with TransparentIndex so non-glyph cells skip.
+	for i := range chars.Pixels {
+		chars.Pixels[i] = TransparentIndex
+	}
+	// Glyph 'A' (0x41) = row 4, col 1 -> srcX=8, srcY=32.
+	for y := 0; y < CharHeight; y++ {
+		for x := 0; x < CharWidth; x++ {
+			chars.Pixels[(32+y)*128+(8+x)] = 7
+		}
+	}
+	if err := DrawCharacter(fb, chars, 1, 1, 'A'); err != nil {
+		t.Fatalf("DrawCharacter: %v", err)
+	}
+	// Expected: 16x16 block at (2,2)..(17,17) all = 7.
+	for y := 2; y < 18; y++ {
+		for x := 2; x < 18; x++ {
+			got, _ := fb.GetPixel(x, y)
+			if got != 7 {
+				t.Errorf("DrawCharacter @(%d,%d) = %d, want 7", x, y, got)
+			}
+		}
+	}
+	// Outside the upscaled block (e.g. (0,0), (1,1), (18,18)) must
+	// be untouched.
+	for _, pos := range [][2]int{{0, 0}, {1, 1}, {18, 18}, {20, 20}} {
+		got, _ := fb.GetPixel(pos[0], pos[1])
+		if got != 0 {
+			t.Errorf("DrawCharacter leaked into (%d,%d) = %d, want 0", pos[0], pos[1], got)
+		}
+	}
+}
+
+// TestDrawFillHUDScaleTwo: a virtual (0,0,4,4) DrawFill upscales to
+// an (0,0,8,8) physical block.
+func TestDrawFillHUDScaleTwo(t *testing.T) {
+	fb, _ := NewFrameBuffer(16, 16)
+	fb.HUDScale = 2
+	if err := DrawFill(fb, 0, 0, 4, 4, 5); err != nil {
+		t.Fatalf("DrawFill: %v", err)
+	}
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			got, _ := fb.GetPixel(x, y)
+			if got != 5 {
+				t.Errorf("DrawFill @(%d,%d) = %d, want 5", x, y, got)
+			}
+		}
+	}
+	// Spot-check pixel outside the upscaled rect.
+	got, _ := fb.GetPixel(8, 8)
+	if got != 0 {
+		t.Errorf("DrawFill leaked into (8,8) = %d, want 0", got)
+	}
+}

@@ -412,7 +412,12 @@ func DrawSBar(fb *FrameBuffer, state *client.State, assets *SBarAssets) error {
 	if assets == nil {
 		return ErrSbarNilAssets
 	}
-	baseY := fb.Height - SBarHeight
+	// VHeight so the bar anchors at the virtual bottom; with
+	// HUDScale > 1 this is fb.Height / scale, and the low-level
+	// DrawTransPic call upscales the BG (320x24 virtual) into a
+	// (320*scale) x (24*scale) block at physical (0, baseY*scale).
+	// At HUDScale == 1 the math collapses to the vanilla behaviour.
+	baseY := fb.VHeight() - SBarHeight
 
 	// Inventory strip (weapons + items + sigils) above the main bar.
 	if err := drawIBar(fb, assets, state.Items, baseY); err != nil {

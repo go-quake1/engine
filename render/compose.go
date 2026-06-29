@@ -129,8 +129,12 @@ func Compose2D(fb *FrameBuffer, ctx FrameContext) error {
 	// DrawFill's only error path is nil-fb, already caught above;
 	// the call is infallible here. Skipped when the caller has
 	// pre-drawn a 3D scene into fb.
+	//
+	// VWidth / VHeight so the wash matches the rest of the 2D
+	// layer's coordinate space; at HUDScale == 1 this is identical
+	// to the physical fb.Width / fb.Height.
 	if !ctx.SkipBackgroundFill {
-		_ = DrawFill(fb, 0, 0, fb.Width, fb.Height, ctx.BackgroundIdx)
+		_ = DrawFill(fb, 0, 0, fb.VWidth(), fb.VHeight(), ctx.BackgroundIdx)
 	}
 
 	if ctx.Screen.ConCurrent > 0 {
@@ -155,7 +159,9 @@ func Compose2D(fb *FrameBuffer, ctx FrameContext) error {
 	// caller composes the FrameContext without going through the
 	// client.State plumbing.
 	if ctx.Intermission {
-		if err := drawIntermission(fb, ctx.Chars, ctx.Screen.CenterX, ctx.IntermissionLines); err != nil {
+		// VHeight so the intermission block centers in virtual
+		// space; at HUDScale == 1 this is identical to physical.
+		if err := drawIntermission(fb, ctx.Chars, ctx.Screen.CenterX, fb.VHeight(), ctx.IntermissionLines); err != nil {
 			return err
 		}
 		return nil
@@ -171,8 +177,9 @@ func Compose2D(fb *FrameBuffer, ctx FrameContext) error {
 		// divide). tyrquake's SCR_DrawCenterString uses
 		// vid.height * 0.35 for single-line messages; we round up to
 		// 2/5 to keep the integer division clean and still hit the
-		// upstream anchor band.
-		y := fb.Height * 2 / 5
+		// upstream anchor band. VHeight so the anchor is in virtual
+		// space (matches Screen.CenterX -- a virtual-space coord).
+		y := fb.VHeight() * 2 / 5
 		if err := DrawCenteredString(fb, ctx.Chars, ctx.Screen.CenterX, y, ctx.CenterPrintText); err != nil {
 			return err
 		}
@@ -182,22 +189,25 @@ func Compose2D(fb *FrameBuffer, ctx FrameContext) error {
 }
 
 // drawIntermission lays out the per-line scoreboard / finale text
-// block centered vertically around fb.Height / 2. Each line is
-// horizontally centered on centerX via [DrawCenteredString]; lines
-// step by [CharHeight] pixels. An empty slice draws nothing (the
-// renderer is tolerant of "Intermission flag flipped but no lines
-// composed yet" -- the next frame just renders the empty
-// intermission screen).
+// block centered vertically around vHeight / 2 (virtual coords).
+// Each line is horizontally centered on centerX via
+// [DrawCenteredString]; lines step by [CharHeight] pixels. An empty
+// slice draws nothing (the renderer is tolerant of "Intermission
+// flag flipped but no lines composed yet" -- the next frame just
+// renders the empty intermission screen).
+//
+// vHeight is the framebuffer's virtual height (fb.VHeight()) so the
+// vertical centering matches the rest of the 2D layer at HUDScale > 1.
 //
 // Propagates the first DrawCenteredString error (which can only
 // be ErrDrawCharsShape from a malformed chars Pic).
-func drawIntermission(fb *FrameBuffer, chars *Pic, centerX int, lines []string) error {
+func drawIntermission(fb *FrameBuffer, chars *Pic, centerX, vHeight int, lines []string) error {
 	n := len(lines)
 	if n == 0 {
 		return nil
 	}
 	blockHeight := n * CharHeight
-	y0 := fb.Height/2 - blockHeight/2
+	y0 := vHeight/2 - blockHeight/2
 	for i, line := range lines {
 		if err := DrawCenteredString(fb, chars, centerX, y0+i*CharHeight, line); err != nil {
 			return err

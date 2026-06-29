@@ -91,11 +91,17 @@ func clipRect(x, y, w, h, dstW, dstH int) (dx, dy, sx, sy, cw, ch int) {
 // Negative x or y values cause the source rectangle to be clipped
 // to the framebuffer's [0,W) x [0,H) region; the function does not
 // panic for out-of-range coords.
+//
+// (x, y, w, h) are VIRTUAL coordinates: each input pixel becomes a
+// fb.EffectiveScale() x fb.EffectiveScale() block on the physical
+// surface. The default (HUDScale == 0 or 1) is the vanilla 1:1
+// behaviour: virtual == physical so existing call sites keep working.
 func DrawFill(fb *FrameBuffer, x, y, w, h int, c byte) error {
 	if fb == nil {
 		return ErrDrawNilFB
 	}
-	dx, dy, _, _, cw, ch := clipRect(x, y, w, h, fb.Width, fb.Height)
+	scale := fb.EffectiveScale()
+	dx, dy, _, _, cw, ch := clipRect(x*scale, y*scale, w*scale, h*scale, fb.Width, fb.Height)
 	if cw == 0 || ch == 0 {
 		return nil
 	}
@@ -119,6 +125,10 @@ func DrawFill(fb *FrameBuffer, x, y, w, h int, c byte) error {
 //	ErrPicNilSrc  src == nil
 //	ErrPicShape   len(src.Pixels) != src.Width*src.Height
 //
+// (x, y) and the pic's pixel dimensions are VIRTUAL: each source
+// pixel becomes a fb.EffectiveScale() x fb.EffectiveScale() block.
+// The default (HUDScale 0 or 1) preserves the 1:1 vanilla behaviour.
+//
 // tyrquake: Draw_Pic.
 func DrawPic(fb *FrameBuffer, x, y int, src *Pic) error {
 	if fb == nil {
@@ -130,21 +140,15 @@ func DrawPic(fb *FrameBuffer, x, y int, src *Pic) error {
 	if len(src.Pixels) != src.Width*src.Height {
 		return ErrPicShape
 	}
-	dx, dy, sx, sy, cw, ch := clipRect(x, y, src.Width, src.Height, fb.Width, fb.Height)
-	if cw == 0 || ch == 0 {
-		return nil
-	}
-	for v := 0; v < ch; v++ {
-		srcRow := src.Pixels[(sy+v)*src.Width+sx:]
-		dstRow := fb.Pixels[(dy+v)*fb.Pitch+dx:]
-		copy(dstRow[:cw], srcRow[:cw])
-	}
-	return nil
+	return blitPic(fb, x, y, src, false)
 }
 
 // DrawTransPic is DrawPic with the transparent-index skip: any
 // source byte equal to TransparentIndex is NOT written to the
 // destination. Same error shape; tyrquake: Draw_TransPic.
+//
+// (x, y) and the pic's pixel dimensions are VIRTUAL: scaled up by
+// fb.EffectiveScale() (pixel-replicated) before clipping + blit.
 func DrawTransPic(fb *FrameBuffer, x, y int, src *Pic) error {
 	if fb == nil {
 		return ErrDrawNilFB
@@ -155,17 +159,39 @@ func DrawTransPic(fb *FrameBuffer, x, y int, src *Pic) error {
 	if len(src.Pixels) != src.Width*src.Height {
 		return ErrPicShape
 	}
-	dx, dy, sx, sy, cw, ch := clipRect(x, y, src.Width, src.Height, fb.Width, fb.Height)
+	return blitPic(fb, x, y, src, true)
+}
+
+// blitPic is the shared scale-aware pic-blit core for DrawPic +
+// DrawTransPic. The trans flag selects the per-pixel transparent-
+// index skip. (x, y) and src.Width / src.Height are VIRTUAL --
+// each source pixel becomes a scale x scale block on fb.Pixels.
+//
+// Layout: with scale == s, a src pixel at (u, v) lands at physical
+// (dx + u*s + du, dy + v*s + dv) for du, dv in 0..s. The clipRect
+// step works in PHYSICAL coords (x*s, y*s, w*s, h*s) so partial
+// off-screen blits drop only the truly-out-of-range physical
+// pixels, never a fractional virtual cell. With scale == 1 the
+// inner loops collapse to a per-pixel copy that matches the
+// pre-HUDScale behaviour byte-for-byte.
+func blitPic(fb *FrameBuffer, x, y int, src *Pic, trans bool) error {
+	scale := fb.EffectiveScale()
+	physW := src.Width * scale
+	physH := src.Height * scale
+	dx, dy, sxOff, syOff, cw, ch := clipRect(x*scale, y*scale, physW, physH, fb.Width, fb.Height)
 	if cw == 0 || ch == 0 {
 		return nil
 	}
 	for v := 0; v < ch; v++ {
-		srcRow := src.Pixels[(sy+v)*src.Width+sx:]
+		srcY := (syOff + v) / scale
+		srcRow := src.Pixels[srcY*src.Width:]
 		dstRow := fb.Pixels[(dy+v)*fb.Pitch+dx:]
 		for u := 0; u < cw; u++ {
-			if srcRow[u] != TransparentIndex {
-				dstRow[u] = srcRow[u]
+			b := srcRow[(sxOff+u)/scale]
+			if trans && b == TransparentIndex {
+				continue
 			}
+			dstRow[u] = b
 		}
 	}
 	return nil
@@ -212,16 +238,22 @@ func DrawCharacter(fb *FrameBuffer, chars *Pic, x, y int, ch byte) error {
 	srcX := col * CharWidth
 	srcY := row * CharHeight
 
-	dx, dy, sxOff, syOff, cw, hh := clipRect(x, y, CharWidth, CharHeight, fb.Width, fb.Height)
+	scale := fb.EffectiveScale()
+	dx, dy, sxOff, syOff, cw, hh := clipRect(x*scale, y*scale, CharWidth*scale, CharHeight*scale, fb.Width, fb.Height)
 	if cw == 0 || hh == 0 {
 		return nil
 	}
 	for v := 0; v < hh; v++ {
-		srcRow := chars.Pixels[(srcY+syOff+v)*conSheetDim+srcX+sxOff:]
+		// Each physical row maps to one source row inside the 8x8
+		// glyph; the divide-by-scale collapses to a no-op at
+		// scale == 1 so the vanilla 1:1 path stays bit-exact.
+		gv := (syOff + v) / scale
+		srcRow := chars.Pixels[(srcY+gv)*conSheetDim+srcX:]
 		dstRow := fb.Pixels[(dy+v)*fb.Pitch+dx:]
 		for u := 0; u < cw; u++ {
-			if srcRow[u] != TransparentIndex {
-				dstRow[u] = srcRow[u]
+			b := srcRow[(sxOff+u)/scale]
+			if b != TransparentIndex {
+				dstRow[u] = b
 			}
 		}
 	}
