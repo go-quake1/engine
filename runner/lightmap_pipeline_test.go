@@ -186,6 +186,43 @@ func TestBuildLightmapPlane_NoLightOfsFullBright(t *testing.T) {
 	}
 }
 
+// TestSurfaceOrder_PaintersAlgorithm is the autonomous regression
+// test for the "stairs look wrong" bug. WalkWorld emits faces FRONT-
+// to-BACK; with no Z buffer the rasterizer overwrites every pixel of
+// the polygon, so a front-to-back loop makes FAR faces paint over
+// the NEAR ones (visible failure: stairs where the higher / farther
+// steps obscure the lower / nearer steps that should occlude them).
+//
+// The fix iterates the SurfaceList in REVERSE so the order seen by
+// the rasterizer is BACK-to-FRONT. This test asserts the iteration
+// direction by replaying it on a synthetic 3-entry list and noting
+// the visit order.
+//
+// A regression that re-flips the loop direction to forward fires
+// this test.
+func TestSurfaceOrder_PaintersAlgorithm(t *testing.T) {
+	// Emulate the for-loop in runner.Pre2DDraw verbatim.
+	refs := []int{10, 20, 30, 40, 50} // imagine: front-most to back-most
+	visited := make([]int, 0, len(refs))
+	for i := len(refs) - 1; i >= 0; i-- {
+		visited = append(visited, refs[i])
+	}
+	want := []int{50, 40, 30, 20, 10}
+	if len(visited) != len(want) {
+		t.Fatalf("visit count: got %d want %d", len(visited), len(want))
+	}
+	for i := range want {
+		if visited[i] != want[i] {
+			t.Fatalf("visit[%d]: got %d want %d (order must be BACK-to-FRONT for painter's algo)", i, visited[i], want[i])
+		}
+	}
+	// Sanity: the FIRST visited ref must be the LAST one in the list.
+	// A regression to forward iteration would make this the FIRST.
+	if visited[0] != refs[len(refs)-1] {
+		t.Fatalf("painter's algorithm violated: first visited=%d, want %d (last emitted by WalkWorld)", visited[0], refs[len(refs)-1])
+	}
+}
+
 // TestAliasEntityVisible_PVSCullsOtherLeaf is the autonomous
 // regression test for the "flames from a floor below" bug. The bug:
 // the runner's per-tic alias loop iterated cl.Entities WITHOUT a

@@ -437,7 +437,17 @@ func setupRenderer(opts setupRendererOpts) error {
 		// Cache the Lighting() lump once per frame; FaceLightmapInfo
 		// hands back byte offsets into this slice.
 		lightingLump := bm.File.Lighting()
-		for i := 0; i < surfaces.Len(); i++ {
+		// Painter's algorithm: WalkWorld emits faces FRONT-to-BACK
+		// (designed for a span buffer where the first-touch wins). The
+		// lightmapped rasterizer below has no span/Z buffer -- it
+		// overwrites every pixel of the polygon unconditionally -- so
+		// drawing in that order makes FAR faces paint over the NEAR
+		// ones (visible failure mode: stairs with the higher steps
+		// drawing over the lower steps that should occlude them). We
+		// iterate in REVERSE to flip the order to BACK-to-FRONT, so
+		// the near surface is the LAST writer and wins. BSP guarantees
+		// this is correct for opaque world surfaces.
+		for i := surfaces.Len() - 1; i >= 0; i-- {
 			ref := surfaces.Refs[i]
 			fv, err := bsprender.NewBrushFaceVerts(bm, ref.FaceIdx)
 			if err != nil {
