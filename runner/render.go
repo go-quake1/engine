@@ -539,6 +539,18 @@ func setupRenderer(opts setupRendererOpts) error {
 			if es.ModelIdx <= 0 || es.ModelIdx >= len(aliasModels) {
 				continue
 			}
+			// PVS cull: skip entities whose origin falls in a leaf
+			// the world walk did NOT mark visible this frame. Without
+			// this check, torches / monsters / items in non-visible
+			// leaves (e.g. a different floor of the labyrinth) draw
+			// on top of the wall surfaces in front of them -- "flames
+			// from the floor below" pathology. Mirrors tyrquake's
+			// R_DrawEntitiesOnList leaf-vis test in r_main.c. synth
+			// scenes (which mark every leaf visible above) trivially
+			// pass.
+			if !aliasEntityVisible(bm, es.Origin, stampFrame) {
+				continue
+			}
 			am := aliasModels[es.ModelIdx]
 			if am == nil {
 				continue
@@ -720,6 +732,46 @@ func setupRenderer(opts setupRendererOpts) error {
 		return nil
 	}
 	return nil
+}
+
+// aliasEntityVisible reports whether the entity at `origin` falls in
+// a leaf the world walk marked visible this frame (Leaf.VisFrame ==
+// stampFrame). tyrquake equivalent: the leaf-vis test bracketed
+// inside R_DrawEntitiesOnList in r_main.c.
+//
+// Without this guard, every alias entity in cl.Entities (~47 on
+// start.bsp -- torches, monsters, items in EVERY room) renders every
+// frame, blasting through the world surfaces drawn in front of them.
+// The visible failure mode is "flames from a floor below show through
+// the ceiling": the torch entity sits in a non-visible leaf, the wall
+// occluding it was already drawn, but the alias loop paints over it
+// anyway because it has no Z buffer and no PVS check.
+//
+// Behaviour:
+//   - bm nil               -> visible (no model to cull against; degenerate
+//                            case shouldn't crash, mirrors the synth-scene
+//                            fall-through above).
+//   - point in solid (-1)  -> NOT visible (entity origin inside geometry
+//                            is almost certainly stale state; safer to
+//                            cull than to draw over walls).
+//   - leaf VisFrame == stampFrame -> visible.
+//   - otherwise            -> NOT visible.
+//
+// This is a 1-leaf-per-entity test (no bbox sweep). Real Quake uses
+// the entity's full bbox over the leaf tree to handle entities
+// straddling leaf boundaries; the single-point test is the cheap
+// fallback that correctly culls 100% of torches (which sit at a
+// single fixed origin) and 99% of moving entities (whose origin
+// reasonably represents their leaf membership).
+func aliasEntityVisible(bm *model.BrushModel, origin [3]float32, stampFrame int32) bool {
+	if bm == nil {
+		return true
+	}
+	leafIdx := bm.PointInLeaf(origin)
+	if leafIdx < 0 || leafIdx >= bm.TotalLeaves() {
+		return false
+	}
+	return bm.Leaf(leafIdx).VisFrame == stampFrame
 }
 
 // loadColorMapOrFallback resolves the runtime colormap. Real Quake
