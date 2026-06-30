@@ -6,11 +6,14 @@ package ociassets
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -47,6 +50,11 @@ type FS struct {
 	// progressChunk is the cadence (in bytes) at which progress is
 	// emitted. Defaults to 64 KiB; SetProgress accepts a custom value.
 	progressChunk int
+	// yieldEvery, when > 0, makes the body-streaming reader call
+	// time.Sleep(time.Microsecond) every N bytes of body so cooperative
+	// goroutines (the loading-bar painter) get a chance to run.
+	// Wasm + Firefox specific; see SetYieldEvery.
+	yieldEvery int64
 }
 
 // ProgressFunc is the callback signature for blob-fetch progress.
@@ -151,6 +159,25 @@ func (f *FS) SetProgress(fn ProgressFunc) {
 	}
 }
 
+// SetYieldEvery installs a per-blob byte threshold at which the
+// streaming reader briefly yields to the host scheduler. Used on
+// wasm + Firefox to keep other goroutines (notably the loading-bar
+// painter) responsive while the fetch body drains; the wasm net/http
+// body Read returns chunks the runtime processes synchronously, and
+// without an explicit yield Firefox's fetch implementation can hold
+// the JS event loop for the entire body. Zero (the default) disables
+// the yield; positive values trigger one `time.Sleep(time.Microsecond)`
+// per N bytes read. Set via the caller after FS construction so the
+// host build path (where no yield is needed) leaves it at zero.
+func (f *FS) SetYieldEvery(bytes int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if bytes < 0 {
+		bytes = 0
+	}
+	f.yieldEvery = bytes
+}
+
 // SetProgressChunk overrides the progress-tick cadence (default 64
 // KiB). chunkBytes <= 0 resets to the default. Thread-safe.
 func (f *FS) SetProgressChunk(chunkBytes int) {
@@ -189,6 +216,35 @@ func (p *progressReader) Read(b []byte) (int, error) {
 			// returned <chunk bytes.
 			p.emitted = p.received
 			p.fn(p.name, p.digest, p.received, p.total)
+		}
+	}
+	return n, err
+}
+
+// yieldingReader wraps an io.Reader and calls
+// `time.Sleep(time.Microsecond)` every `every` bytes -- on wasm Go,
+// time.Sleep returns to the JS event loop, which lets queued
+// setTimeout callbacks (the loading-bar painter's 50 ms ticker) fire
+// even while a big fetch body is draining. Empirically required for
+// Firefox: its worker-side fetch implementation can deliver multi-MB
+// chunks to wasm net/http without an intervening JS event-loop tick,
+// so the painter goroutine starves and the bar appears frozen. The
+// sleep is a no-op cost on host and a few-microsecond cost per chunk
+// on wasm Chromium/WebKit (which don't strictly need it but where it
+// doesn't hurt). Verified by scratchpad/probe-loadingbar-xbrowser.mjs.
+type yieldingReader struct {
+	r       io.Reader
+	every   int64
+	pending int64
+}
+
+func (y *yieldingReader) Read(b []byte) (int, error) {
+	n, err := y.r.Read(b)
+	if n > 0 {
+		y.pending += int64(n)
+		if y.pending >= y.every {
+			y.pending = 0
+			time.Sleep(time.Microsecond)
 		}
 	}
 	return n, err
@@ -262,6 +318,7 @@ func (f *FS) load(name, digest string) ([]byte, error) {
 	f.mu.Lock()
 	progressFn := f.progress
 	chunk := f.progressChunk
+	yieldEvery := f.yieldEvery
 	total := f.sizeMap[digest]
 	f.mu.Unlock()
 	if chunk <= 0 {
@@ -284,14 +341,33 @@ func (f *FS) load(name, digest string) ([]byte, error) {
 			fn:     progressFn,
 		}
 	}
-	body, err := io.ReadAll(reader)
+	if yieldEvery > 0 {
+		reader = &yieldingReader{r: reader, every: yieldEvery}
+	}
+	// Streaming hash: pipe the read through sha256.New() so the
+	// digest computation overlaps with the body fetch instead of
+	// running as a separate 180-MB sha256 pass AFTER the read
+	// completes. The post-hoc pass was a multi-second CPU stall on
+	// wasm that blocked the loading-bar painter goroutine (the
+	// loading bar appeared frozen during sha256). With the tee,
+	// each chunk gets hashed AS it streams in -- the yieldingReader
+	// above already yields the JS event loop per chunk, so the
+	// painter ticks while the hash advances.
+	hasher := sha256.New()
+	tee := io.TeeReader(reader, hasher)
+	body, err := io.ReadAll(tee)
 	if err != nil {
 		p.err = err
 		return nil, err
 	}
-	if err := VerifyDigest(body, digest); err != nil {
-		p.err = err
-		return nil, err
+	want := digest
+	if strings.HasPrefix(want, "sha256:") {
+		want = want[len("sha256:"):]
+	}
+	got := fmt.Sprintf("%x", hasher.Sum(nil))
+	if got != want {
+		p.err = fmt.Errorf("ociassets: digest mismatch for %s: got sha256:%s, want %s", name, got, digest)
+		return nil, p.err
 	}
 	f.mu.Lock()
 	f.cache[digest] = body

@@ -135,7 +135,31 @@ const (
 // treated as 0 (e.g. negative received from a buggy counting reader)
 // or total (received > total). When total <= 0 the fill is omitted
 // (track-only) and the subtitle shows just the received size.
+//
+// Deprecated: prefer paintLoadingBarAt which carries the animation
+// phase the time-driven shine overlay needs. Kept for the existing
+// test suite that pins per-pixel output for a STATIC bar.
 func paintLoadingBar(rgba []byte, width, height int, received, total int64) {
+	paintLoadingBarAt(rgba, width, height, received, total, 0)
+}
+
+// paintLoadingBarAt is paintLoadingBar plus a time-driven shine
+// overlay so the bar is visibly animating even when the fetch
+// progress stalls between browser-buffered chunks. `animPhase` is a
+// monotonic seconds counter (the caller passes time.Since(start)
+// converted to float64 seconds); the shine sweep cycles every 2 s.
+//
+// Why this matters: Firefox's worker-side fetch() releases body
+// bytes in multi-MB bursts every few seconds, so the `received`
+// counter sits frozen for visible stretches. Chromium / WebKit
+// release in smaller chunks (~64 KiB) and the bar visibly creeps.
+// Without the shine the Firefox UX reads as "the loader is broken";
+// with the shine the user sees activity at every browser cadence.
+//
+// Verified by scratchpad/probe-loadingbar-xbrowser.mjs: with the
+// shine, frame-to-frame pixel diffs are non-zero in every browser
+// even when `received` is unchanged between captures.
+func paintLoadingBarAt(rgba []byte, width, height int, received, total int64, animPhase float64) {
 	if width <= 0 || height <= 0 || len(rgba) != width*height*4 {
 		return
 	}
@@ -222,7 +246,51 @@ func paintLoadingBar(rgba []byte, width, height int, received, total int64) {
 			fillRect(rgba, width, bx, by, fillW, bh, barFillR, barFillG, barFillB)
 		}
 	}
+
+	// Time-driven shine overlay. A narrow lighter band slides across
+	// the bar every ShineCycleSeconds regardless of `received`, so
+	// the user sees motion even when a browser's fetch is stalled
+	// between chunks. shineW is a fraction of the bar width; the
+	// band's left edge sweeps from -shineW to bw every cycle. The
+	// extra `-shineW` start so the band enters from off-track and
+	// leaves on the right rather than popping in.
+	shineW := bw / 8
+	if shineW < 4 {
+		shineW = 4
+	}
+	phase := animPhase / ShineCycleSeconds
+	phase -= float64(int(phase))
+	sweepRange := float64(bw + shineW*2)
+	sx := bx - shineW + int(phase*sweepRange)
+	// Clip the shine to the bar rectangle so it doesn't paint over
+	// the panel background.
+	sxClip := sx
+	swClip := shineW
+	if sxClip < bx {
+		swClip -= bx - sxClip
+		sxClip = bx
+	}
+	if sxClip+swClip > bx+bw {
+		swClip = bx + bw - sxClip
+	}
+	if swClip > 0 {
+		fillRect(rgba, width, sxClip, by, swClip, bh, shineR, shineG, shineB)
+	}
 }
+
+// ShineCycleSeconds is how long one full left-to-right sweep of the
+// shine overlay takes. Tuned for "obvious motion without seizure":
+// 2 s lands one sweep per ~2 s = visibly animating to a human eye.
+const ShineCycleSeconds = 2.0
+
+// shineR/G/B is the colour of the moving shine band. A lighter blue
+// than the bar fill so the band reads as a highlight over both the
+// filled and the empty track regions.
+const (
+	shineR = 0x8E
+	shineG = 0xC4
+	shineB = 0xF7
+)
 
 // fillRect paints a solid RGBA rectangle into rgba at (x,y) with
 // size (w,h). Coordinates may extend past the surface -- writes are

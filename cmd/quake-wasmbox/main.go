@@ -157,6 +157,13 @@ func run() error {
 						atomic.StoreInt64(&total, tot)
 					}
 				})
+				// Force a JS-event-loop yield every 1 MiB of body so the
+				// paint goroutine keeps ticking on Firefox -- without it
+				// Firefox's worker fetch can deliver multi-MB chunks to
+				// wasm net/http without an intervening event-loop tick
+				// and the loading bar appears frozen until the fetch
+				// completes.
+				ociFSImpl.SetYieldEvery(1 << 20)
 			}
 			// Reusable RGBA backing the paint helper writes into. Allocated
 			// once -- repainted in place every frame so we don't churn the
@@ -174,7 +181,14 @@ func run() error {
 					}
 					r := atomic.LoadInt64(&received)
 					tot := atomic.LoadInt64(&total)
-					paintLoadingBar(rgba, fbWidth, fbHeight, r, tot)
+					// animPhase carries the wall-clock seconds since the
+					// fetch started so paintLoadingBarAt can drive the
+					// shine sweep -- the user sees motion even when
+					// Firefox's fetch releases body bytes in multi-MB
+					// bursts that leave `received` frozen for seconds at
+					// a time.
+					animPhase := time.Since(renderStart).Seconds()
+					paintLoadingBarAt(rgba, fbWidth, fbHeight, r, tot, animPhase)
 					if err := be.PresentFrame(rgba, fbWidth, fbHeight); err != nil {
 						logf("loading-bar PresentFrame: %v", err)
 					}

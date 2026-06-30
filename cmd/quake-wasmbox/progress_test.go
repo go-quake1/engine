@@ -430,3 +430,56 @@ func TestMinLoadingPanelVisibleSentinel(t *testing.T) {
 		t.Fatalf("minLoadingPanelVisible = %v, want >= 1s so the panel is visible to humans", minLoadingPanelVisible)
 	}
 }
+
+// TestPaintLoadingBarAt_ShineAnimatesAcrossPhases is the autonomous
+// regression test for the "Firefox loading bar appears frozen"
+// pathology. Two calls with the SAME (received, total) but different
+// animPhase MUST produce different RGBA bytes -- the shine sweep is
+// what gives the user motion feedback during Firefox's multi-MB
+// fetch buffering, where `received` sits unchanged for seconds.
+//
+// A regression that drops the shine (e.g. revert paintLoadingBarAt
+// to call paintLoadingBar's body verbatim) fires this test because
+// the two output buffers become byte-identical.
+func TestPaintLoadingBarAt_ShineAnimatesAcrossPhases(t *testing.T) {
+	const w, h = 320, 240
+	a := make([]byte, w*h*4)
+	b := make([]byte, w*h*4)
+	// Same progress, different time -> shine band sits at a different
+	// X position, so output bytes must differ in the bar row.
+	paintLoadingBarAt(a, w, h, 50_000_000, 100_000_000, 0.0)
+	paintLoadingBarAt(b, w, h, 50_000_000, 100_000_000, ShineCycleSeconds/2)
+	if string(a) == string(b) {
+		t.Fatal("shine did not animate: identical bytes at animPhase=0 vs animPhase=ShineCycleSeconds/2")
+	}
+}
+
+// TestPaintLoadingBarAt_ShineWrapsModuloCycle verifies the shine
+// position cycles every ShineCycleSeconds: phase=0 and
+// phase=ShineCycleSeconds must reproduce the SAME RGBA bytes (modulo
+// wrap). Guards against a regression where animPhase is used raw
+// without modulo, so the shine drifts off-bar after one cycle.
+func TestPaintLoadingBarAt_ShineWrapsModuloCycle(t *testing.T) {
+	const w, h = 320, 240
+	a := make([]byte, w*h*4)
+	b := make([]byte, w*h*4)
+	paintLoadingBarAt(a, w, h, 50_000_000, 100_000_000, 0.0)
+	paintLoadingBarAt(b, w, h, 50_000_000, 100_000_000, ShineCycleSeconds*3) // 3 full cycles
+	if string(a) != string(b) {
+		t.Fatal("shine cycle did not wrap: animPhase=0 and animPhase=3*ShineCycleSeconds produced different bytes")
+	}
+}
+
+// TestPaintLoadingBar_BackwardsCompatibleAlias: the old API
+// (paintLoadingBar without animPhase) still works -- equivalent to
+// paintLoadingBarAt with animPhase=0.
+func TestPaintLoadingBar_BackwardsCompatibleAlias(t *testing.T) {
+	const w, h = 320, 240
+	a := make([]byte, w*h*4)
+	b := make([]byte, w*h*4)
+	paintLoadingBar(a, w, h, 50_000_000, 100_000_000)
+	paintLoadingBarAt(b, w, h, 50_000_000, 100_000_000, 0)
+	if string(a) != string(b) {
+		t.Fatal("paintLoadingBar(...) != paintLoadingBarAt(..., 0)")
+	}
+}
