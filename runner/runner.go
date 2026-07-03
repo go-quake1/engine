@@ -129,6 +129,15 @@ type SetupOpts struct {
 	// on the first observed user input event. Default false.
 	DemoOrbitAutoDisableOnInput bool
 
+	// DisableAttractDemo skips wiring the attract-loop demo (demo1.dem).
+	// The recorded vanilla demos carry svc_* opcodes this SvcReader does
+	// not yet decode; playing them under SkipUnknownSvc desyncs the reader
+	// (a stray byte surfaces as `unknown TE_* kind`), which on the wasmbox
+	// client manifests as the world flashing in + out at the menu as the
+	// demo repeatedly desyncs, drops, and re-arms. Set true until the
+	// demo-stream opcode coverage is complete. Default false.
+	DisableAttractDemo bool
+
 	// MusicOverlayFS is an optional secondary [fs.FS] the music loader
 	// probes BEFORE the embedded fallback. Useful when PakFS lives
 	// inside a .pak archive (which doesn't carry music) but the music
@@ -452,8 +461,10 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 	logf("menu state=%s cursor=%d (boot lands on the main menu, world pass frozen until player picks Skill)",
 		runner.Menu.State, runner.Menu.CursorIndex)
 
-	// 12d. Attract demo.
-	if d := loadAttractDemo(pakFS, "demo1.dem"); d != nil {
+	// 12d. Attract demo (opt-out: the demo stream desyncs this SvcReader).
+	if opts.DisableAttractDemo {
+		logf("attract-loop demo disabled (DisableAttractDemo)")
+	} else if d := loadAttractDemo(pakFS, "demo1.dem"); d != nil {
 		d.PlayerOpts = demo.PlayerOpts{
 			Protocol:       protocol.VersionNQ,
 			TickDelta:      1.0 / 20.0,

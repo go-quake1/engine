@@ -269,6 +269,11 @@ func run() error {
 			Logf:                        logf,
 			DemoOrbit:                   true,
 			DemoOrbitAutoDisableOnInput: true,
+			// The attract-loop demo stream desyncs this SvcReader (its
+			// recorded opcodes aren't all decoded yet), which flashes the
+			// world in + out at the menu on the wasmbox client. Off until
+			// the demo opcode coverage lands.
+			DisableAttractDemo: true,
 		})
 		if err != nil {
 			logf("runner.Setup failed: %v -- falling back to synth", err)
