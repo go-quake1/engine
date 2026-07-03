@@ -661,7 +661,8 @@ func (m *Menu) drawRows(fb *render.FrameBuffer, chars *render.Pic, _ *Assets) er
 // through the 6 frames at MenuDotFPS; with a nil / short slice it
 // falls back to a '>' glyph on the conchars sheet.
 func (m *Menu) drawCursor(fb *render.FrameBuffer, chars *render.Pic, assets *Assets, now float32) error {
-	rows := m.rowCount()
+	labels := m.rowLabels()
+	rows := len(labels)
 	if rows <= 0 {
 		return nil
 	}
@@ -683,17 +684,81 @@ func (m *Menu) drawCursor(fb *render.FrameBuffer, chars *render.Pic, assets *Ass
 		}
 		dot := assets.MenuDots[frame]
 		if dot != nil {
-			// Center the cursor pic vertically on the row's text
-			// baseline. The menudot1..6 pics are ~16-20 px tall
-			// while the conchars glyphs are 8 px; without this
-			// offset the cursor sits at the top of the cell and
-			// reads as "too low" relative to the text mid-line.
+			// Horizontal/vertical placement depends on the cursor art
+			// style. id1 ships a small (~24 px) flame drawn at the
+			// fixed MenuCursorX column, just left of the labels.
+			// LibreQuake instead ships a full-width 256x32 sheet whose
+			// visible pixels are a "[ ... ]" bracket PAIR meant to
+			// FRAME the selected row -- and the opaque glyphs sit off
+			// centre inside a lot of transparent padding. Pinning such
+			// a sheet's origin at MenuCursorX drops '[' onto the label
+			// text and flings ']' far to the right (out by the title).
+			//
+			// For a wide sheet, place its OPAQUE bounding box (not the
+			// padded sheet) centred on the current label, both axes, so
+			// the brackets read as a frame around the row regardless of
+			// how the art is padded. Small point cursors keep the
+			// vanilla MenuCursorX column + vertical-centre offset.
+			if dot.Width > 8*render.CharWidth { // >64px: a frame, not a point cursor
+				bx0, by0, bx1, by1, ok := opaqueBounds(dot)
+				if ok {
+					// idx is clamped to [0, len(labels)-1] above.
+					labelPx := len(labels[idx]) * render.CharWidth
+					labelCX := MenuRowsX + labelPx/2
+					bboxCX := (bx0 + bx1 + 1) / 2
+					bboxCY := (by0 + by1 + 1) / 2
+					ox := labelCX - bboxCX
+					oy := (y + render.CharHeight/2) - bboxCY
+					_ = render.DrawTransPic(fb, ox, oy, dot)
+					return nil
+				}
+			}
+			// Small flame (or all-transparent art): vanilla placement.
+			// Center it vertically on the row -- the pics are ~16-20 px
+			// tall while conchars glyphs are 8 px, so without this the
+			// cursor sits high relative to the text mid-line.
 			dy := (dot.Height - render.CharHeight) / 2
 			_ = render.DrawTransPic(fb, MenuCursorX, y-dy, dot)
 			return nil
 		}
 	}
 	return render.DrawCharacter(fb, chars, MenuCursorX, y, '>')
+}
+
+// opaqueBounds returns the inclusive bounding box [minX,minY]..[maxX,maxY]
+// of a Pic's non-transparent pixels and ok=true, or ok=false when the pic
+// is nil, misshaped, or fully transparent. Used to place a padded cursor
+// sheet by its visible content rather than its (often off-centre) canvas.
+func opaqueBounds(p *render.Pic) (minX, minY, maxX, maxY int, ok bool) {
+	if p == nil || p.Width <= 0 || p.Height <= 0 || len(p.Pixels) != p.Width*p.Height {
+		return 0, 0, 0, 0, false
+	}
+	minX, minY = p.Width, p.Height
+	maxX, maxY = -1, -1
+	for v := 0; v < p.Height; v++ {
+		row := p.Pixels[v*p.Width : v*p.Width+p.Width]
+		for u := 0; u < p.Width; u++ {
+			if row[u] == render.TransparentIndex {
+				continue
+			}
+			if u < minX {
+				minX = u
+			}
+			if u > maxX {
+				maxX = u
+			}
+			if v < minY {
+				minY = v
+			}
+			if v > maxY {
+				maxY = v
+			}
+		}
+	}
+	if maxX < 0 {
+		return 0, 0, 0, 0, false
+	}
+	return minX, minY, maxX, maxY, true
 }
 
 // drawVerticalLabel writes s top-to-bottom one glyph per row. Used

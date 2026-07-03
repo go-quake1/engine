@@ -577,6 +577,95 @@ func TestDrawCursorClampsOutOfRange(t *testing.T) {
 	}
 }
 
+// paddedPic returns a wxh pic that is fully transparent except for an
+// opaque (fill) rectangle spanning cols [x0,x1] and rows [y0,y1]
+// inclusive -- mimics LibreQuake's 256x32 menudot whose visible
+// "[ ... ]" bracket glyphs sit inside a lot of transparent padding.
+func paddedPic(w, h, x0, y0, x1, y1 int, fill byte) *render.Pic {
+	pix := make([]byte, w*h)
+	for i := range pix {
+		pix[i] = render.TransparentIndex
+	}
+	for v := y0; v <= y1; v++ {
+		for u := x0; u <= x1; u++ {
+			pix[v*w+u] = fill
+		}
+	}
+	return &render.Pic{Width: w, Height: h, Pixels: pix}
+}
+
+func TestOpaqueBounds(t *testing.T) {
+	// nil / bad-shape / zero-dim / fully-transparent all report ok=false.
+	if _, _, _, _, ok := opaqueBounds(nil); ok {
+		t.Errorf("nil pic: ok=true, want false")
+	}
+	if _, _, _, _, ok := opaqueBounds(&render.Pic{Width: 2, Height: 2, Pixels: []byte{1}}); ok {
+		t.Errorf("misshaped pic: ok=true, want false")
+	}
+	if _, _, _, _, ok := opaqueBounds(&render.Pic{Width: 0, Height: 4}); ok {
+		t.Errorf("zero-width pic: ok=true, want false")
+	}
+	clear := newPic(8, 8, render.TransparentIndex)
+	if _, _, _, _, ok := opaqueBounds(clear); ok {
+		t.Errorf("all-transparent pic: ok=true, want false")
+	}
+	// A padded pic reports the tight box around its opaque rectangle.
+	p := paddedPic(64, 16, 10, 3, 40, 12, 7)
+	x0, y0, x1, y1, ok := opaqueBounds(p)
+	if !ok || x0 != 10 || y0 != 3 || x1 != 40 || y1 != 12 {
+		t.Errorf("bounds = (%d,%d)-(%d,%d) ok=%v, want (10,3)-(40,12) ok=true", x0, y0, x1, y1, ok)
+	}
+}
+
+func TestDrawCursorWideBracketFramesLabel(t *testing.T) {
+	// A wide (>64px) cursor sheet with off-centre opaque pixels must be
+	// placed by its opaque bounding box centred on the highlighted
+	// label, not pinned at MenuCursorX. Assert the opaque pixels land
+	// where the framing math says (left of the label start), proving
+	// the wide-art branch ran instead of the vanilla point path.
+	fb := newFB(t)
+	chars := newChars()
+	// 256x32 sheet, opaque cols 31..180, rows 2..17 (LibreQuake shape).
+	dot := paddedPic(256, 32, 31, 2, 180, 17, 9)
+	a := &Assets{MenuDots: []*render.Pic{dot}}
+	m := &Menu{State: StateMain, CursorIndex: 0} // "SINGLE PLAYER"
+
+	if err := m.drawCursor(fb, chars, a, 0); err != nil {
+		t.Fatalf("wide-cursor drawCursor err=%v", err)
+	}
+	// Expected origin: labelCX = MenuRowsX + len("SINGLE PLAYER")*8/2,
+	// bboxCX = (31+180+1)/2, ox = labelCX - bboxCX. The '[' (opaque
+	// left edge, sheet col 31) lands at ox+31 -- left of MenuRowsX.
+	labelPx := len("SINGLE PLAYER") * render.CharWidth
+	ox := (MenuRowsX + labelPx/2) - (31+180+1)/2
+	leftBracketX := ox + 31
+	if leftBracketX >= MenuRowsX {
+		t.Errorf("left bracket x=%d not left of label start %d", leftBracketX, MenuRowsX)
+	}
+	// The opaque pixel at the sheet's top-left opaque corner must be
+	// present in the framebuffer at the projected position.
+	y := MenuRowsY + 0*MenuRowStep
+	oy := (y + render.CharHeight/2) - (2+17+1)/2
+	px := fb.Pixels[(oy+2)*fb.Pitch+(ox+31)]
+	if px != 9 {
+		t.Errorf("framed bracket pixel = %d at (%d,%d), want 9", px, ox+31, oy+2)
+	}
+}
+
+func TestDrawCursorWideAllTransparentFallsToPoint(t *testing.T) {
+	// A wide sheet that is fully transparent yields ok=false from
+	// opaqueBounds, so drawCursor must fall through to the vanilla
+	// point-cursor placement without error (covers the !ok branch).
+	fb := newFB(t)
+	chars := newChars()
+	dot := newPic(256, 32, render.TransparentIndex)
+	a := &Assets{MenuDots: []*render.Pic{dot}}
+	m := &Menu{State: StateMain, CursorIndex: 0}
+	if err := m.drawCursor(fb, chars, a, 0); err != nil {
+		t.Errorf("wide all-transparent drawCursor err=%v", err)
+	}
+}
+
 func TestDrawVerticalLabelBadChars(t *testing.T) {
 	fb := newFB(t)
 	bad := &render.Pic{Width: 64, Height: 64, Pixels: make([]byte, 64*64)}
