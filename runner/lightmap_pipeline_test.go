@@ -108,6 +108,15 @@ func TestLightmapPipeline_ColormapMatters(t *testing.T) {
 	}
 }
 
+// blp calls buildLightmapPlane with fresh per-call scratch buffers, so
+// tests that compare two planes get independent backing arrays (the engine
+// path reuses one scratch across faces, overwriting the previous plane).
+func blp(info bsprender.LightmapInfo, lighting []byte, t float32) []byte {
+	var plane []byte
+	var accum []int
+	return buildLightmapPlane(info, lighting, t, &plane, &accum)
+}
+
 // TestBuildLightmapPlane_RespectsStyleBrightness verifies the runner's
 // buildLightmapPlane helper actually multiplies the raw lightmap bytes
 // by the per-style brightness lookup. A regression that hard-codes
@@ -128,8 +137,8 @@ func TestBuildLightmapPlane_RespectsStyleBrightness(t *testing.T) {
 
 	// At t=0.0 anim[0]='m' -> brightness 264.
 	// At t=0.2 (skip 2 chars at 10 Hz) anim[2]='n' -> brightness 286.
-	planeM := buildLightmapPlane(info, lump, 0.0) // 'm'
-	planeN := buildLightmapPlane(info, lump, 0.2) // 'n'
+	planeM := blp(info, lump, 0.0) // 'm'
+	planeN := blp(info, lump, 0.2) // 'n'
 
 	if len(planeM) != pixCount || len(planeN) != pixCount {
 		t.Fatalf("plane size mismatch: got %d/%d, want %d", len(planeM), len(planeN), pixCount)
@@ -178,7 +187,7 @@ func TestBuildLightmapPlane_NoLightOfsFullBright(t *testing.T) {
 		Height:   2,
 		LightOfs: -1,
 	}
-	plane := buildLightmapPlane(info, []byte{99, 99, 99, 99}, 0)
+	plane := blp(info, []byte{99, 99, 99, 99}, 0)
 	for i, v := range plane {
 		if v != 255 {
 			t.Fatalf("plane[%d]=%d, want 255 (no-static-light fullbright)", i, v)
@@ -344,7 +353,7 @@ func TestBuildLightmapPlane_OutOfRangeFullBright(t *testing.T) {
 		Height:   2,
 		LightOfs: 1000,
 	}
-	plane := buildLightmapPlane(info, []byte{99, 99, 99, 99}, 0)
+	plane := blp(info, []byte{99, 99, 99, 99}, 0)
 	for i, v := range plane {
 		if v != 255 {
 			t.Fatalf("plane[%d]=%d, want 255 (out-of-range fullbright)", i, v)
