@@ -312,3 +312,27 @@ func TestTransformFaceLightmapped_PartialBehindClampsZ(t *testing.T) {
 		t.Errorf("rear vert Z=%v, want clamped to %v", out[0].Z, render.ParticleNearClip)
 	}
 }
+
+// BenchmarkTransformFaceLightmapped tracks the per-face allocation count of
+// the world-surface transform. The view-space scratch is now stack-backed,
+// so only the returned vertex slice allocates (2 allocs/op -> 1).
+func BenchmarkTransformFaceLightmapped(b *testing.B) {
+	fb, err := render.NewFrameBuffer(320, 200)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pts := [][3]float32{{32, 16, 100}, {48, 16, 100}, {32, 32, 100}}
+	fv := bsprender.FaceVerts{
+		NumVerts: 3,
+		Vert:     func(i int) [3]float32 { return pts[i] },
+		UVAxisS:  [3]float32{1, 0, 0},
+		UVAxisT:  [3]float32{0, 1, 0},
+	}
+	info := bsprender.LightmapInfo{Width: 2, Height: 2, MinS: 32, MinT: 16}
+	view := identityAffine()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = bsprender.TransformFaceLightmapped(view, fb, 90, fv, info)
+	}
+}
