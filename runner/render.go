@@ -165,6 +165,10 @@ func setupRenderer(opts setupRendererOpts) error {
 
 	markCtx := bsprender.NewMarkContext(bm)
 	var surfaces bsprender.SurfaceList
+	// Reused per-face lightmap scratch (grows to the largest face seen),
+	// so world rendering doesn't allocate two slices per face per frame.
+	var lmPlaneScratch []byte
+	var lmAccumScratch []int
 	frameCount := 0
 	prevEntityOrigin := make(map[int][3]float32)
 	loggedWireSpawn := false
@@ -545,7 +549,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				if err != nil {
 					continue
 				}
-				plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec)
+				plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
 				_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
 			}
 		}
@@ -932,9 +936,18 @@ func lightStyleBrightness(style byte, t float32) int {
 // LightOfs == -1 OR an out-of-range offset means "no static lighting"
 // (sky / turbulent / faces past the lump end); we return a fully-lit
 // plane (255 everywhere) so the rasterizer renders full-bright.
-func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte, t float32) []byte {
+// The plane + accum scratch buffers are caller-owned and reused across every
+// face in a frame (the returned plane is consumed synchronously by the fill
+// before the next face overwrites it), so this is allocation-free in steady
+// state instead of two make() per face per frame -- hundreds of short-lived
+// allocations at a 900x700 world, and GC is the dominant frame-jank source in
+// the js/wasm target.
+func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte, t float32, planeScratch *[]byte, accumScratch *[]int) []byte {
 	pix := info.Width * info.Height
-	plane := make([]byte, pix)
+	if cap(*planeScratch) < pix {
+		*planeScratch = make([]byte, pix)
+	}
+	plane := (*planeScratch)[:pix]
 	if info.LightOfs < 0 {
 		for i := range plane {
 			plane[i] = 255
@@ -949,8 +962,14 @@ func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte, t float32)
 		return plane
 	}
 	// Per-style accumulator: int so we can sum past 255 before
-	// clamping at the end.
-	accum := make([]int, pix)
+	// clamping at the end. Reused, so zero the live region first.
+	if cap(*accumScratch) < pix {
+		*accumScratch = make([]int, pix)
+	}
+	accum := (*accumScratch)[:pix]
+	for j := range accum {
+		accum[j] = 0
+	}
 	for s := 0; s < len(info.Styles); s++ {
 		if info.Styles[s] == 255 {
 			continue
