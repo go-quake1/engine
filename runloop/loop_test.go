@@ -70,9 +70,13 @@ func newLoopRunner(t *testing.T, fb *backend.Recorder) *Runner {
 
 func TestRunUntilQuit_QuitsAfterNFrames(t *testing.T) {
 	rec := backend.NewRecorder(320, 200)
+	rec.NowVal = 0 // constant clock -> dt clamps to MinFrameTime each frame
 	q := &quitAfterBackend{Recorder: rec, framesUntilQuit: 3}
 	r := newLoopRunner(t, rec)
 	r.Backend = q
+	// One fixed sim tick per frame so the (time-driven) host-tick count
+	// matches the render-frame count for this loop-termination test.
+	r.SimStep = MinFrameTime
 	if err := r.RunUntilQuit(); err != nil {
 		t.Fatalf("RunUntilQuit: %v", err)
 	}
@@ -85,6 +89,54 @@ func TestRunUntilQuit_QuitsAfterNFrames(t *testing.T) {
 	}
 	if len(rec.Frames) != 4 {
 		t.Fatalf("rec frames = %d want 4", len(rec.Frames))
+	}
+}
+
+func TestRunFrame_FixedTimestepAccumulator(t *testing.T) {
+	rec := backend.NewRecorder(320, 200)
+	r := newLoopRunner(t, rec)
+	r.SimStep = 0.05
+	h := r.Host.(*loopFakeHost)
+
+	// dt = 0.16 -> floor(0.16/0.05) = 3 fixed ticks, 0.01 remainder banked.
+	if err := r.RunFrame(0.16, 1); err != nil {
+		t.Fatalf("RunFrame: %v", err)
+	}
+	if h.frames != 3 {
+		t.Fatalf("first frame ticks = %d want 3", h.frames)
+	}
+	// dt = 0.045 -> 0.01 banked + 0.045 = 0.055 -> 1 tick (remainder carried).
+	if err := r.RunFrame(0.045, 2); err != nil {
+		t.Fatalf("RunFrame: %v", err)
+	}
+	if h.frames != 4 {
+		t.Fatalf("second frame ticks = %d want 4 (remainder carried)", h.frames)
+	}
+}
+
+func TestRunFrame_SubstepCapPreventsSpiral(t *testing.T) {
+	rec := backend.NewRecorder(320, 200)
+	r := newLoopRunner(t, rec)
+	r.SimStep = 0.05
+	h := r.Host.(*loopFakeHost)
+	// A 10s stall would be 200 ticks; the cap bounds it to maxSimSubsteps.
+	if err := r.RunFrame(10, 1); err != nil {
+		t.Fatalf("RunFrame: %v", err)
+	}
+	if h.frames != maxSimSubsteps {
+		t.Fatalf("capped ticks = %d want %d", h.frames, maxSimSubsteps)
+	}
+}
+
+func TestRunFrame_ZeroSimStepUsesDefault(t *testing.T) {
+	rec := backend.NewRecorder(320, 200)
+	r := newLoopRunner(t, rec) // SimStep left 0 -> DefaultSimStep (0.05)
+	h := r.Host.(*loopFakeHost)
+	if err := r.RunFrame(DefaultSimStep, 1); err != nil {
+		t.Fatalf("RunFrame: %v", err)
+	}
+	if h.frames != 1 {
+		t.Fatalf("default-step ticks = %d want 1", h.frames)
 	}
 }
 
@@ -161,19 +213,22 @@ func TestRunUntilQuit_NilFB(t *testing.T) {
 func TestRunUntilQuit_DtClampedToMin(t *testing.T) {
 	// Backend reports Now == 0 every call; dt becomes 0 and should
 	// be clamped to MinFrameTime. Verify by checking RunFrame was
-	// invoked (no nil-arg / panic) and host.Frame received the
-	// clamped value.
+	// invoked (no nil-arg / panic) and the fixed-timestep sim advanced.
 	rec := backend.NewRecorder(320, 200)
 	rec.NowVal = 0
 	q := &quitAfterBackend{Recorder: rec, framesUntilQuit: 1}
 	r := newLoopRunner(t, rec)
 	r.Backend = q
+	// Match the fixed sim step to the clamped render dt so each frame
+	// advances the sim exactly once (the default 0.05 SimStep would need
+	// ~12 MinFrameTime frames to accumulate a single tick).
+	r.SimStep = MinFrameTime
 	if err := r.RunUntilQuit(); err != nil {
 		t.Fatalf("RunUntilQuit: %v", err)
 	}
 	h := r.Host.(*loopFakeHost)
 	// framesUntilQuit=1 -> PollInput #2 raises Quit; current frame
-	// completes -> 2 host.Frame calls.
+	// completes -> 2 host.Frame calls (one fixed tick each).
 	if h.frames != 2 {
 		t.Fatalf("host frames = %d want 2", h.frames)
 	}
