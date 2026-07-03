@@ -6,6 +6,7 @@ package runloop
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/client"
@@ -96,6 +97,14 @@ type Runner struct {
 	// pixels per tick. tyrquake: the boolean Con_ToggleConsole_f
 	// flips, surfaced through key_dest = key_console / key_game.
 	ConsoleOpen bool
+
+	// ShowFPS draws a small frames-per-second + frame-time counter in the
+	// top-left of the framebuffer each frame (a bring-up perf HUD). The
+	// value is averaged over ~0.5s windows so it doesn't flicker.
+	ShowFPS     bool
+	fpsWindowDt float32 // accumulated dt in the current averaging window
+	fpsWindowN  int     // frames counted in the current window
+	fpsText     string  // cached "NN FPS  NN ms" label, redrawn each frame
 
 	// Triggers tracks the held state of the on-wire trigger keys
 	// (mouse-fire = +attack, Enter = +jump). Translated to the
@@ -527,6 +536,28 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	if menuActive {
 		if err := r.Menu.Draw(r.FrameBuffer, r.Chars, r.MenuAssets, nowSec); err != nil {
 			return err
+		}
+	}
+
+	// 5c) FPS HUD overlay (opt-in). Averages the per-frame dt over ~0.5s
+	//     windows and draws the result top-left, so the real in-browser
+	//     frame rate is visible without external tooling. Drawn after the
+	//     world + menu so it sits on top; needs the conchars sheet.
+	if r.ShowFPS && r.Chars != nil {
+		r.fpsWindowDt += dt
+		r.fpsWindowN++
+		if r.fpsWindowDt >= 0.5 {
+			avg := r.fpsWindowDt / float32(r.fpsWindowN)
+			fps := 0
+			if avg > 0 {
+				fps = int(1/avg + 0.5)
+			}
+			r.fpsText = strconv.Itoa(fps) + " FPS  " + strconv.Itoa(int(avg*1000+0.5)) + " ms"
+			r.fpsWindowDt = 0
+			r.fpsWindowN = 0
+		}
+		if r.fpsText != "" {
+			_ = render.DrawString(r.FrameBuffer, r.Chars, 2, 2, r.fpsText)
 		}
 	}
 
