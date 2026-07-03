@@ -168,6 +168,15 @@ func setupRenderer(opts setupRendererOpts) error {
 	frameCount := 0
 	prevEntityOrigin := make(map[int][3]float32)
 	loggedWireSpawn := false
+	// Last view origin that resolved to a real (in-map) BSP leaf. When a
+	// later frame's origin lands in solid/void (PointInLeaf <= 0) -- a
+	// camera clipping through geometry, an out-of-map demo waypoint, or a
+	// wire gap that has not yet delivered a fresh player origin -- we hold
+	// this instead of emitting a cleared (0x10) frame, so the world view
+	// never flashes black between good origins (vanilla Quake keeps the
+	// last valid PVS on screen rather than blanking).
+	var lastGoodOrigin [3]float32
+	haveGoodOrigin := false
 
 	// Seed the player edict for PhysicsWalk.
 	if realHost != nil && playerSlot > 0 && !isSynth {
@@ -237,6 +246,16 @@ func setupRenderer(opts setupRendererOpts) error {
 
 		origin[2] += runner.Client.ViewHeightOffset
 
+		// Hold the last in-map origin when this frame's origin is in
+		// solid/void, so the render below marks a real leaf instead of
+		// bailing to a black (0x10) frame. Only applies once we have a
+		// good origin to fall back to; the synthetic path marks every
+		// leaf and never consults PointInLeaf, so skip it there.
+		if !isSynth && haveGoodOrigin && bm.PointInLeaf(origin) <= 0 {
+			origin = lastGoodOrigin
+			fromEntities = false
+		}
+
 		if realHost != nil {
 			_, lright, _ := mathlib.AngleVectors(mathlib.Vec3(viewAngles))
 			realHost.SetListener(origin, [3]float32(lright))
@@ -263,6 +282,8 @@ func setupRenderer(opts setupRendererOpts) error {
 		} else {
 			viewerLeaf := bm.PointInLeaf(rd.ViewOrigin)
 			if viewerLeaf > 0 {
+				lastGoodOrigin = origin
+				haveGoodOrigin = true
 				if err := bsprender.MarkVisibleLeaves(markCtx,
 					bsprender.VisLeafIdx(viewerLeaf),
 					bsprender.FrameMarkSequence(stampFrame),
