@@ -759,11 +759,11 @@ func setupRenderer(opts setupRendererOpts) error {
 //
 // Behaviour:
 //   - bm nil               -> visible (no model to cull against; degenerate
-//                            case shouldn't crash, mirrors the synth-scene
-//                            fall-through above).
+//     case shouldn't crash, mirrors the synth-scene
+//     fall-through above).
 //   - point in solid (-1)  -> NOT visible (entity origin inside geometry
-//                            is almost certainly stale state; safer to
-//                            cull than to draw over walls).
+//     is almost certainly stale state; safer to
+//     cull than to draw over walls).
 //   - leaf VisFrame == stampFrame -> visible.
 //   - otherwise            -> NOT visible.
 //
@@ -827,18 +827,18 @@ func loadColorMapOrFallback(searchPath *vfs.SearchPath, logf func(string, ...any
 // Source: tyrquake's r_light.c R_AnimateLight + the lightstyle string
 // table in NQ/cl_main.c CL_ClearState / S_INIT.
 var defaultLightStyles = [...]string{
-	"m",                                                  // 0 - normal (steady)
-	"mmnmmommommnonmmonqnmmo",                            // 1 - FLICKER (torches)
+	"m",                       // 0 - normal (steady)
+	"mmnmmommommnonmmonqnmmo", // 1 - FLICKER (torches)
 	"abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba", // 2 - SLOW PULSE
-	"mmmmmaaaaammmmmaaaaaabcdefgabcdefg",                 // 3 - CANDLE 1
-	"mamamamamama",                                       // 4 - FAST STROBE
-	"jklmnopqrstuvwxyzyxwvutsrqponmlkj",                  // 5 - GENTLE PULSE
-	"nmonqnmomnmomomno",                                  // 6 - FLICKER 2
-	"mmmaaaabcdefgmmmmaaaammmaamm",                       // 7 - CANDLE 2
-	"mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa",         // 8 - CANDLE 3
-	"aaaaaaaazzzzzzzz",                                   // 9 - SLOW STROBE
-	"mmamammmmammamamaaamammma",                          // 10 - FLUORESCENT
-	"abcdefghijklmnopqrrqponmlkjihgfedcba",               // 11 - SLOW PULSE 2
+	"mmmmmaaaaammmmmaaaaaabcdefgabcdefg",                  // 3 - CANDLE 1
+	"mamamamamama",                                        // 4 - FAST STROBE
+	"jklmnopqrstuvwxyzyxwvutsrqponmlkj",                   // 5 - GENTLE PULSE
+	"nmonqnmomnmomomno",                                   // 6 - FLICKER 2
+	"mmmaaaabcdefgmmmmaaaammmaamm",                        // 7 - CANDLE 2
+	"mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa",          // 8 - CANDLE 3
+	"aaaaaaaazzzzzzzz",                                    // 9 - SLOW STROBE
+	"mmamammmmammamamaaamammma",                           // 10 - FLUORESCENT
+	"abcdefghijklmnopqrrqponmlkjihgfedcba",                // 11 - SLOW PULSE 2
 }
 
 // lightStyleBrightness returns the per-style brightness (0..550) at

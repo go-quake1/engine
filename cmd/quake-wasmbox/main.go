@@ -130,9 +130,9 @@ func run() error {
 	//    MusicOpen closure tries from the OCI overlay first, then the
 	//    embedmusic fallback.
 	var (
-		pakFS    fs.FS // the real .pak archive (pak.FS) -- exposes maps/start.bsp etc.
-		musicFS  fs.FS // optional music overlay (ociFS for OCI builds, nil otherwise)
-		ociErr   error
+		pakFS   fs.FS // the real .pak archive (pak.FS) -- exposes maps/start.bsp etc.
+		musicFS fs.FS // optional music overlay (ociFS for OCI builds, nil otherwise)
+		ociErr  error
 	)
 	if OCIReference != "" {
 		ociFS, err := openOCIAssets(OCIReference)

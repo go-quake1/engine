@@ -432,8 +432,8 @@ func TestFS_SetProgress_EmitsTicks(t *testing.T) {
 	fsys.sizeMap[digest] = int64(len(body))
 
 	type tick struct {
-		name           string
-		digest         string
+		name            string
+		digest          string
 		received, total int64
 	}
 	var (
