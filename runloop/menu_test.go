@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/menu"
+	"github.com/go-quake1/engine/render"
 )
 
 // recorderWithKeys is a thin wrapper around backend.Recorder that
@@ -235,5 +236,22 @@ func TestDispatchMenuInput_ActiveSkillEnterReturnsFalse(t *testing.T) {
 	}
 	if m.State != menu.StateNone {
 		t.Errorf("after Skill Enter, state = %v, want StateNone", m.State)
+	}
+}
+
+// TestRunFrame_MenuDrawErrorPropagates exercises the menu-overlay
+// error branch (runloop.go step 5b): when the menu is active and
+// Menu.Draw fails, RunFrame returns that error. A conchars Pic that
+// declares the required 128x128 shape but carries a short Pixels
+// slice passes Draw's up-front shape check, then blows up inside
+// DrawCharacter once the title banner is painted.
+func TestRunFrame_MenuDrawErrorPropagates(t *testing.T) {
+	rec := backend.NewRecorder(0, 0)
+	r, _ := newRunner(t, rec)
+	r.Menu = menu.New() // active (StateMain)
+	r.Chars = &render.Pic{Width: 128, Height: 128, Pixels: make([]byte, 64)}
+
+	if err := r.RunFrame(0.05, 1); err == nil {
+		t.Fatalf("RunFrame with broken menu chars: expected error, got nil")
 	}
 }

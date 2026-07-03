@@ -76,7 +76,7 @@ func TestActivateLoad_HookErrorPopsToParent(t *testing.T) {
 	m := &Menu{
 		State:       StateLoad,
 		CursorIndex: 2,
-		OnLoad: func(slot int) error { return sentinel },
+		OnLoad:      func(slot int) error { return sentinel },
 	}
 	adv := m.Handle(backend.KeyEnter)
 	if adv {

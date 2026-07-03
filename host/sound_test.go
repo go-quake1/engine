@@ -29,12 +29,12 @@ func synthWAV(n int) []byte {
 	// fmt chunk (PCM, mono, 11025 Hz, 8-bit)
 	buf = append(buf, 'f', 'm', 't', ' ')
 	buf = appendU32(buf, 16)
-	buf = appendU16(buf, 1)           // PCM
-	buf = appendU16(buf, 1)           // mono
-	buf = appendU32(buf, 11025)       // sample rate
-	buf = appendU32(buf, 11025*1)     // byte rate
-	buf = appendU16(buf, 1)           // block align
-	buf = appendU16(buf, 8)           // bits per sample
+	buf = appendU16(buf, 1)       // PCM
+	buf = appendU16(buf, 1)       // mono
+	buf = appendU32(buf, 11025)   // sample rate
+	buf = appendU32(buf, 11025*1) // byte rate
+	buf = appendU16(buf, 1)       // block align
+	buf = appendU16(buf, 8)       // bits per sample
 	// data chunk
 	buf = append(buf, 'd', 'a', 't', 'a')
 	buf = appendU32(buf, uint32(n))

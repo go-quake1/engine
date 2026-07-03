@@ -4,22 +4,40 @@
 
 package wasm
 
-import "unsafe"
+import (
+	"encoding/binary"
+	"math"
+	"unsafe"
+)
 
-// float32SliceAsBytes reinterprets the float32 slice's backing array
-// as a byte slice (4 bytes per element) WITHOUT copying. The result
-// shares memory with the input; callers must keep the input alive
-// until the bytes are consumed.
+// hostLittleEndian reports whether the host stores multi-byte values
+// little-endian. It is a var (not a const) so tests can exercise the
+// big-endian copy path on a little-endian host.
+var hostLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
+// float32SliceAsBytes returns the float32 slice as little-endian bytes
+// (4 bytes per element) -- the byte order the JS Float32Array expects in
+// every browser we target, and the order wasm itself uses.
 //
-// Endianness: wasm is little-endian, which matches the JS
-// Float32Array on every browser we target — the bytes can be
-// memcpy'd into a Uint8Array view and a Float32Array overlay over
-// the same ArrayBuffer will produce identical samples. Host
-// platforms that test this helper are amd64/arm64 (also LE), so the
-// helper's pure-Go test passes everywhere we run CI.
+// On a little-endian host (every real build target, incl. js/wasm) the
+// result aliases the input's backing array WITHOUT copying, so callers must
+// keep the input alive until the bytes are consumed. On a big-endian host
+// (only reached under the s390x cross-arch CI check) it returns a freshly
+// little-endian-encoded copy, so the bytes are correct regardless of host
+// byte order.
 func float32SliceAsBytes(s []float32) []byte {
 	if len(s) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*4)
+	if hostLittleEndian {
+		return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*4)
+	}
+	b := make([]byte, len(s)*4)
+	for i, v := range s {
+		binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(v))
+	}
+	return b
 }

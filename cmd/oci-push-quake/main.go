@@ -43,7 +43,7 @@ func main() {
 }
 
 type ociIndex struct {
-	SchemaVersion int                    `json:"schemaVersion"`
+	SchemaVersion int                     `json:"schemaVersion"`
 	Manifests     []ociIndexManifestEntry `json:"manifests"`
 }
 
@@ -55,10 +55,10 @@ type ociIndexManifestEntry struct {
 }
 
 type ociManifest struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	MediaType     string         `json:"mediaType"`
-	Config        ociDescriptor  `json:"config"`
-	Layers        []ociDescriptor `json:"layers"`
+	SchemaVersion int               `json:"schemaVersion"`
+	MediaType     string            `json:"mediaType"`
+	Config        ociDescriptor     `json:"config"`
+	Layers        []ociDescriptor   `json:"layers"`
 	Annotations   map[string]string `json:"annotations,omitempty"`
 }
 

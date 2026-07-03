@@ -155,7 +155,7 @@ func TestClientManifest_BadJSONBody(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
-func (errReader) Close() error              { return nil }
+func (errReader) Close() error             { return nil }
 
 func TestClientManifest_BodyReadError(t *testing.T) {
 	c := &Client{

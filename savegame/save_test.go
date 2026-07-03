@@ -228,7 +228,7 @@ func TestLoad_UnterminatedGlobalsBody(t *testing.T) {
 
 func TestLoad_BadEdictHeader(t *testing.T) {
 	buf := buildLoadHeader("1", "e1m1", "0")
-	buf.WriteString("{\n}\n")     // valid empty globals
+	buf.WriteString("{\n}\n")      // valid empty globals
 	buf.WriteString("not-brace\n") // bad edict header
 	if _, err := Load(buf); !errors.Is(err, ErrMalformedBlock) {
 		t.Errorf("got %v want ErrMalformedBlock", err)
@@ -238,7 +238,7 @@ func TestLoad_BadEdictHeader(t *testing.T) {
 func TestLoad_UnterminatedEdictBlock(t *testing.T) {
 	buf := buildLoadHeader("1", "e1m1", "0")
 	buf.WriteString("{\n}\n") // valid empty globals
-	buf.WriteString("{\n")     // start edict block, never close
+	buf.WriteString("{\n")    // start edict block, never close
 	if _, err := Load(buf); !errors.Is(err, ErrMalformedBlock) {
 		t.Errorf("got %v want ErrMalformedBlock", err)
 	}

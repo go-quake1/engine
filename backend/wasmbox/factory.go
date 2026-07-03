@@ -98,17 +98,17 @@ func NewClient(title string, width, height int) (*Backend, error) {
 	// Audio: best-effort. Worker-scope AudioContext is supported in
 	// modern Chromium; a missing constructor degrades to silent.
 	//
-	// NOTE: NewWebAudio returns (*WebAudio, error) so a failure path
-	// hands back a TYPED-nil *WebAudio. Passing that straight through
-	// to New() boxes a typed-nil into the AudioDevice interface, which
-	// the runtime treats as non-nil + then nil-derefs when QueueAudio
-	// dispatches WritePCM. Coerce the typed-nil to the bare interface-
-	// nil before handing to New(): same shape New() already expects from
-	// callers that have no audio at all.
-	audioRaw, audioErr := NewWebAudio()
+	// NewWebAudio returns a typed *WebAudio. On failure that is a nil
+	// pointer, which -- if handed straight to New as the AudioDevice
+	// interface -- becomes a NON-nil interface wrapping a nil pointer, so
+	// Backend.QueueAudio's `b.Audio == nil` guard reads false and WritePCM
+	// dereferences nil (a panic the moment the runloop mixes its first audio
+	// frame). Pass the concrete value only when the constructor actually
+	// succeeded; otherwise leave the interface genuinely nil so the
+	// silent-drop path engages.
 	var audio AudioDevice
-	if audioErr == nil && audioRaw != nil {
-		audio = audioRaw
+	if wa, err := NewWebAudio(); err == nil && wa != nil {
+		audio = wa
 	}
 
 	return New(surface, input, audio, PerformanceNow())

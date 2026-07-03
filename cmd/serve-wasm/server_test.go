@@ -57,6 +57,19 @@ func TestServe_AbsRootError(t *testing.T) {
 	}
 }
 
+func TestServe_FilepathAbsError(t *testing.T) {
+	muStartup.Lock()
+	defer muStartup.Unlock()
+	defer func(orig func(string) (string, error)) { filepathAbs = orig }(filepathAbs)
+	myErr := errors.New("abs boom")
+	filepathAbs = func(string) (string, error) { return "", myErr }
+
+	err := serve("127.0.0.1:0", t.TempDir(), false, io.Discard)
+	if err == nil || !errors.Is(err, myErr) {
+		t.Fatalf("serve(abs err): got %v want abs boom", err)
+	}
+}
+
 func TestServe_StatError(t *testing.T) {
 	muStartup.Lock()
 	defer muStartup.Unlock()
@@ -75,17 +88,20 @@ func TestServe_OneShotServesAndExits(t *testing.T) {
 	defer muStartup.Unlock()
 
 	defer func(orig time.Duration) { oneShotDrainDelay = orig }(oneShotDrainDelay)
-	oneShotDrainDelay = 5 * time.Millisecond
+	oneShotDrainDelay = 1 * time.Second
 
 	root := helperRoot(t)
-	// Pre-allocate an ephemeral port so the goroutine + the client
-	// race-free agree on the URL.
+	// Create the listener in the test (bound here, like the proven-working
+	// minimal pattern) and hand it to serve() via the netListen seam. Avoids
+	// both the probe-then-reuse race and the listen-inside-the-serve-goroutine
+	// path, which is unreliable under qemu-user emulation in CI.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("port probe: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
 	addr := ln.Addr().String()
-	_ = ln.Close()
+	defer func(o func(string, string) (net.Listener, error)) { netListen = o }(netListen)
+	netListen = func(network, a string) (net.Listener, error) { return ln, nil }
 
 	var buf bytes.Buffer
 	done := make(chan error, 1)
@@ -93,18 +109,22 @@ func TestServe_OneShotServesAndExits(t *testing.T) {
 		done <- serve(addr, root, true, &buf)
 	}()
 
-	// Wait for the listener to come up.
-	deadline := time.Now().Add(2 * time.Second)
+	// serve() starts accepting a moment after launch; retry briefly.
 	var resp *http.Response
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err = http.Get("http://" + addr + "/index.html")
-		if err == nil {
+		if resp, err = http.Get("http://" + addr + "/index.html"); err == nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	if err != nil {
-		t.Fatalf("GET /index.html: %v", err)
+		select {
+		case de := <-done:
+			t.Fatalf("GET %v; serve() returned early: %v; banner=%q", err, de, buf.String())
+		default:
+			t.Fatalf("GET %v; serve() still running; banner=%q", err, buf.String())
+		}
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
@@ -117,7 +137,7 @@ func TestServe_OneShotServesAndExits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("serve returned %v want nil after one-shot", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second): // generous for slow CI emulation (qemu)
 		t.Fatal("serve did not exit after one-shot")
 	}
 
@@ -130,31 +150,30 @@ func TestServe_OneShotFaviconDoesNotTrigger(t *testing.T) {
 	muStartup.Lock()
 	defer muStartup.Unlock()
 	defer func(orig time.Duration) { oneShotDrainDelay = orig }(oneShotDrainDelay)
-	oneShotDrainDelay = 5 * time.Millisecond
+	oneShotDrainDelay = 1 * time.Second // long enough for the response to flush before shutdown under qemu
 
 	root := helperRoot(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("port probe: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
 	addr := ln.Addr().String()
-	_ = ln.Close()
+	defer func(o func(string, string) (net.Listener, error)) { netListen = o }(netListen)
+	netListen = func(network, a string) (net.Listener, error) { return ln, nil }
 
 	done := make(chan error, 1)
 	go func() {
 		done <- serve(addr, root, true, io.Discard)
 	}()
 
-	// Wait for liveness, then poke /favicon.ico -- should NOT trigger
-	// shutdown. Follow up with a real request to make the server exit.
-	deadline := time.Now().Add(2 * time.Second)
+	// /favicon.ico should NOT trigger shutdown (retry to cover the accept window).
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://" + addr + "/favicon.ico")
-		if err == nil {
+		if resp, e := http.Get("http://" + addr + "/favicon.ico"); e == nil {
 			_ = resp.Body.Close()
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	// Server should still be up. Hit / to drive the real shutdown.
 	resp, err := http.Get("http://" + addr + "/")
@@ -168,7 +187,7 @@ func TestServe_OneShotFaviconDoesNotTrigger(t *testing.T) {
 		if err != nil {
 			t.Fatalf("serve returned %v want nil", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second): // generous for slow CI emulation (qemu)
 		t.Fatal("serve did not exit after non-favicon hit")
 	}
 }
@@ -214,15 +233,16 @@ func TestMain_RunsServeBranchAndExitsOneShot(t *testing.T) {
 	muStartup.Lock()
 	defer muStartup.Unlock()
 	defer func(orig time.Duration) { oneShotDrainDelay = orig }(oneShotDrainDelay)
-	oneShotDrainDelay = 5 * time.Millisecond
+	oneShotDrainDelay = 1 * time.Second // flush the response before shutdown under qemu
 
 	root := helperRoot(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("port probe: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
 	addr := ln.Addr().String()
-	_ = ln.Close()
+	defer func(o func(string, string) (net.Listener, error)) { netListen = o }(netListen)
+	netListen = func(network, a string) (net.Listener, error) { return ln, nil }
 
 	t.Setenv("QUAKE_WASM_ADDR", addr)
 	t.Setenv("QUAKE_WASM_ROOT", root)
@@ -234,18 +254,18 @@ func TestMain_RunsServeBranchAndExitsOneShot(t *testing.T) {
 		close(done)
 	}()
 
-	deadline := time.Now().Add(2 * time.Second)
+	// Drive the one-shot so main() returns (retry to cover the accept window).
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://" + addr + "/index.html")
-		if err == nil {
+		if resp, e := http.Get("http://" + addr + "/index.html"); e == nil {
 			_ = resp.Body.Close()
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second): // generous for slow CI emulation (qemu)
 		t.Fatal("main() did not return after one-shot")
 	}
 }
@@ -314,4 +334,16 @@ func TestMain_DefaultEnvsApplied(t *testing.T) {
 	if atomic.LoadInt32(&exitCode) != 1 {
 		t.Fatalf("osExit code = %d want 1 (default root missing under test cwd)", exitCode)
 	}
+}
+
+// TestNetListenSeam_Default covers the default netListen closure (real
+// net.Listen). The one-shot tests override netListen to hand serve() a
+// pre-bound listener (avoiding flaky probe-reuse / one-shot timing under qemu),
+// so without this nothing exercises the default seam.
+func TestNetListenSeam_Default(t *testing.T) {
+	ln, err := netListen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("netListen: %v", err)
+	}
+	_ = ln.Close()
 }

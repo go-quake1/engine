@@ -76,8 +76,8 @@ func TestNewFS_EmptyMap(t *testing.T) {
 
 func TestFS_OpenAndRead(t *testing.T) {
 	files := map[string][]byte{
-		"pak0.pak":             []byte("PACKfake-pak"),
-		"music/track02.ogg":    []byte("OggS-pretend"),
+		"pak0.pak":          []byte("PACKfake-pak"),
+		"music/track02.ogg": []byte("OggS-pretend"),
 	}
 	rf := newFakeRegistry(t, files)
 	defer rf.srv.Close()
@@ -173,7 +173,7 @@ func TestFS_ReadAllError(t *testing.T) {
 type bodyErrReader struct{ called bool }
 
 func (b *bodyErrReader) Read(p []byte) (int, error) { return 0, errors.New("body broke") }
-func (b *bodyErrReader) Close() error                { return nil }
+func (b *bodyErrReader) Close() error               { return nil }
 
 // fakeBlobClient.Do returns a 200 OK with a body that fails on Read.
 type fakeBlobClient struct{}

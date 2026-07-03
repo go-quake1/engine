@@ -462,7 +462,7 @@ func makePaletteLump() []byte {
 		base := byte(i)
 		switch i % 6 {
 		case 0:
-			buf[i*3+0] = base    // R-dominant
+			buf[i*3+0] = base // R-dominant
 			buf[i*3+1] = base / 4
 			buf[i*3+2] = base / 4
 		case 1:
@@ -499,10 +499,10 @@ func makePaletteLump() []byte {
 	// spectrum + the rasterized triangle reads as black even though
 	// the rasterizer is doing its job.
 	for k, rgb := range [...][3]byte{
-		{255, 64, 64},   // idx 0  -> bright red
-		{255, 200, 32},  // idx 15 -> warm yellow
-		{32, 200, 255},  // idx 31 -> bright cyan
-		{200, 32, 200},  // idx 47 -> magenta
+		{255, 64, 64},  // idx 0  -> bright red
+		{255, 200, 32}, // idx 15 -> warm yellow
+		{32, 200, 255}, // idx 31 -> bright cyan
+		{200, 32, 200}, // idx 47 -> magenta
 	} {
 		i := []int{0, 15, 31, 47}[k]
 		buf[i*3+0] = rgb[0]

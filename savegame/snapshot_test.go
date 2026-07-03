@@ -108,13 +108,13 @@ func TestSnapshot_HappyPath(t *testing.T) {
 	v := newView(p, 3)
 	// Populate edict 1 with values across every type.
 	e := v.Edict(1)
-	_ = e.FieldSetFloat(1, 100)             // health
-	_ = e.FieldSetVector(2, [3]float32{10, 20, 30}) // origin
+	_ = e.FieldSetFloat(1, 100)                             // health
+	_ = e.FieldSetVector(2, [3]float32{10, 20, 30})         // origin
 	_ = e.FieldSetInt(5, addStr(&p.Strings, "monster_dog")) // classname
-	_ = e.FieldSetInt(6, 42)                // enemy
-	_ = e.FieldSetInt(7, 9)                 // chain
-	_ = e.FieldSetInt(8, 11)                // think
-	_ = e.FieldSetInt(9, 12345)             // ptr
+	_ = e.FieldSetInt(6, 42)                                // enemy
+	_ = e.FieldSetInt(7, 9)                                 // chain
+	_ = e.FieldSetInt(8, 11)                                // think
+	_ = e.FieldSetInt(9, 12345)                             // ptr
 
 	// Mark slot 2 free.
 	v.SetFree(2, true)
@@ -169,11 +169,11 @@ func TestSnapshot_FieldOffsetOutOfRange(t *testing.T) {
 		Header:  progs.Header{EntityFields: 1}, // only 4 bytes per edict
 		Strings: []byte{0, 'a', 0, 'b', 0, 'c', 0, 'd', 0, 'e', 0, 'f', 0},
 		FieldDefs: []progs.Def{
-			{Type: uint16(progs.EvFloat), Ofs: 100, SName: 1},   // OOR
-			{Type: uint16(progs.EvVector), Ofs: 100, SName: 3},  // OOR
-			{Type: uint16(progs.EvString), Ofs: 100, SName: 5},  // OOR
-			{Type: uint16(progs.EvEntity), Ofs: 100, SName: 7},  // OOR
-			{Type: uint16(progs.EvField), Ofs: 100, SName: 9},   // OOR (no rendered ofs after rename)
+			{Type: uint16(progs.EvFloat), Ofs: 100, SName: 1},     // OOR
+			{Type: uint16(progs.EvVector), Ofs: 100, SName: 3},    // OOR
+			{Type: uint16(progs.EvString), Ofs: 100, SName: 5},    // OOR
+			{Type: uint16(progs.EvEntity), Ofs: 100, SName: 7},    // OOR
+			{Type: uint16(progs.EvField), Ofs: 100, SName: 9},     // OOR (no rendered ofs after rename)
 			{Type: uint16(progs.EvFunction), Ofs: 100, SName: 11}, // OOR
 		},
 	}

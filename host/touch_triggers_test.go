@@ -83,9 +83,9 @@ func progsForTouch() *progs.Progs {
 	}
 
 	stmts := []progs.Statement{
-		{Op: progs.OP_DONE},                                   // 0 -- null body
-		{Op: progs.OP_CALL0, A: int16(fnIdx2GlobalOfs)},       // 1 -- function 1 body: call fn at slot 50 (= fn idx 2)
-		{Op: progs.OP_DONE},                                   // 2 -- function 1 body: return
+		{Op: progs.OP_DONE},                             // 0 -- null body
+		{Op: progs.OP_CALL0, A: int16(fnIdx2GlobalOfs)}, // 1 -- function 1 body: call fn at slot 50 (= fn idx 2)
+		{Op: progs.OP_DONE},                             // 2 -- function 1 body: return
 	}
 
 	return &progs.Progs{

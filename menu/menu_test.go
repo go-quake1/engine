@@ -230,8 +230,8 @@ func TestActivateMain(t *testing.T) {
 
 func TestActivateNewGame(t *testing.T) {
 	cases := []struct {
-		row       int
-		want      State
+		row        int
+		want       State
 		wantCursor int
 	}{
 		{0, StateSkill, int(SkillNormal)},

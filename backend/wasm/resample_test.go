@@ -5,6 +5,7 @@
 package wasm
 
 import (
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -153,12 +154,45 @@ func TestFloat32SliceAsBytes_shapesBytes(t *testing.T) {
 	if len(b) != len(in)*4 {
 		t.Fatalf("len: got %d want %d", len(b), len(in)*4)
 	}
-	// Mutate the bytes; verify the float view changed (proves zero-copy).
-	b[0] = 0
-	b[1] = 0
-	b[2] = 0
-	b[3] = 0
-	if in[0] != 0.0 {
-		t.Fatalf("zero-copy: expected in[0]=0, got %v", in[0])
+	// The result is always little-endian (the JS Float32Array order),
+	// regardless of host byte order.
+	for i, want := range in {
+		got := math.Float32frombits(binary.LittleEndian.Uint32(b[i*4 : i*4+4]))
+		if got != want {
+			t.Errorf("sample[%d]: got %v want %v", i, got, want)
+		}
+	}
+	if hostLittleEndian {
+		// On a little-endian host the bytes alias the input: mutating the
+		// bytes is visible through the float slice (proves zero-copy).
+		b[0], b[1], b[2], b[3] = 0, 0, 0, 0
+		if in[0] != 0.0 {
+			t.Fatalf("zero-copy: expected in[0]=0, got %v", in[0])
+		}
+	}
+}
+
+// TestFloat32SliceAsBytes_bigEndianHostCopies forces the big-endian path on
+// whatever host runs the test (so the amd64 coverage gate exercises it too)
+// and verifies it still emits correct little-endian bytes as a copy.
+func TestFloat32SliceAsBytes_bigEndianHostCopies(t *testing.T) {
+	defer func(orig bool) { hostLittleEndian = orig }(hostLittleEndian)
+	hostLittleEndian = false
+
+	in := []float32{1.0, -2.5, 3.25, 0.0}
+	b := float32SliceAsBytes(in)
+	if len(b) != len(in)*4 {
+		t.Fatalf("len: got %d want %d", len(b), len(in)*4)
+	}
+	for i, want := range in {
+		got := math.Float32frombits(binary.LittleEndian.Uint32(b[i*4 : i*4+4]))
+		if got != want {
+			t.Errorf("sample[%d]: got %v want %v", i, got, want)
+		}
+	}
+	// The big-endian path returns a copy: mutating the input must not change b.
+	in[0] = 42.0
+	if got := math.Float32frombits(binary.LittleEndian.Uint32(b[0:4])); got != 1.0 {
+		t.Fatalf("expected a copy, got %v want 1.0", got)
 	}
 }

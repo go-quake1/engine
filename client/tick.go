@@ -82,7 +82,7 @@ const tickOutBufSize = 64
 // OUTBOUND BUILD (skipped when state.Connection != [StateConnected]):
 //
 //   - angles := ApplyMouseMove(viewAngles, MouseDX, MouseDY,
-//                               Sensitivity, Speeds.MouseYaw, Speeds.MousePitch)
+//     Sensitivity, Speeds.MouseYaw, Speeds.MousePitch)
 //   - angles  = AdjustAngles(angles, Buttons, Speeds, Dt)
 //   - cmd    := BaseMove(Buttons, Speeds, Dt)
 //   - cmd.ViewAngles = angles

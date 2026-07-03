@@ -29,7 +29,7 @@ import (
 // out captures the human-readable startup banner ("open
 // http://...") so tests can intercept it without scraping stdout.
 func serve(addr, root string, oneShot bool, out io.Writer) error {
-	abs, err := filepath.Abs(root)
+	abs, err := filepathAbs(root)
 	if err != nil {
 		return fmt.Errorf("filepath.Abs(%q): %w", root, err)
 	}
@@ -102,8 +102,9 @@ func wasmContentType(next http.Handler) http.Handler {
 // osStat / netListen are seams so tests can drive the error branches
 // without invoking the host filesystem / network on the unhappy path.
 var (
-	osStat    = os.Stat
-	netListen = func(network, addr string) (net.Listener, error) { return net.Listen(network, addr) }
+	osStat      = os.Stat
+	filepathAbs = filepath.Abs
+	netListen   = func(network, addr string) (net.Listener, error) { return net.Listen(network, addr) }
 )
 
 // muStartup serializes seam swaps in tests (set + restore from the

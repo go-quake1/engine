@@ -107,10 +107,10 @@ type Backend struct {
 
 // Sentinel errors. Exported so callers can errors.Is-check them.
 var (
-	ErrWASMNilFB        = errors.New("wasm: nil Framebuffer in backend")
-	ErrWASMRGBASize     = errors.New("wasm: RGBA buffer size doesn't match framebuffer dimensions")
-	ErrUnsupportedHost  = errors.New("wasm: JS-backed adapter requires GOOS=js GOARCH=wasm")
-	ErrAudioNoContext   = errors.New("wasm: AudioContext not initialised")
+	ErrWASMNilFB         = errors.New("wasm: nil Framebuffer in backend")
+	ErrWASMRGBASize      = errors.New("wasm: RGBA buffer size doesn't match framebuffer dimensions")
+	ErrUnsupportedHost   = errors.New("wasm: JS-backed adapter requires GOOS=js GOARCH=wasm")
+	ErrAudioNoContext    = errors.New("wasm: AudioContext not initialised")
 	ErrFBSelectorMissing = errors.New("wasm: canvas selector did not match a DOM element")
 )
 

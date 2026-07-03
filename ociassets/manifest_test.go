@@ -44,11 +44,11 @@ func TestDecodeManifest_BadSchemaVersion(t *testing.T) {
 func TestBuildFileMap_Ok(t *testing.T) {
 	m := &Manifest{
 		Annotations: map[string]string{
-			"quake.path/pak0.pak":         "sha256:aaa",
+			"quake.path/pak0.pak":          "sha256:aaa",
 			"quake.path/music/track02.ogg": "sha256:bbb",
-			"org.other/key":               "ignored",
-			"quake.path/":                 "skipped-empty-name",
-			"quake.path/empty":            "",
+			"org.other/key":                "ignored",
+			"quake.path/":                  "skipped-empty-name",
+			"quake.path/empty":             "",
 		},
 	}
 	fm, err := BuildFileMap(m)

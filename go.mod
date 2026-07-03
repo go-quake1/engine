@@ -20,7 +20,5 @@ replace (
 	github.com/go-virtio/input => ../../go-virtio/input
 	github.com/go-virtio/sound => ../../go-virtio/sound
 	github.com/go-virtio/validate => ../../go-virtio/validate
-	github.com/jfreymuth/oggvorbis => ../../jfreymuth/oggvorbis
-	github.com/jfreymuth/vorbis => ../../jfreymuth/vorbis
 	github.com/usbarmory/tamago => ../../usbarmory/tamago
 )

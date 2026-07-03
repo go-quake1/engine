@@ -17,10 +17,10 @@ import (
 
 // fakeFB is an in-memory Framebuffer for the host-side tests.
 type fakeFB struct {
-	w, h        int
-	present     int
-	lastRGBA    []byte
-	presentErr  error
+	w, h       int
+	present    int
+	lastRGBA   []byte
+	presentErr error
 }
 
 func newFakeFB(w, h int) *fakeFB { return &fakeFB{w: w, h: h} }
@@ -55,10 +55,10 @@ func (f *fakeInput) PollEvents() ([]InputEvent, error) {
 
 // fakeAudio captures WritePCM calls + can be told to return an error.
 type fakeAudio struct {
-	rate    int
-	lastIn  []sound.StereoSample
+	rate     int
+	lastIn   []sound.StereoSample
 	writeErr error
-	writes  int
+	writes   int
 }
 
 func (f *fakeAudio) WritePCM(samples []sound.StereoSample) error {
