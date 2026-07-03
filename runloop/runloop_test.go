@@ -765,6 +765,27 @@ func TestUpdateTriggersFromSnapshot_DownSetsBothFlags(t *testing.T) {
 
 // TestUpdateTriggersFromSnapshot_UpClearsHeldFlag proves a KeysUp
 // for either trigger clears just that flag (the other stays held).
+func TestUpdateTriggersFromSnapshot_SpaceJumps(t *testing.T) {
+	// KeySpace is the primary jump key (alongside KeyEnter): down sets
+	// the +jump trigger, up clears it.
+	var tr TriggerButtons
+	UpdateTriggersFromSnapshot(&tr, backend.InputSnapshot{
+		KeysDown: []backend.KeyCode{backend.KeySpace},
+	})
+	if !tr.Jump {
+		t.Fatalf("Jump not set after KeySpace down")
+	}
+	if got := tr.ActionButtons(); got != 2 {
+		t.Fatalf("ActionButtons after KeySpace down = %d want 2 (ButtonJump)", got)
+	}
+	UpdateTriggersFromSnapshot(&tr, backend.InputSnapshot{
+		KeysUp: []backend.KeyCode{backend.KeySpace},
+	})
+	if tr.Jump {
+		t.Fatalf("Jump still held after KeySpace up")
+	}
+}
+
 func TestUpdateTriggersFromSnapshot_UpClearsHeldFlag(t *testing.T) {
 	tr := TriggerButtons{Attack: true, Jump: true}
 	UpdateTriggersFromSnapshot(&tr, backend.InputSnapshot{

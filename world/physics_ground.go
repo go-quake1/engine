@@ -20,6 +20,10 @@ import (
 // without changing the other.
 const stepDefaultGravity = 1.0
 
+// jumpSpeed is the upward velocity a standing +jump imparts, in units/s.
+// tyrquake: the `270` literal in QC PlayerJump (QC/player.qc).
+const jumpSpeed = 270
+
 // readStepGravityFactor returns the per-entity gravity scale from the
 // QC `gravity` field, or [stepDefaultGravity] when the field is
 // absent. Mirrors [readGravityFactor] in physics_toss.go -- separate
@@ -301,6 +305,23 @@ func PhysicsWalk(ent *progs.Edict, ev *progs.EntVars, key Key, cmd server.UserCm
 
 	onGround := (flags & server.FlagOnGround) != 0
 
+	// BUTTON_JUMP while standing launches the player. This is the engine-
+	// side stand-in for QC PlayerJump: the bring-up host does not dispatch
+	// PlayerPreThink, so the +jump bit the client sends would otherwise do
+	// nothing. FL_JUMP_RELEASED debounces a held key -- the jump re-arms
+	// only after the key is released, so holding jump does not pogo every
+	// tic. tyrquake: PlayerJump in QC/player.qc (self.velocity_z += 270).
+	jumpHeld := cmd.Buttons&server.ButtonJump != 0
+	if jumpHeld && onGround && flags&server.FlagJumpReleased != 0 {
+		velocity[2] += jumpSpeed
+		flags &^= server.FlagOnGround
+		flags &^= server.FlagJumpReleased
+		onGround = false // launched: this tic is airborne (skip the on-ground vz zero + friction; gravity applies)
+	}
+	if !jumpHeld {
+		flags |= server.FlagJumpReleased
+	}
+
 	// FL_ONGROUND zeros the inherited z velocity at frame start --
 	// matches the C upstream's implicit "you're on the floor, your
 	// downward fall has stopped" convention. Done BEFORE clamp so the
@@ -371,7 +392,10 @@ func PhysicsWalk(ent *progs.Edict, ev *progs.EntVars, key Key, cmd server.UserCm
 		Maxs:      maxs,
 		EntityKey: key,
 	}, ctx.Worldmodel, ctx.Candidates)
-	if supported {
+	// Do not re-latch ONGROUND while rising (a fresh jump); otherwise the
+	// next tic's on-ground vz-zero would swallow the launch. Once the
+	// player is level or falling (velocity_z <= 0) the landing check applies.
+	if supported && velocity[2] <= 0 {
 		flags |= server.FlagOnGround
 	} else {
 		flags &^= server.FlagOnGround
