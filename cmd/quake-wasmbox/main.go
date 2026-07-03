@@ -278,6 +278,7 @@ func run() error {
 		if err != nil {
 			logf("runner.Setup failed: %v -- falling back to synth", err)
 		} else {
+			r.ShowFPS = true // bring-up perf HUD (top-left)
 			logf("real-pak bring-up live -- entering RunUntilQuit")
 			return r.RunUntilQuit()
 		}
@@ -326,6 +327,7 @@ func runSynth(be *wasmbox.Backend, pakFS fs.FS) error {
 		logf("setupSynthRenderer skipped: %v -- 2D-only fallback", err)
 	}
 
+	r.ShowFPS = true // bring-up perf HUD (top-left)
 	return r.RunUntilQuit()
 }
 

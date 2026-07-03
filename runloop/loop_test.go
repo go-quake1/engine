@@ -128,6 +128,23 @@ func TestRunFrame_SubstepCapPreventsSpiral(t *testing.T) {
 	}
 }
 
+func TestRunFrame_FPSOverlayAverages(t *testing.T) {
+	rec := backend.NewRecorder(320, 200)
+	r := newLoopRunner(t, rec)
+	r.ShowFPS = true
+	// 0.05s per frame; the ~0.5s window closes at frame 10 and caches the
+	// averaged label. 12 frames guarantees it fired.
+	for i := 0; i < 12; i++ {
+		if err := r.RunFrame(0.05, float32(i)); err != nil {
+			t.Fatalf("RunFrame: %v", err)
+		}
+	}
+	// 0.05s avg -> 20 FPS, 50 ms.
+	if r.fpsText != "20 FPS  50 ms" {
+		t.Fatalf("fpsText = %q, want %q", r.fpsText, "20 FPS  50 ms")
+	}
+}
+
 func TestRunFrame_ZeroSimStepUsesDefault(t *testing.T) {
 	rec := backend.NewRecorder(320, 200)
 	r := newLoopRunner(t, rec) // SimStep left 0 -> DefaultSimStep (0.05)
