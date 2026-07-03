@@ -170,7 +170,10 @@ func TransformFace(
 		world [3]float32
 		view  [3]float32
 	}
-	vs := make([]viewVert, faceVerts.NumVerts)
+	// Stack-backed scratch (NumVerts <= MaxPolyVerts, checked above) so the
+	// per-face world transform doesn't heap-allocate every face every frame.
+	var vsArr [render.MaxPolyVerts]viewVert
+	vs := vsArr[:faceVerts.NumVerts]
 	anyInFront := false
 	for i := 0; i < faceVerts.NumVerts; i++ {
 		w := faceVerts.Vert(i)
@@ -267,7 +270,10 @@ func TransformFacePerspective(
 		world [3]float32
 		view  [3]float32
 	}
-	vs := make([]viewVert, faceVerts.NumVerts)
+	// Stack-backed scratch (NumVerts <= MaxPolyVerts, checked above) so the
+	// per-face world transform doesn't heap-allocate every face every frame.
+	var vsArr [render.MaxPolyVerts]viewVert
+	vs := vsArr[:faceVerts.NumVerts]
 	anyInFront := false
 	for i := 0; i < faceVerts.NumVerts; i++ {
 		w := faceVerts.Vert(i)
