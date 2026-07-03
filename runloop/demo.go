@@ -186,7 +186,14 @@ func (r *Runner) playDemoTick() error {
 		opts = demo.DefaultPlayerOpts()
 	}
 	if perr := demo.PlayTick(r.Client, &tick, &r.ViewAngles, opts); perr != nil {
-		if errors.Is(perr, client.ErrCorruptMessage) || errors.Is(perr, client.ErrUnknownSvc) {
+		// A corrupt / unknown-opcode / unknown-TE frame in the attract-loop
+		// demo is recoverable: drop the demo (the menu keeps running) instead
+		// of killing the host. Unknown TE_* in particular fires when a demo
+		// carries an extended/mod temp-entity (or an undecoded opcode desyncs
+		// the reader onto a stray sub-type byte) -- see client/svc_te.go.
+		if errors.Is(perr, client.ErrCorruptMessage) ||
+			errors.Is(perr, client.ErrUnknownSvc) ||
+			errors.Is(perr, client.ErrTEUnknownKind) {
 			r.Demo = nil
 			return nil
 		}

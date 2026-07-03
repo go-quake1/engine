@@ -38,10 +38,11 @@ type TickInput struct {
 // TickOutput is the per-frame summary. Frontends use it for
 // telemetry / debug HUD; nothing in this layer reads it.
 type TickOutput struct {
-	MessagesApplied int        // total Decoded values dispatched to Apply this tick
-	DatagramsRead   int        // number of NetConn payloads consumed
-	SentMove        bool       // true iff a clc_move was successfully sent
-	ViewAngles      [3]float32 // pitch/yaw/roll after the input adjustments
+	MessagesApplied  int        // total Decoded values dispatched to Apply this tick
+	DatagramsRead    int        // number of NetConn payloads consumed
+	DatagramsDropped int        // datagrams abandoned mid-decode on a recoverable error (unknown TE_*)
+	SentMove         bool       // true iff a clc_move was successfully sent
+	ViewAngles       [3]float32 // pitch/yaw/roll after the input adjustments
 }
 
 // ErrTickNilState is returned by [Tick] when state == nil.
@@ -147,6 +148,17 @@ func Tick(
 		for {
 			decoded, derr := sr.Next(protocol.VersionNQ)
 			if errors.Is(derr, ErrEOF) {
+				break
+			}
+			if errors.Is(derr, ErrTEUnknownKind) {
+				// Recoverable (see svc_te.go): an unknown temp-entity sub-type
+				// has an unknown body length, so we cannot skip just it -- drop
+				// the REST of this datagram and resync on the next one. The C
+				// upstream Sys_Error's here (kills the host); propagating derr
+				// would do the same to us, freezing the client on the first
+				// extended/mod TE (or a desynced byte) the server emits. The
+				// menu + render loop keep running; the effect is simply lost.
+				out.DatagramsDropped++
 				break
 			}
 			if derr != nil {

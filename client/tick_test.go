@@ -177,6 +177,29 @@ func TestTick_InboundUnknownOpcode(t *testing.T) {
 	}
 }
 
+func TestTick_InboundUnknownTEDropsFrame(t *testing.T) {
+	st := NewState()
+	cli, srv := server.NewLoopbackConn()
+
+	// svc_temp_entity with sub-type 23 -- beyond the vanilla TE_* range
+	// (0..13), so decodeTempEntity returns ErrTEUnknownKind. Rather than kill
+	// the host, Tick drops the rest of the datagram and keeps going. The
+	// trailing SvcNop is therefore NOT applied (we can't know the unknown TE's
+	// body length to resume decoding past it).
+	pushFromServer(t, srv, []byte{protocol.SvcTempEntity, 23, protocol.SvcNop})
+
+	out, err := Tick(st, cli, defaultTickInput(), [3]float32{})
+	if err != nil {
+		t.Fatalf("Tick: got %v, want nil (unknown TE must be recoverable)", err)
+	}
+	if out.DatagramsDropped != 1 {
+		t.Errorf("DatagramsDropped: got %d want 1", out.DatagramsDropped)
+	}
+	if out.MessagesApplied != 0 {
+		t.Errorf("MessagesApplied: got %d want 0 (frame dropped before the trailing nop)", out.MessagesApplied)
+	}
+}
+
 // --- inbound + state transition (signon completion) -----------------
 
 func TestTick_SignonStage4TransitionsToConnected(t *testing.T) {
