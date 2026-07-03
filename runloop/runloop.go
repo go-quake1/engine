@@ -75,6 +75,19 @@ type Runner struct {
 	Speeds     client.InputSpeeds
 	ViewAngles [3]float32
 
+	// SimStep is the fixed server-tick interval (seconds) the sim advances
+	// per host tick, decoupled from the render framerate. Zero selects
+	// [DefaultSimStep] (0.05 = 20Hz, matching host.DefaultFrameTime).
+	SimStep float32
+
+	// simAccumulator carries the not-yet-simulated wall-clock time (in
+	// seconds) between RunFrame calls so the server steps at the FIXED
+	// SimStep rate regardless of the render framerate. Without this a slow
+	// render frame (the wasm software rasterizer can dip below the physics
+	// rate) would run one physics tic with a huge dt, making gravity /
+	// jumps / collision framerate-dependent and unstable.
+	simAccumulator float32
+
 	// ConsoleOpen tracks whether the developer console drop-down is
 	// currently armed (true) or closed (false). Toggled on the down-
 	// edge of [backend.KeyTilde] by [RunFrame]. The per-frame
@@ -276,6 +289,17 @@ var (
 // All other backend errors propagate verbatim. On error the remaining
 // steps are skipped (so a backend PresentFrame failure doesn't
 // prevent the host from advancing the server simulation next tick).
+// DefaultSimStep is the fixed server-tick interval used when Runner.SimStep
+// is unset (0.05 = 20Hz, matching host.DefaultFrameTime -- the NQ server rate).
+const DefaultSimStep float32 = 0.05
+
+// maxSimSubsteps caps how many fixed server ticks a single RunFrame will
+// run to catch up the accumulated wall-clock time. It bounds the per-frame
+// work after a stall so the loop can't spiral (render slower -> more catch-up
+// ticks -> render slower). At the default 0.05s SimStep this is a 0.4s
+// backlog ceiling; time beyond it is dropped (brief slow-motion, never a hang).
+const maxSimSubsteps = 8
+
 func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	if r.Host == nil {
 		return ErrRunnerNilHost
@@ -384,13 +408,43 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	demoActive := r.demoActive()
 	switch {
 	case demoActive:
+		// The demo drives its own recorded tic cadence; don't carry a
+		// live-sim backlog across a demo interlude.
+		r.simAccumulator = 0
 		if err := r.playDemoTick(); err != nil {
 			return err
 		}
 	case !menuActive:
-		if err := r.Host.Frame(dt); err != nil {
-			return err
+		// Fixed-timestep server sim. Accumulate the render dt and step the
+		// host at SimStep as many whole ticks as have elapsed, so the
+		// simulation advances at a constant rate no matter how fast or slow
+		// the frame rendered. The backlog is capped at maxSimSubsteps*SimStep
+		// before stepping so a long stall (or the very first frame after a
+		// load) can't trigger a spiral-of-death of ever-growing catch-up work
+		// -- excess time is dropped (the game runs slightly slow-motion under
+		// sustained overload rather than locking up).
+		ft := r.SimStep
+		if ft <= 0 {
+			ft = DefaultSimStep
 		}
+		r.simAccumulator += dt
+		steps := 0
+		for r.simAccumulator >= ft && steps < maxSimSubsteps {
+			if err := r.Host.Frame(ft); err != nil {
+				return err
+			}
+			r.simAccumulator -= ft
+			steps++
+		}
+		if steps == maxSimSubsteps {
+			// Hit the catch-up ceiling: drop the remaining backlog so a
+			// sustained overload can't spiral (brief slow-motion instead).
+			r.simAccumulator = 0
+		}
+	default:
+		// Menu up (sim paused): don't bank paused wall-clock, so dismissing
+		// the menu doesn't dump a burst of catch-up ticks.
+		r.simAccumulator = 0
 	}
 
 	// 4) Client tick: drain inbound, send clc_move (post-signon only).
