@@ -936,6 +936,80 @@ func TestPhysicsWalk_MissingVAngle(t *testing.T) {
 	}
 }
 
+// --- jump ------------------------------------------------------------------
+
+// +jump while standing (FL_ONGROUND set, FL_JUMP_RELEASED armed) launches
+// the player: velocity_z gains the jump speed and both FL_ONGROUND and
+// FL_JUMP_RELEASED clear so gravity takes over and a held key can't re-fire.
+func TestPhysicsWalk_JumpLaunchesFromGround(t *testing.T) {
+	ent, ev, _ := newGroundEnt(t, true)
+	seedGroundBaseline(t, ev)
+	if err := ev.WriteVec3("origin", [3]float32{0, 0, 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ev.WriteFloat("flags", float32(int32(server.FlagOnGround|server.FlagJumpReleased))); err != nil {
+		t.Fatal(err)
+	}
+	ctx := PhysicsContext{
+		Worldmodel:  groundFloorWorld(),
+		Now:         1.0,
+		Dt:          0.1,
+		ThinkCaller: groundNoThink(t),
+	}
+	cmd := server.UserCmd{Buttons: server.ButtonJump}
+	alive, err := PhysicsWalk(ent, ev, 0, cmd, server.DefaultPhysParams(), ctx)
+	if !alive || err != nil {
+		t.Fatalf("alive=%v err=%v want true, nil", alive, err)
+	}
+	gotV, _ := ev.ReadVec3("velocity")
+	if gotV[2] <= 0 {
+		t.Errorf("velocity_z should be positive after jump: got %v", gotV[2])
+	}
+	gotF, _ := ev.ReadFloat("flags")
+	flags := server.EntityFlag(int32(gotF))
+	if flags&server.FlagOnGround != 0 {
+		t.Errorf("FL_ONGROUND should clear after a jump: flags=%d", int32(flags))
+	}
+	if flags&server.FlagJumpReleased != 0 {
+		t.Errorf("FL_JUMP_RELEASED should clear while jump held: flags=%d", int32(flags))
+	}
+}
+
+// A held +jump that never released (FL_JUMP_RELEASED not set) does NOT
+// re-launch: the debounce keeps the player grounded until the key is let go.
+func TestPhysicsWalk_JumpDebouncedWhenHeld(t *testing.T) {
+	ent, ev, _ := newGroundEnt(t, true)
+	seedGroundBaseline(t, ev)
+	if err := ev.WriteVec3("origin", [3]float32{0, 0, 10}); err != nil {
+		t.Fatal(err)
+	}
+	// FL_ONGROUND set, FL_JUMP_RELEASED NOT set -> jump is still held from
+	// a prior tic and must not fire again.
+	if err := ev.WriteFloat("flags", float32(int32(server.FlagOnGround))); err != nil {
+		t.Fatal(err)
+	}
+	ctx := PhysicsContext{
+		Worldmodel:  groundFloorWorld(),
+		Now:         1.0,
+		Dt:          0.1,
+		ThinkCaller: groundNoThink(t),
+	}
+	cmd := server.UserCmd{Buttons: server.ButtonJump}
+	alive, err := PhysicsWalk(ent, ev, 0, cmd, server.DefaultPhysParams(), ctx)
+	if !alive || err != nil {
+		t.Fatalf("alive=%v err=%v want true, nil", alive, err)
+	}
+	gotV, _ := ev.ReadVec3("velocity")
+	if gotV[2] > 0 {
+		t.Errorf("velocity_z must stay grounded when jump is debounced: got %v", gotV[2])
+	}
+	gotF, _ := ev.ReadFloat("flags")
+	flags := server.EntityFlag(int32(gotF))
+	if flags&server.FlagOnGround == 0 {
+		t.Errorf("FL_ONGROUND should persist when the debounced jump is skipped: flags=%d", int32(flags))
+	}
+}
+
 // --- drift detector --------------------------------------------------------
 
 // Pin the ground-handler constants so a future "cleanup" can't drift
@@ -943,5 +1017,8 @@ func TestPhysicsWalk_MissingVAngle(t *testing.T) {
 func TestPhysicsGround_TyrquakeConstants(t *testing.T) {
 	if stepDefaultGravity != 1.0 {
 		t.Errorf("stepDefaultGravity drift: got %v want 1.0", stepDefaultGravity)
+	}
+	if jumpSpeed != 270 {
+		t.Errorf("jumpSpeed drift: got %v want 270", jumpSpeed)
 	}
 }

@@ -879,7 +879,7 @@ func releaseButton(b *client.ButtonState) {
 // trigger (BUTTON_USE = 4) layer it on via an impulse byte instead.
 type TriggerButtons struct {
 	Attack bool // KeyMouse1 currently held
-	Jump   bool // KeyEnter currently held
+	Jump   bool // KeySpace or KeyEnter currently held (+jump)
 }
 
 // ActionButtons returns the [server.UserCmd.Buttons] bitmask the
@@ -963,7 +963,7 @@ func UpdateTriggersFromSnapshot(triggers *TriggerButtons, snap backend.InputSnap
 		switch k {
 		case backend.KeyMouse1:
 			triggers.Attack = true
-		case backend.KeyEnter:
+		case backend.KeyEnter, backend.KeySpace:
 			triggers.Jump = true
 		}
 	}
@@ -971,7 +971,7 @@ func UpdateTriggersFromSnapshot(triggers *TriggerButtons, snap backend.InputSnap
 		switch k {
 		case backend.KeyMouse1:
 			triggers.Attack = false
-		case backend.KeyEnter:
+		case backend.KeyEnter, backend.KeySpace:
 			triggers.Jump = false
 		}
 	}
