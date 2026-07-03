@@ -107,7 +107,7 @@ func TestTransformFaceLightmapped_EmitsLmCoords(t *testing.T) {
 	}
 	// (vert.x - MinS) / 16, (vert.y - MinT) / 16
 	cases := []struct {
-		i        int
+		i            int
 		wantS, wantT float32
 	}{
 		{0, 0, 0},

@@ -432,8 +432,8 @@ func TestFS_SetProgress_EmitsTicks(t *testing.T) {
 	fsys.sizeMap[digest] = int64(len(body))
 
 	type tick struct {
-		name           string
-		digest         string
+		name            string
+		digest          string
 		received, total int64
 	}
 	var (
@@ -647,5 +647,31 @@ func TestFS_NewFSFromManifest_HydratesSizeMap(t *testing.T) {
 	digest := Sha256Digest(files["pak0.pak"])
 	if got := fsys.sizeMap[digest]; got != int64(len(files["pak0.pak"])) {
 		t.Fatalf("sizeMap[digest]=%d want %d", got, len(files["pak0.pak"]))
+	}
+}
+
+func TestFS_YieldingRead(t *testing.T) {
+	// A blob larger than the yield threshold so yieldingReader.Read trips its
+	// sleep-every-N-bytes path at least once during the load() fetch.
+	big := bytes.Repeat([]byte("Q"), 300)
+	rf := newFakeRegistry(t, map[string][]byte{"pak0.pak": big})
+	defer rf.srv.Close()
+
+	c := &Client{HTTP: rf.srv.Client(), Origin: rf.srv.URL}
+	fsys, err := NewFSFromManifest(context.Background(), c, "repo", "latest")
+	if err != nil {
+		t.Fatalf("NewFSFromManifest: %v", err)
+	}
+	fsys.SetYieldEvery(-1) // negative clamps to 0
+	fsys.SetYieldEvery(64) // > 0 -> load() wraps the blob reader in yieldingReader
+
+	f, err := fsys.Open("pak0.pak")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	got, _ := io.ReadAll(f)
+	f.Close()
+	if !bytes.Equal(got, big) {
+		t.Fatalf("read %d bytes, want %d", len(got), len(big))
 	}
 }

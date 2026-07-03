@@ -9,7 +9,7 @@ func TestClampDim(t *testing.T) {
 	cases := []struct {
 		v, lo, hi, want int
 	}{
-		{50, 100, 200, 100}, // below floor -> floor
+		{50, 100, 200, 100},  // below floor -> floor
 		{300, 100, 200, 200}, // above ceiling -> ceiling
 		{150, 100, 200, 150}, // inside range -> identity
 		{100, 100, 200, 100}, // exact floor

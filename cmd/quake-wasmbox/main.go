@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"strings"
 	"sync/atomic"
 	"syscall/js"
 	"time"
@@ -129,9 +130,9 @@ func run() error {
 	//    MusicOpen closure tries from the OCI overlay first, then the
 	//    embedmusic fallback.
 	var (
-		pakFS    fs.FS // the real .pak archive (pak.FS) -- exposes maps/start.bsp etc.
-		musicFS  fs.FS // optional music overlay (ociFS for OCI builds, nil otherwise)
-		ociErr   error
+		pakFS   fs.FS // the real .pak archive (pak.FS) -- exposes maps/start.bsp etc.
+		musicFS fs.FS // optional music overlay (ociFS for OCI builds, nil otherwise)
+		ociErr  error
 	)
 	if OCIReference != "" {
 		ociFS, err := openOCIAssets(OCIReference)
@@ -675,8 +676,35 @@ func openOCIAssets(reference string) (fs.FS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %q: %w", reference, err)
 	}
-	c := ociassets.NewClient(ref.Origin)
+	origin := ref.Origin
+	if origin == "" {
+		// Same-origin reference ("/repo:tag"): the wasmbox quake worker.js
+		// publishes the site base URL (origin + any base path, e.g.
+		// https://user.github.io/project) on globalThis.__quakeOCIBase before
+		// importing this wasm. The mirror lives at <base>/v2/<repo>, so a
+		// GitHub-Pages sub-path deploy is reachable (a fixed <scheme>://<host>
+		// origin would drop the /project/ prefix and 404).
+		origin = jsQuakeOCIBase()
+		if origin == "" {
+			return nil, fmt.Errorf("same-origin reference %q but globalThis.__quakeOCIBase is unset", reference)
+		}
+	}
+	c := ociassets.NewClient(origin)
 	return ociassets.NewFSFromManifest(context.Background(), c, ref.Repo, ref.Tag)
+}
+
+// jsQuakeOCIBase reads the same-origin OCI base URL the wasmbox quake
+// worker.js publishes on globalThis.__quakeOCIBase (origin + any base path,
+// no trailing slash). Returns "" -- so the caller errors cleanly -- when the
+// global is unset or not a string. Any panic in the js.Value dance is
+// swallowed the way jsGlobalFBSize treats a missing host global.
+func jsQuakeOCIBase() string {
+	defer func() { _ = recover() }()
+	v := js.Global().Get("__quakeOCIBase")
+	if v.Type() != js.TypeString {
+		return ""
+	}
+	return strings.TrimRight(v.String(), "/")
 }
 
 var _ = errors.New

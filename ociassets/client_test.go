@@ -80,6 +80,31 @@ func TestParseReference_URLStyleBadURL(t *testing.T) {
 	}
 }
 
+func TestParseReference_SameOrigin(t *testing.T) {
+	// A leading-slash reference is same-origin: Origin is empty (resolved at
+	// fetch time from the host page), repo/tag come from the path. This makes
+	// a static /v2 mirror reachable under any base path (e.g. GitHub Pages).
+	r, err := ParseReference("/quake-assets:latest")
+	if err != nil {
+		t.Fatalf("ParseReference: %v", err)
+	}
+	if r.Origin != "" || r.Repo != "quake-assets" || r.Tag != "latest" {
+		t.Fatalf("ParseReference: %#v", r)
+	}
+	// Default tag applies to same-origin refs too.
+	r2, err := ParseReference("/quake-assets")
+	if err != nil {
+		t.Fatalf("ParseReference: %v", err)
+	}
+	if r2.Origin != "" || r2.Repo != "quake-assets" || r2.Tag != "latest" {
+		t.Fatalf("ParseReference: %#v", r2)
+	}
+	// A bare "/" has no repo -> error.
+	if _, err := ParseReference("/"); err == nil {
+		t.Fatal("ParseReference(\"/\"): want error")
+	}
+}
+
 func TestParseReference_Errors(t *testing.T) {
 	cases := []string{"", "noslash:tag", "host/"}
 	for _, in := range cases {

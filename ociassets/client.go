@@ -62,6 +62,15 @@ func ParseReference(s string) (*Reference, error) {
 		}
 		origin = u.Scheme + "://" + u.Host
 		rest = strings.TrimPrefix(u.Path, "/")
+	} else if strings.HasPrefix(s, "/") {
+		// Same-origin reference "/repo[:tag]": Origin is left empty and
+		// resolved at fetch time from the host page (in the browser the
+		// worker publishes it on globalThis.__quakeOCIBase). This lets a
+		// static /v2 mirror served beside the page work even under a base
+		// path -- e.g. GitHub Pages' /<project>/ -- where a fixed
+		// <scheme>://<host>/v2 origin would miss the prefix.
+		origin = ""
+		rest = strings.TrimPrefix(s, "/")
 	} else {
 		// registry-style: host[:port]/repo[:tag]. Find the first '/'
 		// to split host from repo. A bare "host:tag" with no slash

@@ -356,10 +356,10 @@ func TestBuildLightmapPlane_OutOfRangeFullBright(t *testing.T) {
 // helper used by setupRenderer. It mirrors the live SearchPath
 // layering (syntheticAssets first, wadOverlay added second so it
 // ends up FIRST in the prepend-Add chain) and asserts:
-//   1. With a wad that ships a non-identity colormap, the helper
-//      returns the WAD's colormap.
-//   2. With NO SearchPath, the helper falls back to identity (the
-//      logf is called, but the output is well-defined).
+//  1. With a wad that ships a non-identity colormap, the helper
+//     returns the WAD's colormap.
+//  2. With NO SearchPath, the helper falls back to identity (the
+//     logf is called, but the output is well-defined).
 //
 // The original bug was that setupRenderer didn't call this helper at
 // all -- it hand-rolled cm[r][s]=byte(s) inline. The extraction +
@@ -472,7 +472,7 @@ func TestColorMapWire_RunnerSearchPathLoadsNonIdentity(t *testing.T) {
 	const lumpInfoSize = 32
 	// Magic "WAD2"
 	wadBuf.WriteString("WAD2")
-	binary.Write(wadBuf, binary.LittleEndian, int32(1))                // numlumps
+	binary.Write(wadBuf, binary.LittleEndian, int32(1))                 // numlumps
 	binary.Write(wadBuf, binary.LittleEndian, int32(headerSize+cmSize)) // infotable offset
 	// Payload at offset 12.
 	wadBuf.Write(cmLump)
