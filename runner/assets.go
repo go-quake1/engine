@@ -14,6 +14,7 @@ import (
 	"github.com/go-quake1/engine/assets"
 	"github.com/go-quake1/engine/bspfile"
 	"github.com/go-quake1/engine/bspfile/synthbsp"
+	"github.com/go-quake1/engine/entparse"
 	enginehost "github.com/go-quake1/engine/host"
 	"github.com/go-quake1/engine/mdl"
 	"github.com/go-quake1/engine/menu"
@@ -571,6 +572,38 @@ func pickInMapCamera(bm *model.BrushModel, file *bspfile.File) [3]float32 {
 		}
 	}
 	return centre
+}
+
+// findPlayerStart scans the map's entity lump for the info_player_start
+// spawn point and returns its origin + spawn yaw (the "angle" key, 0 when
+// absent). ok is false when the map has no info_player_start or the entity
+// lump can't be parsed -- the caller then falls back to a geometric camera.
+// Reading the spawn from the BSP directly does not depend on the QC
+// SelectSpawnPoint/find path, which the bring-up host does not fully wire.
+func findPlayerStart(file *bspfile.File) (origin [3]float32, yaw float32, ok bool) {
+	return parsePlayerStart(file.Entities())
+}
+
+// parsePlayerStart is the testable core of [findPlayerStart]: it parses a raw
+// entity-lump blob and returns the first info_player_start's origin + yaw.
+func parsePlayerStart(blob []byte) (origin [3]float32, yaw float32, ok bool) {
+	ents, err := entparse.ParseEntities(blob)
+	if err != nil {
+		return [3]float32{}, 0, false
+	}
+	for _, e := range ents {
+		if e["classname"] != "info_player_start" {
+			continue
+		}
+		var o [3]float32
+		if n, _ := fmt.Sscanf(e["origin"], "%g %g %g", &o[0], &o[1], &o[2]); n != 3 {
+			continue
+		}
+		var y float32
+		_, _ = fmt.Sscanf(e["angle"], "%g", &y) // absent/blank angle -> 0
+		return o, y, true
+	}
+	return [3]float32{}, 0, false
 }
 
 // buildDemoWaypoints returns a small set of in-map view origins.

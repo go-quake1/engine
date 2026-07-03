@@ -178,13 +178,40 @@ func setupRenderer(opts setupRendererOpts) error {
 	var lastGoodOrigin [3]float32
 	haveGoodOrigin := false
 
+	// Resolve the player spawn point from the map's info_player_start
+	// (falling back to a geometric in-map camera). The bring-up host runs
+	// PutClientInServer but its QC SelectSpawnPoint does not reliably land
+	// the player on the start pad, so the edict is left at ~origin -- which
+	// is in the void, so the very first physics tick drops the player into
+	// an endless fall (velocity_z runs away, FL_ONGROUND never sets).
+	spawnOrigin, spawnYaw, haveSpawn := findPlayerStart(file)
+	if haveSpawn {
+		// Face the player down the spawn's "angle" (yaw) so W walks into the
+		// map rather than straight into the wall the pad backs onto. The
+		// client tick accumulates mouse/key deltas on top of this seed.
+		runner.ViewAngles = [3]float32{0, spawnYaw, 0}
+		logf("info_player_start found -- origin=%v yaw=%g", spawnOrigin, spawnYaw)
+	} else {
+		logf("no info_player_start in map -- falling back to geometric camera %v", camOrigin)
+	}
+
 	// Seed the player edict for PhysicsWalk.
 	if realHost != nil && playerSlot > 0 && !isSynth {
-		if eo, err := realHost.EdictOrigin(playerSlot); err == nil {
-			if eo[0] == 0 && eo[1] == 0 && eo[2] == 0 {
-				_ = writePlayerOrigin(realHost, playerSlot, camOrigin)
-				logf("seeded player edict %d origin = %v (was zero)", playerSlot, camOrigin)
-			}
+		// Place the player at the spawn pad unless the QC already put it
+		// somewhere valid (inside a real BSP leaf). "+1 z" matches vanilla
+		// PutClientInServer, which lifts the spawn a unit off the pad so
+		// the first ground trace resolves cleanly.
+		seedTo := camOrigin
+		if haveSpawn {
+			seedTo = [3]float32{spawnOrigin[0], spawnOrigin[1], spawnOrigin[2] + 1}
+		}
+		needSeed := true
+		if eo, err := realHost.EdictOrigin(playerSlot); err == nil && bm.PointInLeaf(eo) > 0 {
+			needSeed = false // QC already placed the player inside the map
+		}
+		if needSeed {
+			_ = writePlayerOrigin(realHost, playerSlot, seedTo)
+			logf("seeded player edict %d origin = %v (info_player_start=%v)", playerSlot, seedTo, haveSpawn)
 		}
 		if err := initPlayerForPhysicsWalk(realHost, playerSlot); err != nil {
 			logf("initPlayerForPhysicsWalk(%d) failed: %v -- PhysicsWalk may not dispatch",
