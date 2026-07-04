@@ -292,12 +292,13 @@ func TestMarkVisibleLeaves_ErrLeafRange(t *testing.T) {
 	}
 }
 
-func TestMarkVisibleLeaves_PropagatesDecompressError(t *testing.T) {
-	// Truncated PVS row -> DecompressVis returns ErrVisPVSTooShort,
-	// which MarkVisibleLeaves must propagate.
+func TestMarkVisibleLeaves_ToleratesShortPVS(t *testing.T) {
+	// A truncated PVS row (real maps omit a trailing run of not-visible far
+	// leaves) must NOT fail the frame: MarkVisibleLeaves marks the decoded
+	// prefix and leaves the missing tail unmarked.
 	w := &fakeWorld{
 		numLeaves:  16,
-		pvsRow:     []byte{0x01}, // only 1 byte for 16 leaves
+		pvsRow:     []byte{0x01}, // 1 byte for 16 leaves: bit0 (leaf 1) set, tail missing
 		leafParent: make([]int, 17),
 		nodeParent: []int{-1},
 		nodeFrame:  make([]FrameMarkSequence, 1),
@@ -306,8 +307,14 @@ func TestMarkVisibleLeaves_PropagatesDecompressError(t *testing.T) {
 	for i := range w.leafParent {
 		w.leafParent[i] = 0
 	}
-	if err := MarkVisibleLeaves(w.ctx(), 1, 1); !errors.Is(err, ErrVisPVSTooShort) {
-		t.Fatalf("err = %v, want ErrVisPVSTooShort", err)
+	if err := MarkVisibleLeaves(w.ctx(), 1, 1); err != nil {
+		t.Fatalf("err = %v, want nil (short PVS tolerated)", err)
+	}
+	if w.leafFrame[1] != 1 {
+		t.Fatalf("leaf 1 (decoded prefix bit) not marked: %v", w.leafFrame[1])
+	}
+	if w.leafFrame[2] != 0 {
+		t.Fatalf("leaf 2 (missing tail) should stay unmarked: %v", w.leafFrame[2])
 	}
 }
 
