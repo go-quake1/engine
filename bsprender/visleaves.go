@@ -44,8 +44,13 @@ var (
 //
 //   - numLeaves <= 0: returns an empty slice and no error (a model
 //     with zero leaves has no PVS to decompress).
-//   - len(compressed) == 0 with numLeaves > 0: ErrVisPVSTooShort.
-//   - compressed runs out mid-row: ErrVisPVSTooShort.
+//   - len(compressed) == 0 with numLeaves > 0, or compressed runs out
+//     mid-row: returns the DECODED PREFIX (remaining bytes left zero) +
+//     ErrVisPVSTooShort. Real Quake maps truncate a trailing run of
+//     not-visible far leaves, so callers that treat the zeroed tail as
+//     "not visible" (see [MarkVisibleLeaves]) render correctly rather
+//     than failing; the error is retained so stricter callers can still
+//     detect the short row.
 //
 // tyrquake's leafblock_t variant of this routine performs the same
 // RLE but accumulates into machine-word-sized leaf blocks with a
@@ -61,7 +66,7 @@ func DecompressVis(compressed []byte, numLeaves int) ([]byte, error) {
 	outPos := 0
 	for outPos < outLen {
 		if inPos >= len(compressed) {
-			return nil, ErrVisPVSTooShort
+			return out, ErrVisPVSTooShort
 		}
 		b := compressed[inPos]
 		inPos++
@@ -72,7 +77,7 @@ func DecompressVis(compressed []byte, numLeaves int) ([]byte, error) {
 		}
 		// Zero byte -> next byte is a run length of zeros.
 		if inPos >= len(compressed) {
-			return nil, ErrVisPVSTooShort
+			return out, ErrVisPVSTooShort
 		}
 		count := int(compressed[inPos])
 		inPos++
@@ -154,7 +159,8 @@ type MarkContext struct {
 //
 //   - ErrVisNilModel if NumLeaves <= 0 (no world model loaded).
 //   - ErrVisLeafRange if viewerLeaf < 1 or viewerLeaf > NumLeaves.
-//   - Any error from [DecompressVis] propagated verbatim.
+//   - A short/truncated PVS row is NOT an error: the decoded prefix is
+//     marked and the missing tail is treated as not visible.
 func MarkVisibleLeaves(ctx MarkContext, viewerLeaf VisLeafIdx, frame FrameMarkSequence) error {
 	if ctx.NumLeaves <= 0 {
 		return ErrVisNilModel
@@ -163,10 +169,14 @@ func MarkVisibleLeaves(ctx MarkContext, viewerLeaf VisLeafIdx, frame FrameMarkSe
 		return ErrVisLeafRange
 	}
 	compressed := ctx.PVSForLeaf(viewerLeaf)
-	bits, err := DecompressVis(compressed, ctx.NumLeaves)
-	if err != nil {
-		return err
-	}
+	// DecompressVis's only failure is ErrVisPVSTooShort -- a PVS row that
+	// ends before the last leaf. Real Quake maps truncate a trailing run of
+	// not-visible far leaves (vanilla Mod_DecompressVis just reads past the
+	// row into masked-off bytes); DecompressVis returns the decoded prefix
+	// with the remainder zeroed, so those far leaves are treated as not
+	// visible. Render the prefix rather than failing the frame -- the error
+	// is intentionally ignored.
+	bits, _ := DecompressVis(compressed, ctx.NumLeaves)
 	for i := 0; i < ctx.NumLeaves; i++ {
 		if bits[i>>3]&(1<<uint(i&7)) == 0 {
 			continue
