@@ -1600,3 +1600,73 @@ func TestFrame_InvokesRunThink(t *testing.T) {
 			h.LastThinksDispatched)
 	}
 }
+
+// progsForPostThink is progsForButtons plus a no-op function named
+// "PlayerPostThink" so FindFunction resolves it and runPlayerPostThink
+// dispatches. FirstStatement 0 = the pre-roll OP_DONE (a clean return).
+func progsForPostThink() *progs.Progs {
+	p := progsForButtons()
+	ppt := addStr(&p.Strings, "PlayerPostThink")
+	p.Functions = append(p.Functions, progs.Function{FirstStatement: 0, SName: ppt})
+	return p
+}
+
+// runPlayerPostThink dispatches PlayerPostThink once per active client edict
+// (the weapon-fire half of SV_Physics_Client).
+func TestRunPlayerPostThink_DispatchesForActiveClient(t *testing.T) {
+	bsp := buildHostBSP(t, `{ "classname" "worldspawn" }`, 1)
+	h := makeHostWithProgs(t, bsp, progsForPostThink(), 1)
+	if err := h.SpawnServer("test", protocol.VersionNQ); err != nil {
+		t.Fatalf("SpawnServer: %v", err)
+	}
+	if _, _, err := h.ConnectLoopback(); err != nil {
+		t.Fatalf("ConnectLoopback: %v", err)
+	}
+	h.runPlayerPostThink()
+	if h.LastPlayerPostThinks != 1 {
+		t.Fatalf("LastPlayerPostThinks = %d, want 1", h.LastPlayerPostThinks)
+	}
+}
+
+// A client without an edict is skipped (no dispatch, no panic).
+func TestRunPlayerPostThink_SkipsClientWithoutEdict(t *testing.T) {
+	bsp := buildHostBSP(t, `{ "classname" "worldspawn" }`, 1)
+	h := makeHostWithProgs(t, bsp, progsForPostThink(), 1)
+	if err := h.SpawnServer("test", protocol.VersionNQ); err != nil {
+		t.Fatalf("SpawnServer: %v", err)
+	}
+	if _, _, err := h.ConnectLoopback(); err != nil {
+		t.Fatalf("ConnectLoopback: %v", err)
+	}
+	h.Static.Clients[0].Edict = nil
+	h.runPlayerPostThink()
+	if h.LastPlayerPostThinks != 0 {
+		t.Fatalf("LastPlayerPostThinks = %d, want 0 (client skipped)", h.LastPlayerPostThinks)
+	}
+}
+
+// A progs without a PlayerPostThink function is a no-op (FindFunction < 1).
+func TestRunPlayerPostThink_AbsentFunctionNoOp(t *testing.T) {
+	bsp := buildHostBSP(t, `{ "classname" "worldspawn" }`, 1)
+	h := makeHostWithProgs(t, bsp, progsForButtons(), 1) // no PlayerPostThink
+	if err := h.SpawnServer("test", protocol.VersionNQ); err != nil {
+		t.Fatalf("SpawnServer: %v", err)
+	}
+	if _, _, err := h.ConnectLoopback(); err != nil {
+		t.Fatalf("ConnectLoopback: %v", err)
+	}
+	h.runPlayerPostThink()
+	if h.LastPlayerPostThinks != 0 {
+		t.Fatalf("LastPlayerPostThinks = %d, want 0 (no PlayerPostThink)", h.LastPlayerPostThinks)
+	}
+}
+
+// A nil progsRef short-circuits before the FindFunction lookup.
+func TestRunPlayerPostThink_NilProgsNoOp(t *testing.T) {
+	h, _ := makeHost(t, nil, 1)
+	h.SetProgs(nil)
+	h.runPlayerPostThink()
+	if h.LastPlayerPostThinks != 0 {
+		t.Fatalf("LastPlayerPostThinks = %d, want 0", h.LastPlayerPostThinks)
+	}
+}

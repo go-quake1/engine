@@ -109,6 +109,10 @@ type Host struct {
 	// instrumentation alongside LastThinksDispatched.
 	LastThinkErrors int
 
+	// LastPlayerPostThinks is the number of PlayerPostThink dispatches the
+	// most recent Frame ran (0 = PlayerPostThink absent or no active client).
+	LastPlayerPostThinks int
+
 	// LastThinkErrorMsgs accumulates the first 8 unique error strings
 	// the most recent [Host.Frame] call's runThink walker swallowed,
 	// in arrival order. Reset (re-allocated) at the top of every Frame
@@ -591,6 +595,13 @@ func (h *Host) Frame(dt float32) error {
 		return err
 	}
 
+	// PlayerPostThink (weapon fire): the post-move half of
+	// SV_Physics_Client. Runs after the physics move so W_Attack's
+	// traceline sees the player's final position this tic, and before the
+	// trigger/broadcast phase so any damage it deals is reflected in the
+	// outgoing entity updates.
+	h.runPlayerPostThink()
+
 	// SV_TouchLinks-equivalent: per-client per-tic walk the area
 	// tree for SOLID_TRIGGER edicts whose absbounds overlap the
 	// player edict, dispatching each trigger's QC `.touch` function
@@ -802,6 +813,42 @@ func (h *Host) ConnectLoopback() (server.NetConn, int, error) {
 // always declares all three.
 //
 // Returns the propagated VM.Run error; nil on success.
+// runPlayerPostThink dispatches the QC PlayerPostThink for each active
+// client's edict once per tic, AFTER the physics move (the post-move half of
+// SV_Physics_Client). PlayerPostThink runs W_WeaponFrame, which reads
+// self.button0 (the +attack bit runClientCmds wrote onto the edict) and calls
+// W_Attack to fire the current weapon -- traceline -> T_Damage on whatever it
+// hits. Without this the player can hold +attack forever and never shoot.
+//
+// PlayerPreThink is intentionally NOT dispatched: id1's PlayerPreThink also
+// drives +jump, which this port already applies engine-side in PhysicsWalk;
+// running both would double the jump impulse.
+//
+// A missing PlayerPostThink (stripped test progs) is a no-op. A QC error
+// (W_Attack hit a builtin the host hasn't wired) is tallied + swallowed so
+// one bad shot can't abort the whole frame -- same policy as runThink.
+func (h *Host) runPlayerPostThink() {
+	h.LastPlayerPostThinks = 0
+	p := h.findProgs()
+	if p == nil {
+		return
+	}
+	_, idx := p.FindFunction("PlayerPostThink")
+	if idx < 1 {
+		return
+	}
+	for _, c := range h.Static.Clients {
+		if c == nil || !c.Active || c.Edict == nil {
+			continue
+		}
+		// A QC error (W_Attack reaching a builtin the host hasn't wired) is
+		// swallowed so one bad shot can't abort the frame -- same tolerance
+		// as runThink's monster dispatch.
+		_ = h.thinkCaller(c.Edict, int32(idx))
+		h.LastPlayerPostThinks++
+	}
+}
+
 func (h *Host) thinkCaller(ent *progs.Edict, funcID int32) error {
 	p := h.findProgs()
 	if p != nil {
