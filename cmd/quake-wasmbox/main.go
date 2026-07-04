@@ -260,12 +260,14 @@ func run() error {
 		// = the OCI manifest FS so music/track*.ogg layers stream from the
 		// registry (pak0.pak does NOT carry music).
 		r, err := runner.Setup(runner.SetupOpts{
-			Backend:                     be,
-			PakFS:                       pakFS,
-			MusicOverlayFS:              musicFS,
-			FBWidth:                     fbWidth,
-			FBHeight:                    fbHeight,
-			MapSlug:                     "start",
+			Backend:        be,
+			PakFS:          pakFS,
+			MusicOverlayFS: musicFS,
+			FBWidth:        fbWidth,
+			FBHeight:       fbHeight,
+			// A real LibreQuake level (with monsters) rather than the
+			// enemy-free intro hub, so the player has antagonists to fight.
+			MapSlug:                     "lq_e0m1",
 			Logf:                        logf,
 			DemoOrbit:                   true,
 			DemoOrbitAutoDisableOnInput: true,

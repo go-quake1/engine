@@ -25,24 +25,44 @@ import (
 	"github.com/go-quake1/engine/vfs"
 )
 
-// loadBSP returns the BSP bytes + size to render. Sources, in order:
+// loadBSP returns the BSP bytes + size to RENDER. It must load the same map
+// the host's server spawned (SetupOpts.MapSlug), or the camera's PVS/leaf
+// bookkeeping desyncs from the collision world. Sources, in order:
 //
-//  1. The pakFS -- try "maps/start.bsp" then "maps/e1m1.bsp".
+//  1. The pakFS -- try preferMap (the host's map) first, then "maps/start.bsp".
 //  2. synthbsp.BuildWithFaces() -- the always-available fallback.
-func loadBSP(pakFS fs.FS, logf func(string, ...any)) ([]byte, int64, error) {
+//
+// preferMap is the full pak path (e.g. "maps/lq_e0m1.bsp"); empty falls back
+// to start.bsp.
+func loadBSP(pakFS fs.FS, preferMap string, logf func(string, ...any)) ([]byte, int64, error) {
 	if pakFS != nil {
-		for _, mapName := range []string{"maps/start.bsp", "maps/e1m1.bsp"} {
+		candidates := []string{}
+		if preferMap != "" {
+			candidates = append(candidates, preferMap)
+		}
+		candidates = append(candidates, "maps/start.bsp")
+		for _, mapName := range candidates {
 			data, ok := tryReadPakFile(pakFS, mapName)
 			if ok {
 				logf("loaded %s from pak (%d bytes)", mapName, len(data))
 				return data, int64(len(data)), nil
 			}
 		}
-		logf("pak lacks maps/start.bsp and maps/e1m1.bsp; using synthbsp fallback")
+		logf("pak lacks %v; using synthbsp fallback", candidates)
 	} else {
 		logf("using synthbsp fallback (no pak FS available)")
 	}
 	return synthbsp.BuildWithFaces()
+}
+
+// renderMapFile maps a host map slug (e.g. "lq_e0m1", "start") to the pak
+// path loadBSP should render, so the rendered world matches the host's
+// spawned map. An empty slug returns "" (loadBSP falls back to start.bsp).
+func renderMapFile(slug string) string {
+	if slug == "" {
+		return ""
+	}
+	return "maps/" + slug + ".bsp"
 }
 
 // tryReadPakFile opens name inside pakFS and returns its contents.

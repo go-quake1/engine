@@ -448,6 +448,7 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		boltSkins:       boltSkins,
 		state:           state,
 		logf:            logf,
+		mapFile:         renderMapFile(opts.MapSlug),
 	}); err != nil {
 		return nil, fmt.Errorf("setupRenderer: %w", err)
 	}
