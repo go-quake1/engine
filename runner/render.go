@@ -46,6 +46,10 @@ type setupRendererOpts struct {
 	boltSkins       [3]*render.Pic
 	state           *runtimeState
 	logf            func(string, ...any)
+	// mapFile is the full pak path of the map to render (e.g.
+	// "maps/lq_e0m1.bsp") -- MUST match the host's spawned map. Empty ->
+	// loadBSP falls back to maps/start.bsp.
+	mapFile string
 }
 
 // setupRenderer loads the BSP, builds the mark/walk contexts + synthetic
@@ -69,7 +73,7 @@ func setupRenderer(opts setupRendererOpts) error {
 	state := opts.state
 	logf := opts.logf
 
-	bspBytes, size, err := loadBSP(pakFS, logf)
+	bspBytes, size, err := loadBSP(pakFS, opts.mapFile, logf)
 	if err != nil {
 		return fmt.Errorf("loadBSP: %w", err)
 	}
