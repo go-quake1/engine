@@ -207,7 +207,7 @@ func registerSpawnTimeBuiltins(vm *progs.VM, h *enginehost.Host, logf func(strin
 	noop := func(_ *progs.VM) error { return nil }
 	vm.RegisterBuiltin(progs.BuiltinSetOrigin, builtinSetOrigin(h, logf))
 	vm.RegisterBuiltin(progs.BuiltinSetModel, builtinSetModel(h, logf))
-	vm.RegisterBuiltin(progs.BuiltinSetSize, noop)
+	vm.RegisterBuiltin(progs.BuiltinSetSize, builtinSetSize(h, logf))
 	vm.RegisterBuiltin(progs.BuiltinBreak, noop)
 	vm.RegisterBuiltin(progs.BuiltinSound, builtinSound(h, logf))
 	vm.RegisterBuiltin(progs.BuiltinError, noop)
@@ -480,7 +480,12 @@ func builtinSetModel(h *enginehost.Host, logf func(string, ...any)) progs.Builti
 					origin[2] + maxs[2],
 				}
 				kind := solidKindFromEntvars(ev)
-				h.World.LinkBounds(world.Key(edictIdx), absmin, absmax, kind)
+				// Key by the edict's arena SLOT (NumFor), not the byte offset
+				// ResolvePointer returns (0 for a setmodel(self,...) pointer,
+				// which would collapse every entity onto world.Key(0)).
+				if slot := h.Server.Arena.NumFor(ent); slot >= 0 {
+					h.World.LinkBounds(world.Key(slot), absmin, absmax, kind)
+				}
 			}
 
 			if traceThis {
@@ -588,6 +593,61 @@ func builtinTraceLine(h *enginehost.Host, logf func(string, ...any)) progs.Built
 			}
 		}
 		return enginehost.WriteTraceGlobals(vm, vm.Progs(), res, trEntPtr)
+	}
+}
+
+// builtinSetSize implements the QC setsize(ent, mins, maxs) built-in.
+//
+// tyrquake: PF_setsize -> SV_SetSize. It writes the entity's mins/maxs/size
+// then RELINKS it into the area tree with the new absolute bounds. Monsters
+// get their collision bbox here (their alias .mdl bbox does not resolve in
+// setmodel, so setmodel skips their link) -- without this, a monster has no
+// bbox and never enters the area tree, so traceline (hitscan) and every
+// SV_Move query pass straight through it (shots never connect). Doors/movers
+// use SOLID_BSP and are already linked by setmodel via their submodel bbox.
+func builtinSetSize(h *enginehost.Host, logf func(string, ...any)) progs.Builtin {
+	return func(vm *progs.VM) error {
+		if h == nil || h.Server == nil {
+			return nil
+		}
+		entPtr, _ := vm.GlobalInt(progs.OfsParm0)
+		mins, _ := vm.GlobalVector(progs.OfsParm1)
+		maxs, _ := vm.GlobalVector(progs.OfsParm2)
+		arena := vm.Arena()
+		if arena == nil {
+			return nil
+		}
+		ent, _, err := arena.ResolvePointer(entPtr)
+		if err != nil {
+			logf("setsize(ptr=%d): ResolvePointer: %v", entPtr, err)
+			return nil
+		}
+		p := vm.Progs()
+		if p == nil {
+			return nil
+		}
+		ev, _ := progs.NewEntVars(p, ent)
+		size := [3]float32{maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]}
+		_ = ev.WriteVec3("mins", mins)
+		_ = ev.WriteVec3("maxs", maxs)
+		_ = ev.WriteVec3("size", size)
+
+		// Relink with the new bounds at the entity's current origin. The
+		// area-tree key is the edict's arena SLOT (NumFor), NOT the byte
+		// offset ResolvePointer returns -- a setsize(self,...) pointer
+		// addresses field-offset 0, so that offset is 0 for every entity
+		// and would collapse them all onto world.Key(0).
+		if h.World != nil {
+			slot := h.Server.Arena.NumFor(ent)
+			if slot >= 0 {
+				origin, _ := ev.ReadVec3("origin")
+				absmin := [3]float32{origin[0] + mins[0], origin[1] + mins[1], origin[2] + mins[2]}
+				absmax := [3]float32{origin[0] + maxs[0], origin[1] + maxs[1], origin[2] + maxs[2]}
+				kind := solidKindFromEntvars(ev)
+				h.World.LinkBounds(world.Key(slot), absmin, absmax, kind)
+			}
+		}
+		return nil
 	}
 }
 
