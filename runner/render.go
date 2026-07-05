@@ -205,17 +205,25 @@ func setupRenderer(opts setupRendererOpts) error {
 
 	// Seed the player edict for PhysicsWalk.
 	if realHost != nil && playerSlot > 0 && !isSynth {
-		// Place the player at the spawn pad unless the QC already put it
-		// somewhere valid (inside a real BSP leaf). "+1 z" matches vanilla
-		// PutClientInServer, which lifts the spawn a unit off the pad so
-		// the first ground trace resolves cleanly.
+		// Place the player at the map's info_player_start. "+1 z" matches
+		// vanilla PutClientInServer, which lifts the spawn a unit off the pad
+		// so the first ground trace resolves cleanly.
+		//
+		// When the map HAS an info_player_start we ALWAYS use it: the bring-up
+		// host's QC SelectSpawnPoint is unreliable and can leave the edict in a
+		// valid-but-airborne leaf (e.g. lq_e0m1 drops it at z~1 instead of the
+		// pad at z=304), so the player falls through the world forever -- the
+		// eye then sticks on the last good origin below the floor, which reads
+		// as "floating" and draws monsters through the floor via a bad PVS.
+		// Only when the map has NO info_player_start do we keep the QC
+		// placement (if it landed in a real leaf) and otherwise fall back to a
+		// geometric in-map camera.
 		seedTo := camOrigin
+		needSeed := true
 		if haveSpawn {
 			seedTo = [3]float32{spawnOrigin[0], spawnOrigin[1], spawnOrigin[2] + 1}
-		}
-		needSeed := true
-		if eo, err := realHost.EdictOrigin(playerSlot); err == nil && bm.PointInLeaf(eo) > 0 {
-			needSeed = false // QC already placed the player inside the map
+		} else if eo, err := realHost.EdictOrigin(playerSlot); err == nil && bm.PointInLeaf(eo) > 0 {
+			needSeed = false // no info_player_start, but QC placed us inside the map
 		}
 		if needSeed {
 			_ = writePlayerOrigin(realHost, playerSlot, seedTo)
@@ -277,6 +285,20 @@ func setupRenderer(opts setupRendererOpts) error {
 		if origin[0] == 0 && origin[1] == 0 && origin[2] == 0 {
 			origin = camOrigin
 			fromEntities = false
+		}
+
+		// Loopback: the server player edict is authoritative and updates
+		// immediately, so prefer it over the wire-mirrored client entity,
+		// which can lag or hold a stale spawn baseline. In lq_e0m1 that
+		// baseline sits ~745 units below the landed origin, so the eye
+		// "floats" below the floor and the PVS then draws monsters through it.
+		// Only override when the server origin is inside the map, so a
+		// mid-fall or void edict never yanks the camera into solid.
+		if realHost != nil && playerSlot > 0 && !isSynth {
+			if so, err := realHost.EdictOrigin(playerSlot); err == nil && bm.PointInLeaf(so) > 0 {
+				origin = so
+				fromEntities = true
+			}
 		}
 
 		origin[2] += runner.Client.ViewHeightOffset
@@ -704,6 +726,35 @@ func setupRenderer(opts setupRendererOpts) error {
 						sampleES.ModelIdx, len(lights), len(seen), lmin, lmax)
 				}
 			}
+		}
+
+		// Physics/render self-check telemetry (parsed by the autonomous test
+		// protocol). floorDist = the view origin's height above the floor via
+		// a downward trace: ~viewheight (~22) means the eye is standing at
+		// head height; a large value means the camera is floating. vleaf<=0
+		// means the eye is in solid/void -> the PVS is wrong and geometry
+		// (incl. monsters) can draw through walls.
+		if frame%3 == 0 && realHost != nil && !isSynth {
+			floorDist := float32(-1)
+			if tr, terr := realHost.TraceLine(origin,
+				[3]float32{origin[0], origin[1], origin[2] - 8192},
+				enginehost.MoveNormal, nil); terr == nil && tr.Fraction < 1 {
+				floorDist = origin[2] - tr.EndPos[2]
+			}
+			vleaf := bm.PointInLeaf(origin)
+			var po, pv [3]float32
+			var pflags float32
+			if p := realHost.Progs(); p != nil && playerSlot > 0 && playerSlot < len(realHost.Server.Edicts) {
+				if pe := realHost.Server.Edicts[playerSlot]; pe != nil {
+					if v, err := progs.NewEntVars(p, pe); err == nil {
+						po, _ = v.ReadVec3("origin")
+						pv, _ = v.ReadVec3("velocity")
+						pflags, _ = v.ReadFloat("flags")
+					}
+				}
+			}
+			logf("PHYS tic=%d view=[%.0f %.0f %.1f] vleaf=%d floorDist=%.0f p=[%.0f %.0f %.1f] vel=%v flags=%d aliasR=%d",
+				frame, origin[0], origin[1], origin[2], vleaf, floorDist, po[0], po[1], po[2], pv, int32(pflags), aliasRendered)
 		}
 
 		if err := render.DrawParticleQuads(fb, rd, runner.ParticlePool, runner.Client.MsgTime); err != nil {
