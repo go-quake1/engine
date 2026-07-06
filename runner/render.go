@@ -173,6 +173,13 @@ func setupRenderer(opts setupRendererOpts) error {
 	// so world rendering doesn't allocate two slices per face per frame.
 	var lmPlaneScratch []byte
 	var lmAccumScratch []int
+	// Surface cache: STATIC world faces (constant lightmap + non-animated
+	// texture) bake once into a CachedSurface keyed by face index and reuse
+	// it across frames, so their span loop becomes a single fetch+store.
+	// Persists for the map's lifetime (faces never move; the cached lighting
+	// never changes for static faces, so no invalidation is needed).
+	faceSurfCache := make(map[int]*render.CachedSurface)
+	var cachedVertScratch []render.CachedVertex
 	frameCount := 0
 	prevEntityOrigin := make(map[int][3]float32)
 	loggedWireSpawn := false
@@ -575,8 +582,50 @@ func setupRenderer(opts setupRendererOpts) error {
 				if err != nil {
 					continue
 				}
-				plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
-				_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
+
+				// A face is cacheable when its lightmap is CONSTANT over time
+				// (fullbright, or every active lightstyle is style 0 = 'm')
+				// and its texture is not animated ('+' chains). Those bake
+				// once and paint via the fast cached fill; animated faces keep
+				// the per-pixel lightmapped path.
+				staticLM := lmInfo.LightOfs < 0
+				if !staticLM {
+					staticLM = true
+					for _, st := range lmInfo.Styles {
+						if st != 0 && st != 255 {
+							staticLM = false
+							break
+						}
+					}
+				}
+				cacheable := staticLM && !strings.HasPrefix(name, "+")
+
+				drewCached := false
+				if cacheable {
+					surf := faceSurfCache[ref.FaceIdx]
+					if surf == nil {
+						plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
+						surf = &render.CachedSurface{}
+						if bakeErr := render.BakeSurface(surf, tex, &cm, plane, lmInfo.Width, lmInfo.Height, lmInfo.MinS, lmInfo.MinT); bakeErr != nil {
+							surf = nil
+						} else {
+							faceSurfCache[ref.FaceIdx] = surf
+						}
+					}
+					if surf != nil {
+						cv := cachedVertScratch[:0]
+						for _, lv := range lverts {
+							cv = append(cv, render.CachedVertex{X: lv.X, Y: lv.Y, Z: lv.Z, CU: lv.LmS * 16, CV: lv.LmT * 16})
+						}
+						cachedVertScratch = cv
+						_ = render.FillPerspectiveCachedPolygon(fb, surf, cv)
+						drewCached = true
+					}
+				}
+				if !drewCached {
+					plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
+					_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
+				}
 			}
 		}
 
