@@ -219,3 +219,92 @@ func mustGlobalInt(t *testing.T, vm *progs.VM) int32 {
 	}
 	return v
 }
+
+// progsForChangeYawTest builds a progs with angles/ideal_yaw/yaw_speed fields
+// and a `self` entity global, enough to drive builtinChangeYaw.
+func progsForChangeYawTest() *progs.Progs {
+	strs := []byte{0}
+	add := func(s string) int32 {
+		o := int32(len(strs))
+		strs = append(strs, []byte(s)...)
+		strs = append(strs, 0)
+		return o
+	}
+	anglesN := add("angles")
+	idealN := add("ideal_yaw")
+	speedN := add("yaw_speed")
+	selfN := add("self")
+	const entityFields = 8
+	return &progs.Progs{
+		Header:  progs.Header{EntityFields: entityFields},
+		Strings: strs,
+		FieldDefs: []progs.Def{
+			{Type: uint16(progs.EvVector), Ofs: 1, SName: anglesN},
+			{Type: uint16(progs.EvFloat), Ofs: 4, SName: idealN},
+			{Type: uint16(progs.EvFloat), Ofs: 5, SName: speedN},
+		},
+		GlobalDefs: []progs.Def{
+			{Type: uint16(progs.EvEntity), Ofs: 1, SName: selfN},
+		},
+		Globals:    make([]byte, 32*4),
+		Functions:  []progs.Function{{FirstStatement: 0, SName: 0}},
+		Statements: []progs.Statement{{Op: progs.OP_DONE}},
+	}
+}
+
+func TestBuiltinChangeYaw(t *testing.T) {
+	p := progsForChangeYawTest()
+	arena := progs.NewEdictArena(p, 8)
+	vm := progs.NewVM(p)
+	vm.SetArena(arena)
+
+	const slot = 3
+	ent, err := arena.Get(slot)
+	if err != nil {
+		t.Fatalf("arena.Get: %v", err)
+	}
+	ev, err := progs.NewEntVars(p, ent)
+	if err != nil {
+		t.Fatalf("NewEntVars: %v", err)
+	}
+	_ = ev.WriteVec3("angles", [3]float32{0, 0, 0})
+	_ = ev.WriteFloat("ideal_yaw", 90)
+	_ = ev.WriteFloat("yaw_speed", 20)
+	selfDef := p.FindGlobal("self")
+	if selfDef == nil {
+		t.Fatal("no self global")
+	}
+	if err := vm.SetGlobalInt(int(selfDef.Ofs), arena.MakePointer(slot, 0)); err != nil {
+		t.Fatalf("set self: %v", err)
+	}
+
+	fn := builtinChangeYaw(&enginehost.Host{})
+	yaw := func() float32 {
+		a, _ := ev.ReadVec3("angles")
+		return a[1]
+	}
+	// AngleMod uses Quake's 360/65536 fixed-point wrap, so results land within
+	// ~0.01 deg of the integer target rather than exactly on it.
+	near := func(got, want float32, msg string) {
+		if d := got - want; d > 0.05 || d < -0.05 {
+			t.Errorf("%s: yaw=%v want ~%v", msg, got, want)
+		}
+	}
+
+	// Turn yaw_speed (20) toward ideal 90.
+	if err := fn(vm); err != nil {
+		t.Fatalf("changeyaw: %v", err)
+	}
+	near(yaw(), 20, "first turn")
+	// Second turn -> 40.
+	_ = fn(vm)
+	near(yaw(), 40, "second turn")
+	// Already aligned (ideal ~ current) -> no move past ~40.
+	_ = ev.WriteFloat("ideal_yaw", yaw())
+	_ = fn(vm)
+	near(yaw(), 40, "aligned (no move)")
+	// Shorter way around: from ~40 toward 350 is -20 (through 0), not +310.
+	_ = ev.WriteFloat("ideal_yaw", 350)
+	_ = fn(vm)
+	near(yaw(), 20, "wrap short way")
+}

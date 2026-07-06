@@ -12,6 +12,7 @@ import (
 	"io/fs"
 
 	enginehost "github.com/go-quake1/engine/host"
+	"github.com/go-quake1/engine/mathlib"
 	"github.com/go-quake1/engine/mdl"
 	"github.com/go-quake1/engine/model"
 	"github.com/go-quake1/engine/progs"
@@ -240,7 +241,7 @@ func registerSpawnTimeBuiltins(vm *progs.VM, h *enginehost.Host, logf func(strin
 	vm.RegisterBuiltin(progs.BuiltinLocalCmd, noop)
 	vm.RegisterBuiltin(progs.BuiltinNextEnt, noop)
 	vm.RegisterBuiltin(progs.BuiltinParticle, noop)
-	vm.RegisterBuiltin(progs.BuiltinChangeYaw, noop)
+	vm.RegisterBuiltin(progs.BuiltinChangeYaw, builtinChangeYaw(h))
 	for _, idx := range []int{68, 69, 71, 72, 73, 75, 76, 77, 78, 79} {
 		vm.RegisterBuiltin(idx, noop)
 	}
@@ -677,6 +678,66 @@ func builtinCheckClient(h *enginehost.Host) progs.Builtin {
 			}
 		}
 		return vm.SetGlobalInt(progs.OfsReturn, ptr)
+	}
+}
+
+// builtinChangeYaw implements the QC changeyaw() built-in.
+//
+// tyrquake: PF_changeyaw -> SV_ChangeYaw. Turns the `self` entity's yaw
+// (angles[1]) toward its ideal_yaw by at most yaw_speed degrees this tic,
+// taking the shorter way around. The monster AI sets ideal_yaw toward its
+// enemy each think (ai_face/ai_run) then calls changeyaw, so with this a
+// monster rotates to face the player instead of firing only in its spawn
+// direction. Reads `self` from the QC global. A no-op left every monster
+// frozen at its spawn yaw.
+func builtinChangeYaw(h *enginehost.Host) progs.Builtin {
+	return func(vm *progs.VM) error {
+		p := vm.Progs()
+		arena := vm.Arena()
+		if p == nil || arena == nil {
+			return nil
+		}
+		selfDef := p.FindGlobal("self")
+		if selfDef == nil {
+			return nil
+		}
+		selfPtr, _ := vm.GlobalInt(int(selfDef.Ofs))
+		ent, _, err := arena.ResolvePointer(selfPtr)
+		if err != nil {
+			return nil
+		}
+		ev, err := progs.NewEntVars(p, ent)
+		if err != nil {
+			return nil
+		}
+		angles, _ := ev.ReadVec3("angles")
+		ideal, _ := ev.ReadFloat("ideal_yaw")
+		speed, _ := ev.ReadFloat("yaw_speed")
+		current := mathlib.AngleMod(angles[1])
+		if current == ideal {
+			return nil
+		}
+		move := ideal - current
+		if ideal > current {
+			if move >= 180 {
+				move -= 360
+			}
+		} else {
+			if move <= -180 {
+				move += 360
+			}
+		}
+		if move > 0 {
+			if move > speed {
+				move = speed
+			}
+		} else {
+			if move < -speed {
+				move = -speed
+			}
+		}
+		angles[1] = mathlib.AngleMod(current + move)
+		return ev.WriteVec3("angles", angles)
 	}
 }
 
