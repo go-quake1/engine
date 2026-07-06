@@ -55,6 +55,22 @@ func MapDOMKey(code string) (backend.KeyCode, bool) {
 		return backend.KeyRight, true
 	case "Backquote":
 		return backend.KeyTilde, true
+	case "Digit1":
+		return backend.Key1, true
+	case "Digit2":
+		return backend.Key2, true
+	case "Digit3":
+		return backend.Key3, true
+	case "Digit4":
+		return backend.Key4, true
+	case "Digit5":
+		return backend.Key5, true
+	case "Digit6":
+		return backend.Key6, true
+	case "Digit7":
+		return backend.Key7, true
+	case "Digit8":
+		return backend.Key8, true
 	case "Mouse1":
 		return backend.KeyMouse1, true
 	case "Mouse2":

@@ -115,6 +115,13 @@ type Runner struct {
 	// trigger bits the QC progs read via self.button*.
 	Triggers TriggerButtons
 
+	// PendingImpulse is a one-shot +impulse (weapon select) queued by a
+	// Key1..Key8 down-edge this tic. RunFrame feeds it into the outbound
+	// client.TickInput.Impulse then clears it, so each number-key press
+	// switches the weapon exactly once (matching Quake's edge-triggered
+	// impulse, not a held button).
+	PendingImpulse uint8
+
 	// ViewOrigin is a legacy caller-owned anchor retained for
 	// backwards compatibility. RunFrame no longer sources the
 	// per-tic camera position from this field -- the viewOrigin
@@ -380,6 +387,18 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		}
 	}
 
+	// 2b') Weapon select: a Key1..Key8 down-edge queues a one-shot
+	//      +impulse N (drained into TickInput.Impulse below). Skipped
+	//      while the menu consumed input or the console is open, so
+	//      number keys typed there don't switch weapons.
+	if !menuConsumed && !r.ConsoleOpen {
+		for _, k := range snap.KeysDown {
+			if imp, ok := backend.ImpulseForKey(k); ok {
+				r.PendingImpulse = imp
+			}
+		}
+	}
+
 	// 2c) Animate the console drop-down toward its target each tic.
 	//     Open target = Screen.ConLines; closed target = 0. Screen +
 	//     ConsoleOpen wiring is optional (tests that omit Screen rely
@@ -478,11 +497,15 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		Dt:            dt,
 		NowSec:        nowSec,
 		ActionButtons: r.Triggers.ActionButtons(),
+		Impulse:       r.PendingImpulse,
 	}
 	out, err := client.Tick(r.Client, r.Conn, in, r.ViewAngles)
 	if err != nil {
 		return err
 	}
+	// One-shot: the impulse rode this tic's clc_move; clear it so a held
+	// number key doesn't re-switch the weapon every tic.
+	r.PendingImpulse = 0
 	r.ViewAngles = out.ViewAngles
 
 	// 4b) Particle pool per-tic step. Advances every alive particle

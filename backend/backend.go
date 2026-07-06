@@ -37,7 +37,29 @@ const (
 	// drop-down" by the runloop. tyrquake: K_BACKQUOTE in keys.h,
 	// the Con_ToggleConsole_f binding lives in console.c.
 	KeyTilde
+	// Key1..Key8 are the top-row number keys. Quake binds them to
+	// "select weapon N" -- the runloop turns a Key1..Key8 press into a
+	// one-shot +impulse N (1..8) on the outbound clc_move, which the QC
+	// ImpulseCommands runs as W_ChangeWeapon. tyrquake: '1'..'8' in keys.h.
+	Key1
+	Key2
+	Key3
+	Key4
+	Key5
+	Key6
+	Key7
+	Key8
 )
+
+// ImpulseForKey returns the weapon-select +impulse value (1..8) for a
+// Key1..Key8 code, or (0, false) for any other key. Kept next to the
+// KeyCode block so the number-key set stays in one place.
+func ImpulseForKey(k KeyCode) (uint8, bool) {
+	if k >= Key1 && k <= Key8 {
+		return uint8(k-Key1) + 1, true
+	}
+	return 0, false
+}
 
 // InputSnapshot is one frame's worth of input events. Backends fill
 // this every tic; the host loop hands it to the client tick's

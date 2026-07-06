@@ -160,3 +160,19 @@ func TestKeyCodes(t *testing.T) {
 		t.Fatalf("KeyMouse2 = %d want 10", KeyMouse2)
 	}
 }
+
+func TestImpulseForKey(t *testing.T) {
+	// Key1..Key8 -> impulse 1..8 (weapon select).
+	for i, k := range []KeyCode{Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8} {
+		imp, ok := ImpulseForKey(k)
+		if !ok || imp != uint8(i+1) {
+			t.Errorf("ImpulseForKey(Key%d) = (%d, %v) want (%d, true)", i+1, imp, ok, i+1)
+		}
+	}
+	// Non-number keys yield no impulse.
+	for _, k := range []KeyCode{KeyEscape, KeyW, KeySpace, KeyTilde, KeyMouse1} {
+		if imp, ok := ImpulseForKey(k); ok || imp != 0 {
+			t.Errorf("ImpulseForKey(%v) = (%d, %v) want (0, false)", k, imp, ok)
+		}
+	}
+}
