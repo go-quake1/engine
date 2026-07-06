@@ -27,6 +27,19 @@ import (
 	"github.com/go-quake1/engine/vfs"
 )
 
+// faceFrontFacing reports whether a one-sided world face on the given plane
+// (normal, dist) is facing the camera at viewOrigin. side is the BSP face's
+// Side flag: 0 means the face's outward normal is +normal, non-zero (PLANEBACK)
+// means it is -normal. The face is visible iff the camera is on its outward
+// side: dot > 0 for side 0, dot < 0 for PLANEBACK (tyrquake R_RecursiveWorldNode).
+func faceFrontFacing(normal [3]float32, dist float32, side int16, viewOrigin [3]float32) bool {
+	dot := normal[0]*viewOrigin[0] + normal[1]*viewOrigin[1] + normal[2]*viewOrigin[2] - dist
+	if side != 0 {
+		return dot < 0
+	}
+	return dot > 0
+}
+
 // setupRendererOpts bundles the (many) parameters [setupRenderer] consumes.
 type setupRendererOpts struct {
 	runner          *runloop.Runner
@@ -91,8 +104,12 @@ func setupRenderer(opts setupRendererOpts) error {
 	}
 	marks, _ := file.MarkSurfaces()
 	isSynth := len(marks) == 0
-	logf("BSP loaded -- %d nodes, %d leaves (PVS), %d faces, %d marksurfaces (synth=%v)",
-		bm.NumNodes(), bm.NumLeaves(), len(faces), len(marks), isSynth)
+	// Planes for per-face backface culling (skip world faces the camera is
+	// behind -- they are one-sided and never visible). tyrquake:
+	// R_RecursiveWorldNode's SURF_PLANEBACK side test.
+	planes, _ := file.Planes()
+	logf("BSP loaded -- %d nodes, %d leaves (PVS), %d faces, %d planes, %d marksurfaces (synth=%v)",
+		bm.NumNodes(), bm.NumLeaves(), len(faces), len(planes), len(marks), isSynth)
 
 	fallbackTex := makeCheckerTex(16)
 
@@ -539,6 +556,16 @@ func setupRenderer(opts setupRendererOpts) error {
 		// this is correct for opaque world surfaces.
 		for i := surfaces.Len() - 1; i >= 0; i-- {
 			ref := surfaces.Refs[i]
+			// Backface cull: world faces are one-sided, so skip any whose
+			// plane the camera is behind (never visible). tyrquake:
+			// R_RecursiveWorldNode's SURF_PLANEBACK side test.
+			if ref.FaceIdx >= 0 && ref.FaceIdx < len(faces) {
+				f := faces[ref.FaceIdx]
+				if pn := int(f.PlaneNum); pn >= 0 && pn < len(planes) &&
+					!faceFrontFacing(planes[pn].Normal, planes[pn].Dist, f.Side, origin) {
+					continue
+				}
+			}
 			fv, err := bsprender.NewBrushFaceVerts(bm, ref.FaceIdx)
 			if err != nil {
 				continue
