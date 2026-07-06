@@ -595,6 +595,21 @@ func (h *Host) Frame(dt float32) error {
 		return err
 	}
 
+	// SV_LinkEdict after the move. RunPhysics integrated each client's new
+	// origin but did NOT refresh its area-tree entry, so without this the
+	// player stays linked at its spawn position: traces (monster CheckAttack /
+	// FireBullets aimed at the player), AreaQuery, and touch tests all miss it
+	// at its real location -- monsters can never hit the player. Relink each
+	// active client at its post-move bounds. tyrquake wires SV_LinkEdict into
+	// every MOVETYPE_WALK move; only clients use MOVETYPE_WALK here.
+	for slot := 1; slot <= h.Static.MaxClients && slot < len(h.Server.Edicts); slot++ {
+		c := h.Static.Clients[slot-1]
+		if c == nil || !c.Active || c.Edict == nil {
+			continue
+		}
+		h.LinkEdict(c.Edict)
+	}
+
 	// PlayerPostThink (weapon fire): the post-move half of
 	// SV_Physics_Client. Runs after the physics move so W_Attack's
 	// traceline sees the player's final position this tic, and before the
