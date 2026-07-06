@@ -180,6 +180,11 @@ func setupRenderer(opts setupRendererOpts) error {
 	// never changes for static faces, so no invalidation is needed).
 	faceSurfCache := make(map[int]*render.CachedSurface)
 	var cachedVertScratch []render.CachedVertex
+	// Water/lava/slime ('*') textures render at a fixed light level (0) with
+	// only a UV warp -- the texture itself never changes -- so pre-light each
+	// once through the colormap and draw with cm=nil, dropping the per-pixel
+	// colormap lookup from the turbulent span loop. Keyed by source Pic.
+	waterLitCache := make(map[*render.Pic]*render.Pic)
 	frameCount := 0
 	prevEntityOrigin := make(map[int][3]float32)
 	loggedWireSpawn := false
@@ -568,7 +573,15 @@ func setupRenderer(opts setupRendererOpts) error {
 				if err != nil {
 					continue
 				}
-				_ = render.FillTurbulentPolygon(fb, tex, &cm, 0, verts, turbTimeSec)
+				lit := waterLitCache[tex]
+				if lit == nil {
+					lit = &render.Pic{Width: tex.Width, Height: tex.Height, Pixels: make([]byte, len(tex.Pixels))}
+					for i, p := range tex.Pixels {
+						lit.Pixels[i] = cm.LightIndex(0, p)
+					}
+					waterLitCache[tex] = lit
+				}
+				_ = render.FillTurbulentPolygon(fb, lit, nil, 0, verts, turbTimeSec)
 			default:
 				// World surface: per-face lightmap + perspective-correct
 				// UV (tyrquake R_DrawSurface). Lightmap data lives in
