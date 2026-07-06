@@ -231,7 +231,8 @@ func registerSpawnTimeBuiltins(vm *progs.VM, h *enginehost.Host, logf func(strin
 	vm.RegisterBuiltin(progs.BuiltinTraceOn, noop)
 	vm.RegisterBuiltin(progs.BuiltinTraceOff, noop)
 	vm.RegisterBuiltin(progs.BuiltinEPrint, noop)
-	vm.RegisterBuiltin(progs.BuiltinWalkMove, noop)
+	vm.RegisterBuiltin(progs.BuiltinWalkMove, builtinWalkMove(h))
+	vm.RegisterBuiltin(progs.BuiltinMoveToGoal, builtinMoveToGoal(h))
 	vm.RegisterBuiltin(progs.BuiltinDropToFloor, noop)
 	vm.RegisterBuiltin(progs.BuiltinLightStyle, noop)
 	vm.RegisterBuiltin(progs.BuiltinCheckBottom, noop)
@@ -738,6 +739,132 @@ func builtinChangeYaw(h *enginehost.Host) progs.Builtin {
 		}
 		angles[1] = mathlib.AngleMod(current + move)
 		return ev.WriteVec3("angles", angles)
+	}
+}
+
+// selfEntVars resolves the QC `self` global to its edict + entvars. Returns
+// ok=false when self is unset/unresolvable or there is no progs/arena.
+func selfEntVars(vm *progs.VM) (*progs.Edict, *progs.EntVars, bool) {
+	p := vm.Progs()
+	arena := vm.Arena()
+	if p == nil || arena == nil {
+		return nil, nil, false
+	}
+	selfDef := p.FindGlobal("self")
+	if selfDef == nil {
+		return nil, nil, false
+	}
+	selfPtr, _ := vm.GlobalInt(int(selfDef.Ofs))
+	ent, _, err := arena.ResolvePointer(selfPtr)
+	if err != nil {
+		return nil, nil, false
+	}
+	ev, err := progs.NewEntVars(p, ent)
+	if err != nil {
+		return nil, nil, false
+	}
+	return ent, ev, true
+}
+
+// builtinWalkMove implements the QC walkmove(yaw, dist) built-in.
+//
+// tyrquake: PF_walkmove -> SV_movestep. Steps `self` dist units along yaw
+// across the world floor (stepping up/down stairs), writes the new origin +
+// flags back, relinks, and returns 1 if it moved / 0 if blocked. World-only
+// clipping for now (nil candidates): monsters step on world geometry but pass
+// through each other / closed doors -- entity clipping is a follow-up.
+func builtinWalkMove(h *enginehost.Host) progs.Builtin {
+	return func(vm *progs.VM) error {
+		ret := func(v float32) error { return vm.SetGlobalFloat(progs.OfsReturn, v) }
+		if h == nil || h.Server == nil || h.Server.WorldModel == nil {
+			return ret(0)
+		}
+		self, ev, ok := selfEntVars(vm)
+		if !ok {
+			return ret(0)
+		}
+		yaw, _ := vm.GlobalFloat(progs.OfsParm0)
+		dist, _ := vm.GlobalFloat(progs.OfsParm1)
+		origin, _ := ev.ReadVec3("origin")
+		mins, _ := ev.ReadVec3("mins")
+		maxs, _ := ev.ReadVec3("maxs")
+		flagsF, _ := ev.ReadFloat("flags")
+		in := world.MoveStepIn{
+			Origin:    origin,
+			Mins:      mins,
+			Maxs:      maxs,
+			Flags:     engineserver.EntityFlag(int32(flagsF)),
+			EntityKey: world.Key(vm.Arena().NumFor(self)),
+		}
+		out, err := world.StepDirection(yaw, dist, in, h.Server.WorldModel, nil)
+		if err != nil || !out.Moved {
+			return ret(0)
+		}
+		_ = ev.WriteVec3("origin", out.NewOrigin)
+		_ = ev.WriteFloat("flags", float32(int32(out.NewFlags)))
+		h.LinkEdict(self)
+		return ret(1)
+	}
+}
+
+// builtinMoveToGoal implements the QC movetogoal(dist) built-in.
+//
+// tyrquake: PF_MoveToGoal -> SV_MoveToGoal. This is what ai_run/ai_walk call
+// to CHASE: step `self` dist units toward self.goalentity, trying the current
+// yaw then goal-aware alternatives (world.MoveToGoal). Writes the new origin,
+// yaw (angles[1]) + flags back and relinks. A no-op left every monster
+// stationary. World-only clipping for now (nil candidates).
+func builtinMoveToGoal(h *enginehost.Host) progs.Builtin {
+	return func(vm *progs.VM) error {
+		if h == nil || h.Server == nil || h.Server.WorldModel == nil {
+			return nil
+		}
+		self, ev, ok := selfEntVars(vm)
+		if !ok {
+			return nil
+		}
+		dist, _ := vm.GlobalFloat(progs.OfsParm0)
+		// Resolve self.goalentity -> its origin (the chase target).
+		goalPtr, err := ev.ReadInt32("goalentity")
+		if err != nil {
+			return nil
+		}
+		goalEnt, _, err := vm.Arena().ResolvePointer(goalPtr)
+		if err != nil {
+			return nil
+		}
+		gev, err := progs.NewEntVars(vm.Progs(), goalEnt)
+		if err != nil {
+			return nil
+		}
+		goalOrigin, _ := gev.ReadVec3("origin")
+
+		origin, _ := ev.ReadVec3("origin")
+		mins, _ := ev.ReadVec3("mins")
+		maxs, _ := ev.ReadVec3("maxs")
+		flagsF, _ := ev.ReadFloat("flags")
+		idealYaw, _ := ev.ReadFloat("ideal_yaw")
+		in := world.MoveToGoalIn{
+			Origin:     origin,
+			GoalOrigin: goalOrigin,
+			Mins:       mins,
+			Maxs:       maxs,
+			Flags:      engineserver.EntityFlag(int32(flagsF)),
+			Yaw:        idealYaw,
+			Dist:       dist,
+			EntityKey:  world.Key(vm.Arena().NumFor(self)),
+		}
+		out, err := world.MoveToGoal(in, h.Server.WorldModel, nil)
+		if err != nil || !out.Moved {
+			return nil
+		}
+		_ = ev.WriteVec3("origin", out.NewOrigin)
+		_ = ev.WriteFloat("flags", float32(int32(out.NewFlags)))
+		angles, _ := ev.ReadVec3("angles")
+		angles[1] = out.NewYaw
+		_ = ev.WriteVec3("angles", angles)
+		h.LinkEdict(self)
+		return nil
 	}
 }
 

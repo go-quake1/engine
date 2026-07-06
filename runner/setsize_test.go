@@ -6,7 +6,10 @@ package runner
 import (
 	"testing"
 
+	"github.com/go-quake1/engine/bspfile"
+	"github.com/go-quake1/engine/bsptrace"
 	enginehost "github.com/go-quake1/engine/host"
+	"github.com/go-quake1/engine/model"
 	"github.com/go-quake1/engine/progs"
 	engineserver "github.com/go-quake1/engine/server"
 	"github.com/go-quake1/engine/world"
@@ -307,4 +310,118 @@ func TestBuiltinChangeYaw(t *testing.T) {
 	_ = ev.WriteFloat("ideal_yaw", 350)
 	_ = fn(vm)
 	near(yaw(), 20, "wrap short way")
+}
+
+// floorWorldAt builds a minimal BrushModel that is empty above z=floorZ and
+// solid below -- an infinite flat floor, enough for a walking MoveStep.
+func floorWorldAt(floorZ float32) *model.BrushModel {
+	h := bsptrace.Hull{
+		ClipNodes:     []bspfile.ClipNode{{PlaneNum: 0, Children: [2]int16{bspfile.ContentsEmpty, bspfile.ContentsSolid}}},
+		Planes:        []bspfile.Plane{{Normal: [3]float32{0, 0, 1}, Dist: floorZ, Type: bspfile.PlaneZ}},
+		FirstClipNode: 0,
+		LastClipNode:  0,
+	}
+	bm := &model.BrushModel{}
+	bm.Hulls[0] = h
+	bm.Hulls[1] = h
+	bm.Hulls[2] = h
+	return bm
+}
+
+// progsForMoveTest builds a progs with the fields movetogoal reads
+// (origin/mins/maxs/angles/flags/ideal_yaw/goalentity) + a `self` global.
+func progsForMoveTest() *progs.Progs {
+	strs := []byte{0}
+	add := func(s string) int32 {
+		o := int32(len(strs))
+		strs = append(strs, []byte(s)...)
+		strs = append(strs, 0)
+		return o
+	}
+	originN := add("origin")
+	minsN := add("mins")
+	maxsN := add("maxs")
+	anglesN := add("angles")
+	flagsN := add("flags")
+	idealN := add("ideal_yaw")
+	goalN := add("goalentity")
+	selfN := add("self")
+	const entityFields = 16
+	return &progs.Progs{
+		Header:  progs.Header{EntityFields: entityFields},
+		Strings: strs,
+		FieldDefs: []progs.Def{
+			{Type: uint16(progs.EvVector), Ofs: 1, SName: originN},
+			{Type: uint16(progs.EvVector), Ofs: 4, SName: minsN},
+			{Type: uint16(progs.EvVector), Ofs: 7, SName: maxsN},
+			{Type: uint16(progs.EvVector), Ofs: 10, SName: anglesN},
+			{Type: uint16(progs.EvFloat), Ofs: 13, SName: flagsN},
+			{Type: uint16(progs.EvFloat), Ofs: 14, SName: idealN},
+			{Type: uint16(progs.EvEntity), Ofs: 15, SName: goalN},
+		},
+		GlobalDefs: []progs.Def{
+			{Type: uint16(progs.EvEntity), Ofs: 1, SName: selfN},
+		},
+		Globals:    make([]byte, 32*4),
+		Functions:  []progs.Function{{FirstStatement: 0, SName: 0}},
+		Statements: []progs.Statement{{Op: progs.OP_DONE}},
+	}
+}
+
+// TestBuiltinMoveToGoalWalksTowardGoal proves the movetogoal glue: a grounded
+// monster at the origin, its goalentity 100 units away in +X, steps toward the
+// goal over a flat floor (world.MoveToGoal machinery). A no-op left every
+// monster stationary; this asserts the origin actually advances.
+func TestBuiltinMoveToGoalWalksTowardGoal(t *testing.T) {
+	p := progsForMoveTest()
+	arena := progs.NewEdictArena(p, 8)
+	vm := progs.NewVM(p)
+	vm.SetArena(arena)
+
+	h := &enginehost.Host{
+		Server: engineserver.NewServer(),
+		World:  world.New(),
+		Static: engineserver.NewStatic(4),
+	}
+	h.SetProgs(p)
+	h.Server.Arena = arena
+	h.Server.WorldModel = floorWorldAt(0) // floor at z=0
+	h.Server.Edicts = make([]*progs.Edict, 8)
+	for i := range h.Server.Edicts {
+		ed, err := arena.Get(i)
+		if err != nil {
+			t.Fatalf("arena.Get(%d): %v", i, err)
+		}
+		h.Server.Edicts[i] = ed
+	}
+	h.World.Clear([3]float32{-1024, -1024, -1024}, [3]float32{1024, 1024, 1024})
+
+	const mon, goal = 2, 3
+	mev, _ := progs.NewEntVars(p, h.Server.Edicts[mon])
+	_ = mev.WriteVec3("origin", [3]float32{0, 0, 24}) // feet (mins.z=-24) on the floor
+	_ = mev.WriteVec3("mins", [3]float32{-16, -16, -24})
+	_ = mev.WriteVec3("maxs", [3]float32{16, 16, 40})
+	_ = mev.WriteFloat("flags", float32(int32(engineserver.FlagOnGround)))
+	_ = mev.WriteFloat("ideal_yaw", 0) // face +X toward the goal
+	_ = mev.WriteInt32("goalentity", arena.MakePointer(goal, 0))
+
+	gev, _ := progs.NewEntVars(p, h.Server.Edicts[goal])
+	_ = gev.WriteVec3("origin", [3]float32{100, 0, 24})
+
+	selfDef := p.FindGlobal("self")
+	if err := vm.SetGlobalInt(int(selfDef.Ofs), arena.MakePointer(mon, 0)); err != nil {
+		t.Fatalf("set self: %v", err)
+	}
+	if err := vm.SetGlobalFloat(progs.OfsParm0, 20); err != nil { // dist
+		t.Fatalf("set dist: %v", err)
+	}
+
+	before, _ := mev.ReadVec3("origin")
+	if err := builtinMoveToGoal(h)(vm); err != nil {
+		t.Fatalf("movetogoal: %v", err)
+	}
+	after, _ := mev.ReadVec3("origin")
+	if after[0] <= before[0] {
+		t.Errorf("origin X did not advance toward the +X goal: before=%v after=%v", before, after)
+	}
 }
