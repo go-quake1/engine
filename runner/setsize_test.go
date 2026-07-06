@@ -163,3 +163,59 @@ func TestBuiltinSetSizeSolidNotUnlinks(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltinCheckClient covers checkclient(): world (0) when no client is
+// active, and the active client's edict pointer otherwise -- the value QC
+// FindTarget needs so monsters can see the player (a no-op here left every
+// monster asleep).
+func TestBuiltinCheckClient(t *testing.T) {
+	p := progsForSetSizeTest()
+	const capN = 8
+	arena := progs.NewEdictArena(p, capN)
+	vm := progs.NewVM(p)
+	vm.SetArena(arena)
+
+	h := &enginehost.Host{
+		Server: engineserver.NewServer(),
+		World:  world.New(),
+		Static: engineserver.NewStatic(4),
+	}
+	h.SetProgs(p)
+	h.Server.Arena = arena
+	h.Server.Edicts = make([]*progs.Edict, capN)
+	for i := 0; i < capN; i++ {
+		ed, err := arena.Get(i)
+		if err != nil {
+			t.Fatalf("arena.Get(%d): %v", i, err)
+		}
+		h.Server.Edicts[i] = ed
+	}
+	fn := builtinCheckClient(h)
+
+	// No active client -> world (0).
+	if err := fn(vm); err != nil {
+		t.Fatalf("checkclient (no client): %v", err)
+	}
+	if got, _ := vm.GlobalInt(progs.OfsReturn); got != 0 {
+		t.Errorf("no active client -> %d, want 0 (world)", got)
+	}
+
+	// Active client at edict slot 1 -> that edict's QC pointer.
+	h.Static.Clients[0].Active = true
+	h.Static.Clients[0].Edict = h.Server.Edicts[1]
+	if err := fn(vm); err != nil {
+		t.Fatalf("checkclient (active): %v", err)
+	}
+	if got, want := mustGlobalInt(t, vm), arena.MakePointer(1, 0); got != want {
+		t.Errorf("active client -> %d, want %d (slot 1 pointer)", got, want)
+	}
+}
+
+func mustGlobalInt(t *testing.T, vm *progs.VM) int32 {
+	t.Helper()
+	v, err := vm.GlobalInt(progs.OfsReturn)
+	if err != nil {
+		t.Fatalf("GlobalInt(OfsReturn): %v", err)
+	}
+	return v
+}
