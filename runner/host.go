@@ -766,6 +766,62 @@ func selfEntVars(vm *progs.VM) (*progs.Edict, *progs.EntVars, bool) {
 	return ent, ev, true
 }
 
+// gatherMoveCandidates returns the solid edicts a `dist`-unit monster step
+// from origin might clip against -- every area-tree solid whose bounds could
+// overlap the move (actor bbox + step-up slack), minus the actor slot itself.
+// SOLID_BSP submodels (doors/movers) carry their per-entity BrushModel. Mirrors
+// the candidate build in [enginehost.Host.TraceLine]; p must be the live progs
+// (h.Progs() can be nil inside a builtin -- pass vm.Progs()).
+func gatherMoveCandidates(h *enginehost.Host, p *progs.Progs, origin, mins, maxs [3]float32, dist float32, excludeSlot int) []world.Target {
+	if h == nil || h.World == nil || h.Server == nil || p == nil {
+		return nil
+	}
+	reach := dist + world.StepSize + 8
+	lo := [3]float32{origin[0] + mins[0] - reach, origin[1] + mins[1] - reach, origin[2] + mins[2] - reach}
+	hi := [3]float32{origin[0] + maxs[0] + reach, origin[1] + maxs[1] + reach, origin[2] + maxs[2] + reach}
+	keys := h.World.AreaQuery(lo, hi, world.QuerySolidsOnly)
+	out := make([]world.Target, 0, len(keys))
+	for _, k := range keys {
+		idx := int(k)
+		if idx <= 0 || idx >= len(h.Server.Edicts) || idx == excludeSlot {
+			continue
+		}
+		ed := h.Server.Edicts[idx]
+		if ed == nil || ed.Free {
+			continue
+		}
+		ev, err := progs.NewEntVars(p, ed)
+		if err != nil {
+			continue
+		}
+		solF, err := ev.ReadFloat("solid")
+		if err != nil {
+			continue
+		}
+		sol := engineserver.Solid(int32(solF))
+		if sol == engineserver.SolidNot {
+			continue
+		}
+		o, _ := ev.ReadVec3("origin")
+		emins, _ := ev.ReadVec3("mins")
+		emaxs, _ := ev.ReadVec3("maxs")
+		tgt := world.Target{Origin: o, Mins: emins, Maxs: emaxs, Solid: sol}
+		if sol == engineserver.SolidBSP {
+			miF, err := ev.ReadFloat("modelindex")
+			if err != nil {
+				continue
+			}
+			mi := int(miF)
+			if mi <= 0 || mi >= len(h.Server.BrushModels) || h.Server.BrushModels[mi] == nil {
+				continue
+			}
+			tgt.BrushModel = h.Server.BrushModels[mi]
+		}
+		out = append(out, tgt)
+	}
+	return out
+}
+
 // builtinWalkMove implements the QC walkmove(yaw, dist) built-in.
 //
 // tyrquake: PF_walkmove -> SV_movestep. Steps `self` dist units along yaw
@@ -789,14 +845,16 @@ func builtinWalkMove(h *enginehost.Host) progs.Builtin {
 		mins, _ := ev.ReadVec3("mins")
 		maxs, _ := ev.ReadVec3("maxs")
 		flagsF, _ := ev.ReadFloat("flags")
+		slot := vm.Arena().NumFor(self)
 		in := world.MoveStepIn{
 			Origin:    origin,
 			Mins:      mins,
 			Maxs:      maxs,
 			Flags:     engineserver.EntityFlag(int32(flagsF)),
-			EntityKey: world.Key(vm.Arena().NumFor(self)),
+			EntityKey: world.Key(slot),
 		}
-		out, err := world.StepDirection(yaw, dist, in, h.Server.WorldModel, nil)
+		cands := gatherMoveCandidates(h, vm.Progs(), origin, mins, maxs, dist, slot)
+		out, err := world.StepDirection(yaw, dist, in, h.Server.WorldModel, cands)
 		if err != nil || !out.Moved {
 			return ret(0)
 		}
@@ -844,6 +902,7 @@ func builtinMoveToGoal(h *enginehost.Host) progs.Builtin {
 		maxs, _ := ev.ReadVec3("maxs")
 		flagsF, _ := ev.ReadFloat("flags")
 		idealYaw, _ := ev.ReadFloat("ideal_yaw")
+		slot := vm.Arena().NumFor(self)
 		in := world.MoveToGoalIn{
 			Origin:     origin,
 			GoalOrigin: goalOrigin,
@@ -852,9 +911,10 @@ func builtinMoveToGoal(h *enginehost.Host) progs.Builtin {
 			Flags:      engineserver.EntityFlag(int32(flagsF)),
 			Yaw:        idealYaw,
 			Dist:       dist,
-			EntityKey:  world.Key(vm.Arena().NumFor(self)),
+			EntityKey:  world.Key(slot),
 		}
-		out, err := world.MoveToGoal(in, h.Server.WorldModel, nil)
+		cands := gatherMoveCandidates(h, vm.Progs(), origin, mins, maxs, dist, slot)
+		out, err := world.MoveToGoal(in, h.Server.WorldModel, cands)
 		if err != nil || !out.Moved {
 			return nil
 		}

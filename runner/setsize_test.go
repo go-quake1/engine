@@ -345,8 +345,9 @@ func progsForMoveTest() *progs.Progs {
 	flagsN := add("flags")
 	idealN := add("ideal_yaw")
 	goalN := add("goalentity")
+	solidN := add("solid")
 	selfN := add("self")
-	const entityFields = 16
+	const entityFields = 20
 	return &progs.Progs{
 		Header:  progs.Header{EntityFields: entityFields},
 		Strings: strs,
@@ -358,6 +359,7 @@ func progsForMoveTest() *progs.Progs {
 			{Type: uint16(progs.EvFloat), Ofs: 13, SName: flagsN},
 			{Type: uint16(progs.EvFloat), Ofs: 14, SName: idealN},
 			{Type: uint16(progs.EvEntity), Ofs: 15, SName: goalN},
+			{Type: uint16(progs.EvFloat), Ofs: 16, SName: solidN},
 		},
 		GlobalDefs: []progs.Def{
 			{Type: uint16(progs.EvEntity), Ofs: 1, SName: selfN},
@@ -423,5 +425,81 @@ func TestBuiltinMoveToGoalWalksTowardGoal(t *testing.T) {
 	after, _ := mev.ReadVec3("origin")
 	if after[0] <= before[0] {
 		t.Errorf("origin X did not advance toward the +X goal: before=%v after=%v", before, after)
+	}
+}
+
+// moveTestHost builds a host with a flat floor + a grounded monster at slot 2
+// facing +X, ready for a walkmove(yaw=0, dist) call. Returns everything the
+// caller needs to add blockers, drive the builtin, and read the result back.
+func moveTestHost(t *testing.T, dist float32) (*enginehost.Host, *progs.VM, *progs.EdictArena, *progs.Progs) {
+	t.Helper()
+	p := progsForMoveTest()
+	arena := progs.NewEdictArena(p, 8)
+	vm := progs.NewVM(p)
+	vm.SetArena(arena)
+	h := &enginehost.Host{
+		Server: engineserver.NewServer(),
+		World:  world.New(),
+		Static: engineserver.NewStatic(4),
+	}
+	h.SetProgs(p)
+	h.Server.Arena = arena
+	h.Server.WorldModel = floorWorldAt(0)
+	h.Server.Edicts = make([]*progs.Edict, 8)
+	for i := range h.Server.Edicts {
+		ed, err := arena.Get(i)
+		if err != nil {
+			t.Fatalf("arena.Get(%d): %v", i, err)
+		}
+		h.Server.Edicts[i] = ed
+	}
+	h.World.Clear([3]float32{-2048, -2048, -2048}, [3]float32{2048, 2048, 2048})
+	mev, _ := progs.NewEntVars(p, h.Server.Edicts[2])
+	_ = mev.WriteVec3("origin", [3]float32{0, 0, 24})
+	_ = mev.WriteVec3("mins", [3]float32{-16, -16, -24})
+	_ = mev.WriteVec3("maxs", [3]float32{16, 16, 40})
+	_ = mev.WriteFloat("flags", float32(int32(engineserver.FlagOnGround)))
+	selfDef := p.FindGlobal("self")
+	_ = vm.SetGlobalInt(int(selfDef.Ofs), arena.MakePointer(2, 0))
+	_ = vm.SetGlobalFloat(progs.OfsParm0, 0)    // yaw = +X
+	_ = vm.SetGlobalFloat(progs.OfsParm1, dist) // dist
+	return h, vm, arena, p
+}
+
+// TestBuiltinWalkMoveClipsAgainstEntity proves monster moves clip against OTHER
+// solid entities (not just the world): a solid blocker in the +X path stops the
+// walk that would otherwise succeed.
+func TestBuiltinWalkMoveClipsAgainstEntity(t *testing.T) {
+	// A: no blocker -> the walk succeeds and advances +X.
+	hA, vmA, _, pA := moveTestHost(t, 40)
+	if err := builtinWalkMove(hA)(vmA); err != nil {
+		t.Fatalf("walkmove A: %v", err)
+	}
+	mevA, _ := progs.NewEntVars(pA, hA.Server.Edicts[2])
+	freeX, _ := mevA.ReadVec3("origin")
+	if freeX[0] <= 0 {
+		t.Fatalf("unblocked walk did not advance: %v", freeX)
+	}
+
+	// B: a solid slidebox blocker sitting in the destination stops the walk.
+	hB, vmB, arenaB, pB := moveTestHost(t, 40)
+	blk, _ := progs.NewEntVars(pB, hB.Server.Edicts[3])
+	_ = blk.WriteVec3("origin", [3]float32{55, 0, 24})
+	_ = blk.WriteVec3("mins", [3]float32{-16, -16, -24})
+	_ = blk.WriteVec3("maxs", [3]float32{16, 16, 40})
+	_ = blk.WriteFloat("solid", float32(int32(engineserver.SolidSlideBox)))
+	hB.LinkEdict(hB.Server.Edicts[3])
+	_ = arenaB
+	if err := builtinWalkMove(hB)(vmB); err != nil {
+		t.Fatalf("walkmove B: %v", err)
+	}
+	mevB, _ := progs.NewEntVars(pB, hB.Server.Edicts[2])
+	blockedX, _ := mevB.ReadVec3("origin")
+
+	if blockedX[0] >= freeX[0] {
+		t.Errorf("blocker did not clip the move: free X=%v blocked X=%v", freeX[0], blockedX[0])
+	}
+	if blockedX[0]+16 > 55-16 {
+		t.Errorf("monster front (%v) overlapped the blocker back (%v)", blockedX[0]+16, 55-16)
 	}
 }
