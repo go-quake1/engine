@@ -428,6 +428,28 @@ func TestBuiltinMoveToGoalWalksTowardGoal(t *testing.T) {
 	}
 }
 
+func TestFaceFrontFacing(t *testing.T) {
+	up := [3]float32{0, 0, 1} // plane z=0, outward normal +Z
+	// Side 0: outward normal is +normal. Visible from above, not below.
+	if !faceFrontFacing(up, 0, 0, [3]float32{0, 0, 10}) {
+		t.Error("side 0, camera above: want front-facing")
+	}
+	if faceFrontFacing(up, 0, 0, [3]float32{0, 0, -10}) {
+		t.Error("side 0, camera below: want culled")
+	}
+	// PLANEBACK (side != 0): outward normal is -normal. Flipped.
+	if faceFrontFacing(up, 0, 1, [3]float32{0, 0, 10}) {
+		t.Error("PLANEBACK, camera above: want culled")
+	}
+	if !faceFrontFacing(up, 0, 1, [3]float32{0, 0, -10}) {
+		t.Error("PLANEBACK, camera below: want front-facing")
+	}
+	// dist offset: plane z=50, camera at z=10 is BELOW it (dot<0) -> culled at side 0.
+	if faceFrontFacing(up, 50, 0, [3]float32{0, 0, 10}) {
+		t.Error("side 0, camera below offset plane: want culled")
+	}
+}
+
 // moveTestHost builds a host with a flat floor + a grounded monster at slot 2
 // facing +X, ready for a walkmove(yaw=0, dist) call. Returns everything the
 // caller needs to add blockers, drive the builtin, and read the result back.
