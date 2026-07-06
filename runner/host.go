@@ -215,7 +215,7 @@ func registerSpawnTimeBuiltins(vm *progs.VM, h *enginehost.Host, logf func(strin
 	vm.RegisterBuiltin(progs.BuiltinSpawn, noop)
 	vm.RegisterBuiltin(progs.BuiltinRemove, noop)
 	vm.RegisterBuiltin(progs.BuiltinTraceLine, builtinTraceLine(h, logf))
-	vm.RegisterBuiltin(progs.BuiltinCheckClient, noop)
+	vm.RegisterBuiltin(progs.BuiltinCheckClient, builtinCheckClient(h))
 	vm.RegisterBuiltin(progs.BuiltinFind, noop)
 	vm.RegisterBuiltin(progs.BuiltinPrecacheSound, builtinPrecacheSound(h, logf))
 	vm.RegisterBuiltin(progs.BuiltinPrecacheModel, builtinPrecacheModel(h, logf))
@@ -648,6 +648,35 @@ func builtinSetSize(h *enginehost.Host, logf func(string, ...any)) progs.Builtin
 			}
 		}
 		return nil
+	}
+}
+
+// builtinCheckClient implements the QC checkclient() built-in.
+//
+// tyrquake: PF_checkclient. It hands the caller a client the monster's
+// FindTarget then range/infront/visible-checks. Without it (a no-op returns
+// world = 0), FindTarget never sees the player, so no monster ever wakes or
+// attacks. The upstream rate-limits + PVS-gates the pick across many clients;
+// in this single-player loopback we return the first active client
+// unconditionally and let FindTarget's own visible() traceline gate sight --
+// so an occluded monster fails visible() and stays asleep. Returns world (0)
+// when no client is active.
+func builtinCheckClient(h *enginehost.Host) progs.Builtin {
+	return func(vm *progs.VM) error {
+		arena := vm.Arena()
+		var ptr int32
+		if h != nil && h.Static != nil && arena != nil {
+			for _, c := range h.Static.Clients {
+				if c == nil || !c.Active || c.Edict == nil {
+					continue
+				}
+				if slot := arena.NumFor(c.Edict); slot > 0 {
+					ptr = arena.MakePointer(slot, 0)
+					break
+				}
+			}
+		}
+		return vm.SetGlobalInt(progs.OfsReturn, ptr)
 	}
 }
 
