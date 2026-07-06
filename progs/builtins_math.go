@@ -63,6 +63,7 @@ const (
 	BuiltinParticle      = 48
 	BuiltinChangeYaw     = 49
 	BuiltinVecToAngles   = 51 // vector vectoangles(vector)
+	BuiltinMoveToGoal    = 67 // void movetogoal(float dist) -- monster chase step
 )
 
 // ErrRandomNotSeeded is returned by the random() builtin when no
