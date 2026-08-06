@@ -24,16 +24,23 @@ const engineMixerRate = 11025
 // AudioBufferSourceNode.start(playhead), advance the playhead.
 //
 // AudioContext is supported in Web Workers in current Chromium
-// (chrome 105+). The Worker has no user-gesture handshake of its own;
-// the compositor (main thread) gates the gesture, but the resume()
-// state propagates to AudioContexts spawned from any context once the
-// page is unmuted. If the constructor isn't available we return
-// ErrAudioNoContext and the Backend degrades to silent (NewClient
-// swallows the error).
+// (chrome 105+). A freshly-constructed AudioContext starts in the
+// "suspended" state under the browser autoplay policy and stays there
+// -- emitting NO sound even while WritePCM keeps scheduling buffers --
+// until resume() is called. resume() state does NOT propagate across
+// separate AudioContext instances (each is gated independently), so the
+// worker's own context has to be resumed explicitly; without this
+// Quake-in-wasmbox is silent. We call resume() best-effort at
+// construction and again from WritePCM whenever the context is found
+// suspended (the compositor's unmuting user-gesture can land after this
+// worker boots, so a one-shot resume at construction is not enough).
+// If the constructor isn't available we return ErrAudioNoContext and the
+// Backend degrades to silent (NewClient swallows the error).
 type WebAudio struct {
 	ctx        js.Value
 	sampleRate int
 	playhead   float64
+	scheduled  int // count of buffers handed to the context (observability)
 }
 
 // NewWebAudio constructs a WebAudio sink. Returns ErrAudioNoContext if
@@ -48,17 +55,55 @@ func NewWebAudio() (*WebAudio, error) {
 	}
 	ctx := ctxCtor.New()
 	rate := ctx.Get("sampleRate").Int()
-	return &WebAudio{
+	a := &WebAudio{
 		ctx:        ctx,
 		sampleRate: rate,
-	}, nil
+	}
+	// Kick the autoplay-gated context toward "running" immediately; if
+	// the gesture has not happened yet this is a harmless no-op and
+	// WritePCM re-tries on every frame it finds the context suspended.
+	a.resume()
+	return a, nil
 }
+
+// resume nudges the AudioContext out of the autoplay-gated "suspended"
+// state. Best-effort: the returned Promise is ignored and a context
+// that does not expose resume() (or is already running/closed) is left
+// untouched. Guarded so a stub context in tests -- or an exotic
+// browser -- cannot panic the mixer thread.
+func (a *WebAudio) resume() {
+	if r := a.ctx.Get("resume"); r.Type() == js.TypeFunction {
+		a.ctx.Call("resume")
+	}
+}
+
+// State returns the AudioContext's lifecycle state ("suspended",
+// "running", "closed", ...) or "" when the field is absent. Exposed so
+// a runtime probe can confirm audio actually reached "running".
+func (a *WebAudio) State() string {
+	if s := a.ctx.Get("state"); s.Type() == js.TypeString {
+		return s.String()
+	}
+	return ""
+}
+
+// Scheduled returns the number of PCM buffers handed to the context so
+// far -- a monotonic counter a runtime probe can sample to prove the
+// mixer -> WebAudio path is actually live (vs. wired but never driven).
+func (a *WebAudio) Scheduled() int { return a.scheduled }
 
 // WritePCM resamples + schedules one chunk of stereo PCM. Empty inputs
 // are a no-op.
 func (a *WebAudio) WritePCM(samples []sound.StereoSample) error {
 	if len(samples) == 0 {
 		return nil
+	}
+	// Self-heal: if the context slipped back to suspended (or the
+	// unmuting gesture only just arrived) resume before scheduling, so
+	// the buffers we queue below become audible rather than silently
+	// backing up in a suspended graph.
+	if a.State() == "suspended" {
+		a.resume()
 	}
 	left, right := ResampleNearest(samples, engineMixerRate, a.sampleRate)
 	if len(left) == 0 {
@@ -78,6 +123,7 @@ func (a *WebAudio) WritePCM(samples []sound.StereoSample) error {
 	}
 	src.Call("start", a.playhead)
 	a.playhead += float64(len(left)) / float64(a.sampleRate)
+	a.scheduled++
 	return nil
 }
 
