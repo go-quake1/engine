@@ -9,7 +9,7 @@ require (
 	github.com/go-virtio/sound v0.0.0
 	github.com/go-virtio/validate v0.1.0
 	github.com/jfreymuth/oggvorbis v1.0.5
-	github.com/usbarmory/tamago v1.27.0
+	github.com/usbarmory/tamago v1.27.1
 )
 
 require github.com/jfreymuth/vorbis v1.0.2 // indirect
