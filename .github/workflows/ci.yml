@@ -52,14 +52,18 @@ jobs:
 
       - run: go version
 
-      # ⛔ The exclusion used to be a SUBTREE: quake-tamago and everything
-      # under it, plus all of backend/virtio/realdev. Only the quake-tamago
-      # ROOT package needs the TamaGo toolchain; its concharsfont child and
-      # realdev build with ordinary Go, on linux and darwin, and carry three
-      # test files between them that no lane has ever run. They pass in under
-      # half a second. The exclusion is now exact for quake-tamago.
+      # ⛔ quake-tamago is excluded EXACTLY, not as a subtree. Only the ROOT
+      # package needs the TamaGo toolchain; quake-tamago/concharsfont is a
+      # font-sheet builder in ordinary Go with a test that had never run.
+      #
+      # backend/virtio/realdev stays excluded, and the reason is not the
+      # toolchain: go.mod REPLACES go-virtio/{gpu,input,sound} with sibling
+      # directories (../../go-virtio/...). A machine with the whole clone
+      # farm builds and tests it in half a second; a CI runner that clones
+      # one repository cannot, and says so as "[setup failed]". Any attempt
+      # to include it needs those modules published first.
       - name: go vet
-        run: go vet $(go list -e ./... | grep -vE '/reference($|/)|/quake-tamago$')
+        run: go vet $(go list -e ./... | grep -vE '/(reference|backend/virtio/realdev)($|/)|/quake-tamago$')
 
       - name: gofmt
         run: |
@@ -91,7 +95,7 @@ jobs:
           # loading-bar painter) carry intentional defensive clamps -- e.g. the
           # panel/bar width guards that a valid ratio never trips -- so 100%
           # line coverage isn't reachable, same as game/.
-          for pkg in $(go list -e ./... | grep -vE '/reference($|/)|/quake-tamago$|/(game|runner|runloop|cmd/quake-wasmbox)($|/)'); do
+          for pkg in $(go list -e ./... | grep -vE '/(reference|backend/virtio/realdev)($|/)|/quake-tamago$|/(game|runner|runloop|cmd/quake-wasmbox)($|/)'); do
             pkg_short=$(echo "$pkg" | sed 's|github.com/go-quake1/engine/||')
             out=$(go test -cover "$pkg" 2>&1 | tail -n 1)
             echo "$out"
@@ -161,7 +165,7 @@ jobs:
       - run: go version
 
       - name: go test
-        run: go test $(go list -e ./... | grep -vE '/reference($|/)|/quake-tamago$')
+        run: go test $(go list -e ./... | grep -vE '/(reference|backend/virtio/realdev)($|/)|/quake-tamago$')
 
   emulated:
     name: test (${{ matrix.arch }}, qemu)
@@ -207,7 +211,7 @@ jobs:
           # drive shutdown, which hangs under emulated qemu networking (the
           # request never completes). It is fully covered on amd64 (the 100%
           # gate) and native arm64, so it adds no value under qemu -- exclude it.
-          for pkg in $(go list -e ./... | grep -vE '/reference($|/)|/quake-tamago$|/cmd/serve-wasm($|/)'); do
+          for pkg in $(go list -e ./... | grep -vE '/(reference|backend/virtio/realdev)($|/)|/quake-tamago$|/cmd/serve-wasm($|/)'); do
             name=$(echo "$pkg" | tr '/.' '__')
             if go test -c -cover -o "_qemu/${name}.test" "$pkg"; then
               echo "built ${name}.test for $pkg"
