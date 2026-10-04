@@ -1,6 +1,6 @@
 module github.com/go-quake1/engine
 
-go 1.26.4
+go 1.27.1
 
 require (
 	github.com/go-virtio/common v0.1.6
