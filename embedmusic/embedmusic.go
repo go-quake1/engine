@@ -1,3 +1,6 @@
+// Copyright (c) 2026 the go-quake1/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
 // Package embedmusic embeds the optional Quake CD music tracks
 // (track02.ogg .. track11.ogg) into the binary so the runtime can
 // stream them through the music subsystem without a host filesystem.

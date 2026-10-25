@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * D_DrawSpans8 below is Copyright (C) 1996-1997 Id Software, Inc., via tyrquake.
+ */
 /* Standalone micro-benchmark of tyrquake@6531579's D_DrawSpans8
  * (common/d_scan.c) -- the Quake perspective-correct textured span
  * rasterizer. The D_DrawSpans8 body below is COPIED VERBATIM from
