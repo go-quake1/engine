@@ -5,7 +5,7 @@
 [![6-arch CI](https://img.shields.io/badge/CI-amd64%20%C2%B7%20arm64%20%C2%B7%20riscv64%20%C2%B7%20loong64%20%C2%B7%20ppc64le%20%C2%B7%20s390x-success)](https://github.com/go-quake1/engine/actions)
 [![CGO](https://img.shields.io/badge/CGO__ENABLED-0-blue)](#)
 [![Coverage](https://img.shields.io/badge/coverage-100%25%20on%2022%2F23-brightgreen)](#)
-[![License](https://img.shields.io/badge/license-BSD--3%20%2F%20GPL--2.0%20engine-informational)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--2.0--or--later%20(BSD--3%20parts)-informational)](NOTICE.md)
 
 Pure-Go [Quake](https://en.wikipedia.org/wiki/Quake_(video_game)) 1
 (id Tech 1, 1996) engine for bare-metal TamaGo + UEFI, **hand-ported**
@@ -179,14 +179,18 @@ Every Quake phase inherits the four-gate protocol shipped with DOOM
 
 ## License
 
-- Wrapper code (`backend/`, `embedpak/`, `cmd/`, `internal/`, `.github/`):
-  **BSD-3-Clause**
-- Ported engine packages (`anorms/`, `bspfile/`, `bsptrace/`, `cmd/`,
-  `crc/`, `cvar/`, `keys/`, `mathlib/`, `mdl/`, `model/`, `msg/`,
-  `pak/`, `progs/`, `protocol/`, `qargs/`, `qparse/`, `qpath/`,
-  `qstr/`, `sizebuf/`, `spr/`, `vfs/`, `wad/`, `zone/`):
-  **GPL-2.0-or-later** (inherited from tyrquake / upstream id Quake
-  source)
-- The `reference/` mirror of tyrquake C: **GPL-2.0-or-later** (verbatim)
+The repository as a whole is **GPL-2.0-or-later** ([LICENSE](LICENSE)). It
+is a port of id Software's Quake engine by way of tyrquake, and GPL-2.0 §2
+puts the whole of such a work under that licence when it is distributed.
 
-See [LICENSE](LICENSE) for the full split.
+- Each file says which licence it is under, in an `SPDX-License-Identifier`
+  header, and that header is authoritative.
+- **GPL-2.0-or-later:** the engine packages and most of the tree, including
+  `backend/`, plus `reference/` (tyrquake's C, verbatim, with id Software's
+  notice in each file).
+- **BSD-3-Clause** ([LICENSE-BSD](LICENSE-BSD)): the wrapper code written
+  here, which can be taken out on its own: all of `ociassets/` and
+  `embedmusic/`, most of `runner/` and `cmd/`, and the marked files in
+  `embedpak/`, `server/` and `quake-tamago/`.
+
+[NOTICE.md](NOTICE.md) has the table.
