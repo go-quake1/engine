@@ -255,6 +255,18 @@ func run() error {
 	}
 	_ = ociErr // ociErr already logged above; keep var for clarity.
 
+	// Frame timing, readable in-page (self.__quakeStats) and logged per
+	// window. The renderer setting comes from self.__quake_renderer.
+	rendererKind, kindErr := render.ParseKind(jsRendererKind())
+	if kindErr != nil {
+		logf("%v -- using %q", kindErr, render.KindSoft)
+		rendererKind = render.KindSoft
+	}
+	stats, err := newFrameStats(be.Now, string(rendererKind), fbWidth, fbHeight)
+	if err != nil {
+		return fmt.Errorf("frame stats: %w", err)
+	}
+
 	if isReal {
 		// 6a. Real-pak path: hand off to the shared runner. MusicOverlayFS
 		// = the OCI manifest FS so music/track*.ogg layers stream from the
@@ -276,11 +288,14 @@ func run() error {
 			// world in + out at the menu on the wasmbox client. Off until
 			// the demo opcode coverage lands.
 			DisableAttractDemo: true,
+			Renderer:           rendererKind,
+			FrameTimer:         stats.timer,
 		})
 		if err != nil {
 			logf("runner.Setup failed: %v -- falling back to synth", err)
 		} else {
 			r.ShowFPS = true // bring-up perf HUD (top-left)
+			stats.renderer = string(r.Renderer.Kind())
 			logf("real-pak bring-up live -- entering RunUntilQuit")
 			return r.RunUntilQuit()
 		}
@@ -289,13 +304,14 @@ func run() error {
 	// 6b. Synth fallback. The original wasmbox bring-up path: hand-built
 	//     VFS over synthetic palette/colormap/conchars + an in-process
 	//     synthbsp renderer.
-	return runSynth(be, pakFS)
+	stats.renderer = string(render.KindSoft)
+	return runSynth(be, pakFS, stats.timer)
 }
 
 // runSynth is the synth-only fallback path. Kept here (rather than
 // shared) because the synth-only bring-up is wasmbox-specific: tamago
 // has a real-pak host always and never needs this branch.
-func runSynth(be *wasmbox.Backend, pakFS fs.FS) error {
+func runSynth(be *wasmbox.Backend, pakFS fs.FS, timer *render.FrameTimer) error {
 	v := vfs.New()
 	v.Add(syntheticAssets())
 	if pakFS != nil {
@@ -330,6 +346,7 @@ func runSynth(be *wasmbox.Backend, pakFS fs.FS) error {
 	}
 
 	r.ShowFPS = true // bring-up perf HUD (top-left)
+	r.Timer = timer
 	return r.RunUntilQuit()
 }
 

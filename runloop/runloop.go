@@ -162,6 +162,21 @@ type Runner struct {
 	// audio steps are skipped for that tic).
 	Pre2DDraw func(fb *render.FrameBuffer, viewOrigin [3]float32, viewAngles [3]float32) error
 
+	// Renderer draws each frame: the 3D scene, the 2D layers and the
+	// RGBA resolve (see [render.Renderer]). nil selects the software
+	// renderer over Pre2DDraw, which is what every caller had before
+	// the seam existed.
+	Renderer render.Renderer
+
+	// Timer, when non-nil, records where each frame's time goes (see
+	// [render.FrameTimer]): RunFrame marks sim, the scene (world unless
+	// the renderer attributes it), 2D and present. nil costs nothing.
+	Timer *render.FrameTimer
+
+	// soft is the software renderer RunFrame uses when Renderer is nil;
+	// a value field so the per-frame fallback does not allocate.
+	soft render.Software
+
 	// Menu is the optional [menu.Menu] state machine the runloop
 	// drives ahead of the world pass. When Menu != nil AND
 	// Menu.Active() returns true the runloop:
@@ -274,11 +289,12 @@ var (
 //  3. host.Frame(dt)                    (server-side tick)
 //  4. client.Tick(...)                  (client-side: drain inbound,
 //     send clc_move; updates r.ViewAngles)
-//  5. r.Pre2DDraw(fb, viewOrigin,       (optional 3D pass; skipped
-//     viewAngles)                        when nil)
-//  6. render.Compose2D(fb, ...)         (2D frame -- console + notify;
-//     SkipBackgroundFill when Pre2DDraw is set so the 3D pixels survive)
-//  7. fb.Expand(r.RGBA, palette)        (palette -> RGBA)
+//  5. Renderer.DrawScene(fb, viewOrigin, (optional 3D pass; skipped
+//     viewAngles)                        when the renderer has no scene;
+//     the default renderer's scene is r.Pre2DDraw)
+//  6. Renderer.Compose(fb, ...)         (2D frame -- console + notify;
+//     SkipBackgroundFill when there is a scene so the 3D pixels survive)
+//  7. Renderer.Resolve(fb, r.RGBA, pal) (palette -> RGBA)
 //  8. Backend.PresentFrame(r.RGBA, ...) (display)
 //  9. sound.Paint(pool, r.MixBuffer, n) (mix audio)
 //  10. Backend.QueueAudio(r.MixBuffer[:n])
@@ -335,6 +351,18 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	if len(r.RGBA) < r.FrameBuffer.Width*r.FrameBuffer.Height*4 {
 		return ErrRunnerRGBASize
 	}
+
+	// The renderer for this frame: the configured one, or the software
+	// renderer over the legacy Pre2DDraw hook.
+	rend := r.Renderer
+	if rend == nil {
+		r.soft.Scene = r.Pre2DDraw
+		rend = &r.soft
+	}
+
+	// A frame cut short by an error is never ended; the next Begin
+	// discards it.
+	r.Timer.Begin()
 
 	// 1) Collect input.
 	snap, err := r.Backend.PollInput()
@@ -520,6 +548,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	if r.ParticlePool != nil {
 		r.ParticlePool.Run(dt, r.ParticleGravity, nowSec)
 	}
+	r.Timer.Mark(render.StageSim)
 
 	// 5) Optional 3D pass. The closure owns the BSP walk +
 	//    rasterization; on return r.FrameBuffer holds the rendered
@@ -545,12 +574,16 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	//    sit on). With no demo + the menu up the world pass would
 	//    only add CPU cost the menu is going to overdraw anyway.
 	//    The menu's own Draw fires in step 5b below.
-	if (!menuActive || demoActive) && r.Pre2DDraw != nil {
+	hasScene := rend.HasScene()
+	if (!menuActive || demoActive) && hasScene {
 		viewOrigin := viewOriginFromState(r.Client)
-		if err := r.Pre2DDraw(r.FrameBuffer, viewOrigin, r.ViewAngles); err != nil {
+		if err := rend.DrawScene(r.FrameBuffer, viewOrigin, r.ViewAngles); err != nil {
 			return err
 		}
 	}
+	// Whatever part of the scene the renderer did not attribute itself
+	// (world / models / 2D) is counted as world.
+	r.Timer.Mark(render.StageWorld)
 
 	// 5b) Menu overlay. When the menu is up, Menu.Draw paints the
 	//     full-screen overlay into r.FrameBuffer; Compose2D's
@@ -596,13 +629,17 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		NotifyLifetime:     r.NotifyLifetime,
 		MaxNotifyRows:      r.MaxNotifyRows,
 		BackgroundIdx:      r.BackgroundIdx,
-		SkipBackgroundFill: r.Pre2DDraw != nil || menuActive,
+		SkipBackgroundFill: hasScene || menuActive,
 		CenterPrintText:    r.Client.CenterPrintText,
 		CenterPrintExpiry:  r.Client.CenterPrintExpiry,
 		Intermission:       r.Client.Intermission,
 		IntermissionLines:  intermissionLines(r.Client, nowSec),
 	}
-	if err := render.ExpandFrame(r.FrameBuffer, r.RGBA, ctx); err != nil {
+	if err := rend.Compose(r.FrameBuffer, ctx); err != nil {
+		return err
+	}
+	r.Timer.Mark(render.Stage2D)
+	if err := rend.Resolve(r.FrameBuffer, r.RGBA, ctx.Palette); err != nil {
 		return err
 	}
 
@@ -610,6 +647,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	if err := r.Backend.PresentFrame(r.RGBA, r.FrameBuffer.Width, r.FrameBuffer.Height); err != nil {
 		return err
 	}
+	r.Timer.Mark(render.StagePresent)
 
 	// 8+9) Audio (optional).
 	if r.SoundPool != nil && len(r.MixBuffer) > 0 {
@@ -639,6 +677,8 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		}
 	}
 
+	// Audio is in the frame's Work time but in no stage.
+	r.Timer.End()
 	return nil
 }
 

@@ -147,6 +147,16 @@ type SetupOpts struct {
 	// nil = no overlay; the existing PakFS-then-embedmusic chain is
 	// preserved verbatim.
 	MusicOverlayFS fs.FS
+
+	// Renderer selects the renderer: [render.KindSoft] (also the
+	// default, "") or [render.KindGPU]. The GPU renderer is not
+	// implemented yet; asking for it falls back to software and the log
+	// says why. Any other value is an error.
+	Renderer render.Kind
+
+	// FrameTimer, when non-nil, records each frame's sim / world /
+	// models / 2D / present times (see [render.FrameTimer]).
+	FrameTimer *render.FrameTimer
 }
 
 // runtimeState carries the per-call mutable knobs the Pre2DDraw closure
@@ -183,6 +193,10 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 	mapSlug := opts.MapSlug
 	if mapSlug == "" {
 		mapSlug = "start"
+	}
+	rendererKind, err := render.ParseKind(string(opts.Renderer))
+	if err != nil {
+		return nil, fmt.Errorf("runner.Setup: %w", err)
 	}
 
 	state := &runtimeState{
@@ -452,6 +466,7 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("setupRenderer: %w", err)
 	}
+	installRenderer(runner, rendererKind, opts.FrameTimer, logf)
 
 	// 12c. Menu.
 	menuAssets, menuLoaded, menuTotal := loadMenuAssets(pakFS, logf)
@@ -484,6 +499,20 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 
 	logf("entering RunUntilQuit (realHost=%v)", realHost != nil)
 	return runner, nil
+}
+
+// installRenderer puts the renderer for kind and the frame timer on r.
+// The software renderer draws the scene through r.Pre2DDraw, the
+// closure setupRenderer wired; no GPU renderer exists yet, so asking
+// for one falls back to software and logs why.
+func installRenderer(r *runloop.Runner, kind render.Kind, timer *render.FrameTimer, logf func(string, ...any)) {
+	rend, fallback := render.Choose(kind, &render.Software{Scene: r.Pre2DDraw}, nil)
+	if fallback != nil {
+		logf("renderer %q unavailable (%v) -- using %q", kind, fallback, rend.Kind())
+	}
+	r.Renderer = rend
+	r.Timer = timer
+	logf("renderer: %s", rend.Kind())
 }
 
 // changelevelHostFramer wraps an [enginehost.Host] so the per-tic
