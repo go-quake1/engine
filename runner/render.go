@@ -669,6 +669,8 @@ func setupRenderer(opts setupRendererOpts) error {
 			}
 		}
 
+		runner.Timer.Mark(render.StageWorld)
+
 		// Per-tic projectile trail emission.
 		trailNow := runner.Client.MsgTime
 		if realHost != nil && runner.ParticlePool != nil {
@@ -928,6 +930,8 @@ func setupRenderer(opts setupRendererOpts) error {
 				frame, missiles, spritesDrawn, tempSpritePool.NumAlive(now))
 		}
 
+		runner.Timer.Mark(render.StageModels)
+
 		if sbarAssets != nil {
 			if err := render.DrawSBar(fb, runner.Client, sbarAssets); err != nil {
 				if frame%60 == 0 {
@@ -935,6 +939,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				}
 			}
 		}
+		runner.Timer.Mark(render.Stage2D)
 		return nil
 	}
 	return nil

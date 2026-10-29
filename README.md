@@ -165,6 +165,26 @@ synthetic-asset bootstrap) on any OCI failure, so an unreachable
 registry never aborts the boot — it just degrades to the local
 default. See `engine/ociassets/` for the package + tests.
 
+## Renderers and frame timing
+
+Each frame goes through `render.Renderer`: the 3D scene, the 2D
+layers, then the RGBA resolve. The software renderer (`soft`) is the
+default and the fallback. A WebGPU renderer (`gpu`, GLQuake-style) is
+planned; until it lands, asking for `gpu` runs `soft` and the log says
+why. `runner.SetupOpts.Renderer` selects it; the wasmbox client reads
+`self.__quake_renderer` (`"soft"` or `"gpu"`) in its worker.
+
+`render.FrameTimer` records where each frame's time goes: `sim`,
+`world`, `models`, `2d` and `present`, plus the frame interval. The
+wasmbox client always measures:
+
+- `self.__quakeStats()` in the Quake worker returns the current
+  window as JSON: fps, and mean / p50 / p95 / p99 / max in ms for the
+  frame interval, the frame's work and each stage;
+- `self.__quakeStatsReset()` starts a new window;
+- every 10 s the worker console gets a `frame stats {...}` line with
+  the window just finished.
+
 ## Provable test protocol (inherited)
 
 Every Quake phase inherits the four-gate protocol shipped with DOOM
