@@ -119,7 +119,20 @@ task build-wasm   # compiles cmd/quake-wasm -> cmd/quake-wasm/web/quake.wasm
 task serve-wasm   # binds localhost:8080 to cmd/quake-wasm/web/
 ```
 
-then open `http://localhost:8080/` in any modern browser. `task wasm`
+then open `http://localhost:8080/` in any modern browser.
+
+Inside the [wasmbox](https://github.com/wasmdesk/wasmbox) desktop
+(`cmd/quake-wasmbox`, `backend/wasmbox`) Quake runs in a Web Worker, which has
+no `AudioContext`. There the mixer output (11025 Hz stereo) is written as float32
+PCM into a lock-free SharedArrayBuffer ring
+([`github.com/wasmdesk/wasmbox/audioring`](https://github.com/wasmdesk/wasmbox/tree/main/audioring),
+`RingAudio`), and the wasmbox page plays it from an AudioWorklet, resampling it
+and resuming on the first click or key. The ring is 1024 frames (93 ms); frames
+that do not fit are dropped, never blocking the game loop. `WebAudio` stays as the
+fallback when the ring is refused. wasmbox's `test/probe-audio.mjs` checks it in
+headless Chromium against the real client, with a planted negative.
+
+`task wasm`
 chains both. The single-step build is large (~180 MB; the Go runtime
 ships the full stdlib in wasm builds); first-load is a one-shot
 cache.
