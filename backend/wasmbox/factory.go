@@ -106,8 +106,16 @@ func NewClient(title string, width, height int) (*Backend, error) {
 	// frame). Pass the concrete value only when the constructor actually
 	// succeeded; otherwise leave the interface genuinely nil so the
 	// silent-drop path engages.
+	//
+	// Under the wasmbox compositor the sound goes through the relay: the
+	// worker has no usable AudioContext, so the engine's mixer output is
+	// written into a SharedArrayBuffer ring that the compositor page plays
+	// from an AudioWorklet (see RingAudio). WebAudio stays as the fallback
+	// for a host that refuses the ring.
 	var audio AudioDevice
-	if wa, err := NewWebAudio(); err == nil && wa != nil {
+	if ra, err := NewRingAudio(reply.windowID); err == nil && ra != nil {
+		audio = ra
+	} else if wa, err := NewWebAudio(); err == nil && wa != nil {
 		audio = wa
 	}
 
