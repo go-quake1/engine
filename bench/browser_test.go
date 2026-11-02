@@ -33,7 +33,11 @@ func TestHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := make(chan posted, 1)
-	h := newHandler([]string{"quake-bench", "run"}, wasm, exec, got)
+	extra := filepath.Join(dir, "x.dat")
+	if err := os.WriteFile(extra, []byte("extra"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandler([]string{"quake-bench", "run"}, wasm, exec, got, map[string]string{"/x.dat": extra})
 	do := func(method, path string, body io.Reader, hdr ...string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, body)
 		for i := 0; i+1 < len(hdr); i += 2 {
@@ -56,6 +60,9 @@ func TestHandler(t *testing.T) {
 	}
 	if w := do("GET", "/wasm_exec.js", nil); w.Body.String() != "// js" {
 		t.Errorf("wasm_exec = %q", w.Body.String())
+	}
+	if w := do("GET", "/x.dat", nil); w.Body.String() != "extra" {
+		t.Errorf("served file = %q", w.Body.String())
 	}
 	if w := do("GET", "/nope", nil); w.Code != http.StatusNotFound {
 		t.Errorf("unknown path = %d", w.Code)
