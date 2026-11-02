@@ -184,8 +184,31 @@ Each frame goes through `render.Renderer`: the 3D scene, the 2D
 layers, then the RGBA resolve. The software renderer (`soft`) is the
 default and the fallback. A WebGPU renderer (`gpu`, GLQuake-style) is
 planned; until it lands, asking for `gpu` runs `soft` and the log says
-why. `runner.SetupOpts.Renderer` selects it; the wasmbox client reads
+why. `webgpu-present` is the software rasterizer with a GPU presenter (see
+below). `runner.SetupOpts.Renderer` selects it; the wasmbox client reads
 `self.__quake_renderer` (`"soft"` or `"gpu"`) in its worker.
+
+### WebGPU presenter (standalone js/wasm build)
+
+`cmd/quake-wasm` presents through WebGPU when the browser has a hardware
+adapter (`render.KindWebGPUPresent`, package `render/webgpupresent`, on
+[go-gfx/webgpu](https://github.com/go-gfx/webgpu)). The software
+rasterizer still draws the 8-bit frame; the index buffer goes to an
+`r8uint` texture, the palette to a 256x1 texture, and a fragment shader
+does the palette lookup and the integer scaling to the canvas, with one
+`Recorder` submit per frame. The CPU no longer expands the frame to RGBA
+and never calls `putImageData`. With no adapter, or only a software one
+(SwiftShader), the page keeps the Canvas2D path; add `?present=soft` to the
+page URL to force it. The wasmbox build is unchanged (it hands RGBA to the
+compositor).
+
+`cmd/quake-presentcheck` is the browser test: it reads the canvas back
+and compares every pixel with the CPU conversion (scale 1 and 3), and a
+planted wrong palette index must make it fail. Run it with
+`QUAKE_CHROMIUM=<chromium> QUAKE_PROFILE=<dir> QUAKE_REQUIRE_GPU=1 go test ./cmd/quake-presentcheck`.
+Only the BSP walk and the span filling are still on the CPU: moving the
+world to the GPU is the next step. Dated figures are in
+[docs/webgpu-present/](docs/webgpu-present/).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The
@@ -219,7 +242,10 @@ go run ./cmd/quake-bench baseline --rounds 5 --wasm bench.wasm \
 any round above `--max-load` (8), and gives up rather than print numbers
 if the load stays high. `--pak <pak0.pak>` measures a real level; without
 it the engine's procedural scene is used. Dated results are in
-[docs/baseline/](docs/baseline/).
+[docs/baseline/](docs/baseline/). `quake-bench present` interleaves three
+js/wasm configurations (the baseline, the software page path
+`canvas2d`, and `webgpu`) under the same load rules; a `webgpu` round
+refuses a fallback adapter, which is never a GPU measurement.
 
 ## Provable test protocol (inherited)
 

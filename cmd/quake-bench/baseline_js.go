@@ -9,3 +9,6 @@ import "github.com/spf13/cobra"
 
 // addBaseline is a no-op under js/wasm: the baseline driver runs natively.
 func addBaseline(*cobra.Command) {}
+
+// addPresent is a no-op under js/wasm too.
+func addPresent(*cobra.Command) {}

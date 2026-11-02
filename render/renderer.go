@@ -41,8 +41,10 @@ func ParseKind(s string) (Kind, error) {
 		return KindSoft, nil
 	case KindGPU:
 		return KindGPU, nil
+	case KindWebGPUPresent:
+		return KindWebGPUPresent, nil
 	}
-	return "", fmt.Errorf("%w: %q (want %q or %q)", ErrUnknownKind, s, KindSoft, KindGPU)
+	return "", fmt.Errorf("%w: %q (want %q, %q or %q)", ErrUnknownKind, s, KindSoft, KindGPU, KindWebGPUPresent)
 }
 
 // Renderer is the seam between the per-frame game loop
@@ -111,8 +113,9 @@ func (s *Software) Resolve(fb *FrameBuffer, dst []byte, pal *Palette) error {
 }
 
 // Choose returns the renderer to use for want. soft is the software
-// renderer, which is always the fallback; newGPU builds the GPU
-// renderer and may be nil while none is implemented.
+// renderer, which is always the fallback; newGPU builds the renderer of
+// the GPU kind asked for ([KindGPU] or [KindWebGPUPresent]) and may be
+// nil when none is wired.
 //
 // The second result is the reason a fallback happened (nil when want
 // was honoured). It is not a failure: the returned renderer is always
@@ -122,7 +125,7 @@ func Choose(want Kind, soft Renderer, newGPU func() (Renderer, error)) (Renderer
 	if soft == nil {
 		return nil, ErrNilSoftRenderer
 	}
-	if want != KindGPU {
+	if want != KindGPU && want != KindWebGPUPresent {
 		return soft, nil
 	}
 	if newGPU == nil {
