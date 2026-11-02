@@ -239,3 +239,44 @@ jobs:
               "/work/$bin" -test.v
             echo "::endgroup::"
           done
+
+  # The WebGPU presenter's pixel check, in a real Chromium: the canvas is
+  # read back and compared with the CPU conversion, and a planted wrong
+  # palette index must fail it. macOS must get a GPU adapter
+  # (QUAKE_REQUIRE_GPU fails the lane on a fallback adapter); Linux runs the
+  # same check on SwiftShader, which proves correctness, never a GPU.
+  # ubuntu-24.04, not -latest: browser support follows the webgpu lane.
+  browser:
+    name: browser (${{ matrix.lane }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { lane: 'macOS, GPU required', os: macos-latest, require: '1', args: '' }
+          - { lane: 'Linux, SwiftShader, correctness only', os: ubuntu-24.04, require: '0', args: '--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-angle=swiftshader' }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          check-latest: true
+      - run: go version
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+      - name: presenter check in Chromium
+        shell: bash
+        env:
+          QUAKE_CHROMIUM: ${{ steps.chrome.outputs.chrome-path }}
+          QUAKE_REQUIRE_GPU: ${{ matrix.require }}
+          QUAKE_CHROMIUM_ARGS: ${{ matrix.args }}
+        run: |
+          export QUAKE_PROFILE="$RUNNER_TEMP/chrome-profile"
+          mkdir -p "$QUAKE_PROFILE"
+          status=0
+          go test -count=1 -v ./cmd/quake-presentcheck/ > "$RUNNER_TEMP/browser.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/browser.log"
+          exit $status
