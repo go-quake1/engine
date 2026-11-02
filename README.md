@@ -198,6 +198,29 @@ wasmbox client always measures:
 - every 10 s the worker console gets a `frame stats {...}` line with
   the window just finished.
 
+### Baseline harness
+
+`cmd/quake-bench` (package `bench`) drives the full loop for a fixed
+number of frames on the deterministic demo-orbit camera, through the
+`Renderer` seam, and reports frame time per stage, the engine / renderer
+split and the heap allocations per frame. The same program runs natively
+and as js/wasm in headless Chromium, so the software renderer and any
+later renderer are measured identically:
+
+```sh
+go run ./cmd/quake-bench run --frames 600 --procs 1 --json
+GOOS=js GOARCH=wasm go build -o bench.wasm ./cmd/quake-bench
+go run ./cmd/quake-bench baseline --rounds 5 --wasm bench.wasm \
+    --chromium <headless chromium> --profile <durable dir>
+```
+
+`baseline` interleaves native and browser rounds (A B A B ...), reads the
+1-minute load (`uptime`) before and after each round, discards and redoes
+any round above `--max-load` (8), and gives up rather than print numbers
+if the load stays high. `--pak <pak0.pak>` measures a real level; without
+it the engine's procedural scene is used. Dated results are in
+[docs/baseline/](docs/baseline/).
+
 ## Provable test protocol (inherited)
 
 Every Quake phase inherits the four-gate protocol shipped with DOOM
