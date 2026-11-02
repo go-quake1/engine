@@ -51,7 +51,8 @@ type Presenter struct {
 	cfg        Config
 	outW, outH int
 	dev        *webgpu.Device
-	queue      *webgpu.Queue
+	attach     *webgpu.RenderPassColorAttachment
+	passDesc   webgpu.RenderPassDescriptor
 	surf       *webgpu.Surface
 	idx, pal   *webgpu.Texture
 	pipe       *webgpu.RenderPipeline
@@ -107,7 +108,6 @@ func New(ctx context.Context, cfg Config) (*Presenter, error) {
 
 func (p *Presenter) build(g *webgpu.GPU) error {
 	d := p.dev
-	p.queue = d.Queue()
 	var err error
 	sd := webgpu.SurfaceDescriptor{Width: p.outW, Height: p.outH}
 	if p.cfg.Canvas.Truthy() {
@@ -165,6 +165,9 @@ func (p *Presenter) build(g *webgpu.GPU) error {
 		return err
 	}
 	p.rec = d.NewRecorder()
+	// One pass descriptor for every frame: only the view changes.
+	p.attach = &webgpu.RenderPassColorAttachment{LoadOp: webgpu.LoadOpClear, StoreOp: webgpu.StoreOpStore}
+	p.passDesc = webgpu.RenderPassDescriptor{ColorAttachments: []*webgpu.RenderPassColorAttachment{p.attach}}
 	return nil
 }
 
@@ -176,34 +179,25 @@ func (p *Presenter) Adapter() webgpu.AdapterInfo { return p.info }
 func (p *Presenter) Frames() uint64 { return p.frames }
 
 // Present uploads the frame (and the palette when it changed) and draws
-// it: two queue writes and one Recorder submit.
+// it: the texture writes and the pass are one Recorder submit (one JS call).
 func (p *Presenter) Present(pixels []byte, width, height, pitch int, pal *render.Palette) error {
 	if width != p.cfg.Width || height != p.cfg.Height {
 		return ErrSize
 	}
+	p.rec.Reset()
 	if !p.palValid || *pal != p.palCache {
-		if err := p.queue.WriteTexture(webgpu.TexelCopyTextureInfo{Texture: p.pal}, PaletteRGBA(pal),
-			webgpu.TexelCopyBufferLayout{}, webgpu.Extent3D{Width: 256, Height: 1}); err != nil {
-			return err
-		}
+		p.rec.WriteTexture(webgpu.TexelCopyTextureInfo{Texture: p.pal}, PaletteRGBA(pal),
+			webgpu.TexelCopyBufferLayout{}, webgpu.Extent3D{Width: 256, Height: 1})
 		p.palCache, p.palValid = *pal, true
 	}
-	if err := p.queue.WriteTexture(webgpu.TexelCopyTextureInfo{Texture: p.idx}, pixels,
-		webgpu.TexelCopyBufferLayout{BytesPerRow: uint32(pitch)}, webgpu.Extent3D{Width: uint32(width), Height: uint32(height)}); err != nil {
-		return err
-	}
-	cur, err := p.surf.CurrentTexture()
+	p.rec.WriteTexture(webgpu.TexelCopyTextureInfo{Texture: p.idx}, pixels,
+		webgpu.TexelCopyBufferLayout{BytesPerRow: uint32(pitch)}, webgpu.Extent3D{Width: uint32(width), Height: uint32(height)})
+	view, err := p.surf.CurrentView()
 	if err != nil {
 		return err
 	}
-	view, err := cur.CreateView(nil)
-	if err != nil {
-		return err
-	}
-	p.rec.Reset()
-	pass := p.rec.BeginRenderPass(webgpu.RenderPassDescriptor{ColorAttachments: []*webgpu.RenderPassColorAttachment{
-		{View: view, LoadOp: webgpu.LoadOpClear, StoreOp: webgpu.StoreOpStore},
-	}})
+	p.attach.View = view
+	pass := p.rec.BeginRenderPass(p.passDesc)
 	pass.SetPipeline(p.pipe)
 	pass.SetBindGroup(0, p.group)
 	pass.Draw(3, 1, 0, 0)
