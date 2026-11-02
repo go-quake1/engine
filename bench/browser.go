@@ -24,7 +24,7 @@ const maxResultBytes = 1 << 20
 
 // Args returns the command line a `quake-bench run` takes for cfg.
 func (c Config) Args() []string {
-	return []string{
+	a := []string{
 		"run", "--json",
 		"--frames", strconv.Itoa(c.Frames),
 		"--warmup", strconv.Itoa(c.Warmup),
@@ -33,6 +33,13 @@ func (c Config) Args() []string {
 		"--renderer", c.Renderer,
 		"--map", c.Map,
 	}
+	if c.Present != PresentNone {
+		a = append(a, "--present", c.Present)
+	}
+	if c.RequireGPU {
+		a = append(a, "--require-gpu")
+	}
+	return a
 }
 
 // Launch starts a browser on url and returns a function that stops it.
@@ -87,26 +94,38 @@ var listen = func() (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:
 // starts the browser through launch, and returns the Result the page
 // posts back, with the browser's user agent in Browser.
 func RunInBrowser(ctx context.Context, wasmPath, execPath string, cfg Config, launch Launch) (Result, error) {
-	got := make(chan posted, 1)
-	ln, err := listen()
+	out, ua, err := RunProgramInBrowser(ctx, wasmPath, execPath, append([]string{"quake-bench"}, cfg.Args()...), launch)
 	if err != nil {
 		return Result{}, err
 	}
-	srv := &http.Server{Handler: newHandler(append([]string{"quake-bench"}, cfg.Args()...), wasmPath, execPath, got)}
+	res, err := ParseResult(out)
+	res.Browser = ua
+	return res, err
+}
+
+// RunProgramInBrowser serves the page and the js/wasm program at wasmPath
+// on a loopback port, runs it with argv in the browser started through
+// launch, and returns what it printed on standard output and the
+// browser's user agent. The page has a canvas#quake for the program.
+func RunProgramInBrowser(ctx context.Context, wasmPath, execPath string, argv []string, launch Launch) (stdout, userAgent string, err error) {
+	got := make(chan posted, 1)
+	ln, err := listen()
+	if err != nil {
+		return "", "", err
+	}
+	srv := &http.Server{Handler: newHandler(argv, wasmPath, execPath, got)}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
 	stop, err := launch(ctx, "http://"+ln.Addr().String()+"/")
 	if err != nil {
-		return Result{}, err
+		return "", "", err
 	}
 	defer stop()
 	select {
 	case p := <-got:
-		res, err := ParseResult(p.body)
-		res.Browser = p.ua
-		return res, err
+		return p.body, p.ua, nil
 	case <-ctx.Done():
-		return Result{}, ctx.Err()
+		return "", "", ctx.Err()
 	}
 }

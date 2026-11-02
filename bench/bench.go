@@ -44,7 +44,51 @@ type Config struct {
 	Renderer string `json:"renderer"`
 	// Map is the map slug ("start" by default).
 	Map string `json:"map"`
+	// Present selects the display path (js/wasm only): "" discards the
+	// frame (the baseline), "canvas2d" is the software path of the
+	// standalone page (RGBA on the CPU, putImageData), "webgpu" is the
+	// GPU presenter (palette lookup and scaling in a fragment shader).
+	Present string `json:"present,omitempty"`
+	// RequireGPU makes a "webgpu" run fail on a fallback (software)
+	// adapter such as SwiftShader: that is never a GPU measurement.
+	RequireGPU bool `json:"require_gpu,omitempty"`
 }
+
+// Present paths of [Config].
+const (
+	PresentNone     = ""
+	PresentCanvas2D = "canvas2d"
+	PresentWebGPU   = "webgpu"
+)
+
+// PresentSetup is a display path a browser build wires (see present_js.go).
+type PresentSetup struct {
+	// Renderer builds the renderer over the scene closure; nil keeps the
+	// software renderer.
+	Renderer func(scene func(*render.FrameBuffer, [3]float32, [3]float32) error) (render.Renderer, error)
+	// Present replaces the null display's PresentFrame; nil discards.
+	Present func(rgba []byte, w, h int) error
+	// Wait blocks until the display has finished every frame handed to
+	// it (the GPU is idle); nil when presenting is synchronous.
+	Wait func() error
+	// Adapter names the GPU adapter and Fallback says it is a software
+	// one; empty for a path without a GPU.
+	Adapter  string
+	Fallback bool
+	// Close releases the path.
+	Close func()
+}
+
+// ErrNoPresent is returned by [Run] for a present path this build cannot
+// provide (every path needs js/wasm in a browser).
+var ErrNoPresent = errors.New("bench: the present path needs the js/wasm build in a browser")
+
+// ErrFallbackAdapter is returned when Config.RequireGPU is set and the
+// adapter is a software one.
+var ErrFallbackAdapter = errors.New("bench: a fallback (software) adapter where a GPU is required")
+
+// newPresent builds the display path of cfg.Present; present_js.go sets it.
+var newPresent = func(Config) (*PresentSetup, error) { return nil, ErrNoPresent }
 
 // DefaultConfig is the canonical run: 320x200, 600 frames after 60 of
 // warm-up, software renderer.
@@ -53,7 +97,7 @@ func DefaultConfig() Config {
 }
 
 // ErrConfig is returned by [Run] for a config that cannot run.
-var ErrConfig = errors.New("bench: frames and the framebuffer size must be positive, warmup not negative")
+var ErrConfig = errors.New("bench: frames and the framebuffer size must be positive, warmup not negative, present one of none, canvas2d, webgpu")
 
 // Split is the engine / renderer share of the mean frame work.
 type Split struct {
@@ -76,6 +120,14 @@ type Result struct {
 	// measured frames, divided by the frame count.
 	AllocsPerFrame float64 `json:"allocs_per_frame"`
 	BytesPerFrame  float64 `json:"bytes_per_frame"`
+	// WallMSPerFrame is the wall time of the measured frames plus the
+	// wait for the display to finish them, over the frame count: the
+	// end-to-end cost, GPU included (the frame timer sees the CPU side).
+	WallMSPerFrame float64 `json:"wall_ms_per_frame"`
+	// Adapter and AdapterFallback describe the GPU adapter of a webgpu
+	// run; a fallback adapter is software, not a GPU.
+	Adapter         string `json:"adapter,omitempty"`
+	AdapterFallback bool   `json:"adapter_fallback,omitempty"`
 }
 
 // nullBackend discards every frame and never asks to quit.
@@ -84,15 +136,22 @@ type nullBackend struct {
 	w, h    int
 	start   time.Time
 	pollErr error // a test hook: PollInput fails with it
+	// present, when set, takes the frame instead of discarding it.
+	present func(rgba []byte, w, h int) error
 }
 
 func (b *nullBackend) PollInput() (backend.InputSnapshot, error) {
 	return backend.InputSnapshot{}, b.pollErr
 }
 
-func (b *nullBackend) PresentFrame([]byte, int, int) error { return nil }
-func (b *nullBackend) Size() (int, int)                    { return b.w, b.h }
-func (b *nullBackend) Now() float64                        { return time.Since(b.start).Seconds() }
+func (b *nullBackend) PresentFrame(rgba []byte, w, h int) error {
+	if b.present != nil {
+		return b.present(rgba, w, h)
+	}
+	return nil
+}
+func (b *nullBackend) Size() (int, int) { return b.w, b.h }
+func (b *nullBackend) Now() float64     { return time.Since(b.start).Seconds() }
 
 // OpenPak opens path as a pak archive file; an empty path returns the
 // embedded pak, which is empty in a stock build (the engine then
@@ -132,7 +191,8 @@ func (emptyFS) Open(name string) (fs.File, error) {
 
 // Run measures cfg against pakFS. pakSource is recorded in the result.
 func Run(cfg Config, pakFS fs.FS, pakSource string) (Result, error) {
-	if cfg.Frames < 1 || cfg.Warmup < 0 || cfg.Width < 1 || cfg.Height < 1 {
+	if cfg.Frames < 1 || cfg.Warmup < 0 || cfg.Width < 1 || cfg.Height < 1 ||
+		(cfg.Present != PresentNone && cfg.Present != PresentCanvas2D && cfg.Present != PresentWebGPU) {
 		return Result{}, ErrConfig
 	}
 	return run(cfg, &nullBackend{w: cfg.Width, h: cfg.Height, start: time.Now()}, pakFS, pakSource)
@@ -155,12 +215,37 @@ func run(cfg Config, be *nullBackend, pakFS fs.FS, pakSource string) (Result, er
 	// draws through the scene closure game.Build installed.
 	r.Renderer, _ = render.Choose(kind, &render.Software{Scene: r.Pre2DDraw}, nil)
 	r.Timer = timer
+	var ps *PresentSetup
+	if cfg.Present != PresentNone {
+		if ps, err = newPresent(cfg); err != nil {
+			return Result{}, err
+		}
+		if ps.Close != nil {
+			defer ps.Close()
+		}
+		if cfg.RequireGPU && cfg.Present == PresentWebGPU && ps.Fallback {
+			return Result{}, ErrFallbackAdapter
+		}
+		be.present = ps.Present
+		if ps.Renderer != nil {
+			if r.Renderer, err = ps.Renderer(r.Pre2DDraw); err != nil {
+				return Result{}, err
+			}
+		}
+	}
 	var m0, m1 runtime.MemStats
+	var wall0 time.Time
 	for i := 0; i < cfg.Warmup+cfg.Frames; i++ {
 		if i == cfg.Warmup {
+			if ps != nil && ps.Wait != nil {
+				if err := ps.Wait(); err != nil {
+					return Result{}, err
+				}
+			}
 			timer.Reset()
 			runtime.GC()
 			runtime.ReadMemStats(&m0)
+			wall0 = time.Now()
 		}
 		if err := r.RunFrame(FrameDT, float32(i)*FrameDT); err != nil {
 			return Result{}, err
@@ -168,8 +253,14 @@ func run(cfg Config, be *nullBackend, pakFS fs.FS, pakSource string) (Result, er
 	}
 	runtime.ReadMemStats(&m1)
 	sum := render.Summarize(timer.Samples())
+	if ps != nil && ps.Wait != nil {
+		if err := ps.Wait(); err != nil {
+			return Result{}, err
+		}
+	}
+	wall := time.Since(wall0)
 	n := float64(cfg.Frames)
-	return Result{
+	res := Result{
 		Config:         cfg,
 		Pak:            pakSource,
 		Target:         runtime.GOOS + "/" + runtime.GOARCH,
@@ -179,7 +270,12 @@ func run(cfg Config, be *nullBackend, pakFS fs.FS, pakSource string) (Result, er
 		Split:          splitOf(sum),
 		AllocsPerFrame: float64(m1.Mallocs-m0.Mallocs) / n,
 		BytesPerFrame:  float64(m1.TotalAlloc-m0.TotalAlloc) / n,
-	}, nil
+		WallMSPerFrame: float64(wall) / float64(time.Millisecond) / n,
+	}
+	if ps != nil {
+		res.Adapter, res.AdapterFallback = ps.Adapter, ps.Fallback
+	}
+	return res, nil
 }
 
 // splitOf attributes the mean stage times to the engine (sim) and the

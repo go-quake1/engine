@@ -42,6 +42,7 @@ func RootCmd() *cobra.Command {
 	}
 	root.AddCommand(runCmd())
 	addBaseline(root)
+	addPresent(root)
 	return root
 }
 
@@ -84,6 +85,8 @@ func runCmd() *cobra.Command {
 	f.IntVar(&cfg.Height, "height", cfg.Height, "framebuffer height")
 	f.StringVar(&cfg.Renderer, "renderer", cfg.Renderer, "renderer: soft or gpu")
 	f.StringVar(&cfg.Map, "map", cfg.Map, "map slug")
+	f.StringVar(&cfg.Present, "present", cfg.Present, "display path (js/wasm): canvas2d or webgpu (default: none, the frame is discarded)")
+	f.BoolVar(&cfg.RequireGPU, "require-gpu", cfg.RequireGPU, "fail a webgpu run on a fallback (software) adapter")
 	f.StringVar(&pakPath, "pak", "", "pak0.pak to load (default: the embedded pak, empty = procedural assets)")
 	f.IntVar(&procs, "procs", 0, "GOMAXPROCS (0 = leave)")
 	f.BoolVar(&asJSON, "json", false, "print the result as JSON")

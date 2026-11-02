@@ -10,7 +10,7 @@ import (
 )
 
 func TestParseKind(t *testing.T) {
-	for in, want := range map[string]Kind{"": KindSoft, "soft": KindSoft, "gpu": KindGPU} {
+	for in, want := range map[string]Kind{"": KindSoft, "soft": KindSoft, "gpu": KindGPU, "webgpu-present": KindWebGPUPresent} {
 		got, err := ParseKind(in)
 		if err != nil || got != want {
 			t.Errorf("ParseKind(%q) = %q, %v; want %q", in, got, err, want)
@@ -46,6 +46,12 @@ func TestChoose(t *testing.T) {
 	g := &fakeGPU{}
 	if r, err := Choose(KindGPU, soft, func() (Renderer, error) { return g, nil }); r != g || err != nil {
 		t.Fatalf("gpu: %v, %v", r, err)
+	}
+	if r, err := Choose(KindWebGPUPresent, soft, nil); r != soft || !errors.Is(err, ErrGPUNotImplemented) {
+		t.Fatalf("webgpu-present, no factory: %v, %v", r, err)
+	}
+	if r, err := Choose(KindWebGPUPresent, soft, func() (Renderer, error) { return g, nil }); r != g || err != nil {
+		t.Fatalf("webgpu-present: %v, %v", r, err)
 	}
 }
 
