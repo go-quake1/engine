@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -28,6 +29,13 @@ func TestStubMainRefusesToRunNatively(t *testing.T) {
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
+}
+
+func tail(s string, n int) string {
+	if len(s) > n {
+		return s[len(s)-n:]
+	}
+	return s
 }
 
 type verdict struct {
@@ -63,11 +71,14 @@ func runInBrowser(t *testing.T, args ...string) verdict {
 		t.Fatal(err)
 	}
 	execJS := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
+	var browserLog bytes.Buffer
 	extra := strings.Fields(os.Getenv("QUAKE_CHROMIUM_ARGS"))
 	launch := func(ctx context.Context, url string) (func(), error) {
 		a := append([]string{"--headless", "--no-sandbox", "--enable-unsafe-webgpu"}, extra...)
 		a = append(a, "--no-first-run", "--user-data-dir="+profile, url)
+		a = append([]string{"--enable-logging=stderr"}, a...)
 		c := exec.CommandContext(ctx, chrome, a...)
+		c.Stderr = &browserLog
 		if err := c.Start(); err != nil {
 			return nil, err
 		}
@@ -81,6 +92,7 @@ func runInBrowser(t *testing.T, args ...string) verdict {
 	}
 	out, ua, err := bench.RunProgramInBrowser(ctx, wasm, execJS, argv, launch)
 	if err != nil {
+		t.Logf("browser log (tail):\n%s", tail(browserLog.String(), 4000))
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")

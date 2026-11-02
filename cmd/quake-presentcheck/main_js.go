@@ -90,6 +90,7 @@ func check(corrupt, requireGPU bool) verdict {
 			return v
 		}
 		info := p.Adapter()
+		fmt.Fprintf(os.Stderr, "presentcheck: scale %d: device up on %q fallback %v\n", scale, info.Description, info.Fallback)
 		v.Adapter, v.Fallback = fmt.Sprintf("%s %s %s", info.Vendor, info.Architecture, info.Description), info.Fallback
 		// Three frames; the palette changes between the second and the
 		// third (the presenter must re-upload it) and not before.
@@ -110,6 +111,7 @@ func check(corrupt, requireGPU bool) verdict {
 				v.Detail = fmt.Sprintf("present: %v", err)
 				return v
 			}
+			fmt.Fprintf(os.Stderr, "presentcheck: scale %d frame %d presented\n", scale, n)
 			got, gw, gh, err := p.Readback()
 			if err != nil {
 				v.Detail = fmt.Sprintf("readback: %v", err)
