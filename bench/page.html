@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>quake-bench</title>
+<script src="wasm_exec.js"></script>
+<script>
+// Runs bench.wasm (`quake-bench run --json ...`), captures its stdout and
+// posts it back to the harness that served this page.
+(async () => {
+  const go = new Go();
+  go.argv = __ARGV__;
+  let out = "";
+  const dec = new TextDecoder();
+  const write = globalThis.fs.writeSync;
+  globalThis.fs.writeSync = function (fd, buf) {
+    if (fd === 1) { out += dec.decode(buf); return buf.length; }
+    return write.apply(this, arguments);
+  };
+  const post = (body) => fetch("/result", { method: "POST", body, headers: { "X-UA": navigator.userAgent } });
+  try {
+    const r = await WebAssembly.instantiateStreaming(fetch("bench.wasm"), go.importObject);
+    await go.run(r.instance);
+    await post(out);
+  } catch (e) {
+    await post("ERROR " + e);
+  }
+})();
+</script>

@@ -9,11 +9,16 @@ require (
 	github.com/go-virtio/sound v0.0.0
 	github.com/go-virtio/validate v0.1.0
 	github.com/jfreymuth/oggvorbis v1.0.5
+	github.com/spf13/cobra v1.10.2
 	github.com/usbarmory/tamago v1.27.1
 	github.com/wasmdesk/wasmbox/audioring v0.1.0
 )
 
-require github.com/jfreymuth/vorbis v1.0.2 // indirect
+require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jfreymuth/vorbis v1.0.2 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+)
 
 replace (
 	github.com/go-virtio/common => ../../go-virtio/common
