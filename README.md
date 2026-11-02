@@ -210,6 +210,20 @@ Only the BSP walk and the span filling are still on the CPU: moving the
 world to the GPU is the next step. Dated figures are in
 [docs/webgpu-present/](docs/webgpu-present/).
 
+### The BSP world on the GPU
+
+`render/gpuworld` draws the BSP world (PVS-selected faces, base textures,
+lightmaps through the colormap) on the GPU into an 8-bit `r8uint` target of
+palette indices, the same indices the software renderer writes, so the
+presenter above can display it unchanged. `worldview` is the software
+reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
+`cmd/quake-worldcheck` compares the two on 16 fixed e1m1 views on a real GPU
+(tolerance 2.5 % of pixels not explained by a one-pixel shift; 1.52 %
+measured). They need the shareware `pak0.pak`, which is never in the
+repository: point `QUAKE_PAK` at it. Sky, water, alias models, dynamic lights and
+animated lightstyles are later steps. Figures and where the two differ:
+[docs/webgpu-world/](docs/webgpu-world/).
+
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The
 wasmbox client always measures:

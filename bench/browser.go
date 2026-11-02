@@ -53,7 +53,7 @@ type posted struct{ body, ua string }
 // result the page POSTs to /result into got (a second POST is dropped).
 // Every response carries COOP/COEP headers so the browser's timer
 // resolution is the finest it offers.
-func newHandler(argv []string, wasmPath, execPath string, got chan<- posted) http.Handler {
+func newHandler(argv []string, wasmPath, execPath string, got chan<- posted, files ...map[string]string) http.Handler {
 	js, _ := json.Marshal(argv)
 	page := strings.Replace(pageHTML, "__ARGV__", string(js), 1)
 	mux := http.NewServeMux()
@@ -65,6 +65,11 @@ func newHandler(argv []string, wasmPath, execPath string, got chan<- posted) htt
 		w.Header().Set("Content-Type", "application/wasm")
 		http.ServeFile(w, r, wasmPath)
 	})
+	for _, m := range files {
+		for url, path := range m {
+			mux.HandleFunc("GET "+url, func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, path) })
+		}
+	}
 	mux.HandleFunc("/wasm_exec.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")
 		http.ServeFile(w, r, execPath)
@@ -108,12 +113,18 @@ func RunInBrowser(ctx context.Context, wasmPath, execPath string, cfg Config, la
 // launch, and returns what it printed on standard output and the
 // browser's user agent. The page has a canvas#quake for the program.
 func RunProgramInBrowser(ctx context.Context, wasmPath, execPath string, argv []string, launch Launch) (stdout, userAgent string, err error) {
+	return RunProgramInBrowserWith(ctx, wasmPath, execPath, argv, nil, launch)
+}
+
+// RunProgramInBrowserWith is [RunProgramInBrowser] that also serves local
+// files to the page: files maps a URL path ("/pak0.pak") to a file path.
+func RunProgramInBrowserWith(ctx context.Context, wasmPath, execPath string, argv []string, files map[string]string, launch Launch) (stdout, userAgent string, err error) {
 	got := make(chan posted, 1)
 	ln, err := listen()
 	if err != nil {
 		return "", "", err
 	}
-	srv := &http.Server{Handler: newHandler(argv, wasmPath, execPath, got)}
+	srv := &http.Server{Handler: newHandler(argv, wasmPath, execPath, got, files)}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
