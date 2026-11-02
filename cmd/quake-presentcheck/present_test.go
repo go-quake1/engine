@@ -60,6 +60,10 @@ func runInBrowser(t *testing.T, args ...string) verdict {
 	if chrome == "" || profile == "" {
 		t.Skip("QUAKE_CHROMIUM and QUAKE_PROFILE not set: no browser to run in")
 	}
+	// QUAKE_CHROMIUM may be a glob (Playwright's install path has a revision).
+	if m, err := filepath.Glob(chrome); err == nil && len(m) > 0 {
+		chrome = m[0]
+	}
 	wasm := filepath.Join(t.TempDir(), "check.wasm")
 	build := exec.Command("go", "build", "-o", wasm, ".")
 	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")

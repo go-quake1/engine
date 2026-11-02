@@ -264,13 +264,26 @@ jobs:
           check-latest: true
       - run: go version
       - uses: browser-actions/setup-chrome@v2
+        if: runner.os == 'Linux'
         id: chrome
         with:
           chrome-version: stable
+      # macOS: Chrome for Testing from Playwright (the setup-chrome one cannot
+      # start its child processes on the hosted runner: mach port rendezvous
+      # failures, measured on this lane). The test resolves the glob.
+      - uses: actions/setup-node@v7
+        if: runner.os == 'macOS'
+        with: { node-version: 22 }
+      - name: Playwright Chromium (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pw" >> "$GITHUB_ENV"
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/pw" npx -y playwright@1.57.0 install chromium
       - name: presenter check in Chromium
         shell: bash
         env:
-          QUAKE_CHROMIUM: ${{ steps.chrome.outputs.chrome-path }}
+          QUAKE_CHROMIUM: ${{ runner.os == 'macOS' && format('{0}/pw/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', runner.temp) || steps.chrome.outputs.chrome-path }}
           QUAKE_REQUIRE_GPU: ${{ matrix.require }}
           QUAKE_CHROMIUM_ARGS: ${{ matrix.args }}
         run: |
