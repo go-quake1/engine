@@ -153,6 +153,7 @@ var Columns = []Column{
 	{"engine / frame (ms)", func(r Result) float64 { return r.Split.EngineMS }},
 	{"renderer / frame (ms)", func(r Result) float64 { return r.Split.RendererMS }},
 	{"engine share (%)", func(r Result) float64 { return r.Split.EnginePercent }},
+	{"wall / frame to display idle (ms)", func(r Result) float64 { return r.WallMSPerFrame }},
 	{"allocs / frame", func(r Result) float64 { return r.AllocsPerFrame }},
 	{"bytes / frame", func(r Result) float64 { return r.BytesPerFrame }},
 }
