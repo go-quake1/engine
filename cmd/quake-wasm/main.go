@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"strings"
 	"syscall/js"
 	"time"
 
@@ -47,6 +48,7 @@ import (
 	"github.com/go-quake1/engine/model"
 	"github.com/go-quake1/engine/ociassets"
 	"github.com/go-quake1/engine/render"
+	"github.com/go-quake1/engine/render/webgpupresent"
 	"github.com/go-quake1/engine/runloop"
 	engineserver "github.com/go-quake1/engine/server"
 	"github.com/go-quake1/engine/vfs"
@@ -103,11 +105,11 @@ func run() error {
 	//    + the performance.now clock. Audio failures (e.g. the
 	//    user hasn't gestured yet so AudioContext can't construct)
 	//    degrade to silent rather than abort.
-	be, err := wasm.NewDefault("#quake", fbWidth, fbHeight)
+	be, gpu, err := newBackend()
 	if err != nil {
-		return fmt.Errorf("wasm.NewDefault: %w", err)
+		return fmt.Errorf("backend: %w", err)
 	}
-	logf("backend up -- canvas=#quake size=%dx%d", fbWidth, fbHeight)
+	logf("backend up -- canvas=#quake size=%dx%d presenter=%s", fbWidth, fbHeight, presenterName(gpu))
 
 	// 2. Try the OCI registry FIRST when an OCIReference has been
 	//    baked in via -ldflags. Streaming the pak + music tracks on
@@ -181,6 +183,15 @@ func run() error {
 	if err := setupSynthRenderer(runner); err != nil {
 		logf("setupSynthRenderer skipped: %v -- 2D-only fallback", err)
 	}
+	if gpu != nil {
+		// The software rasterizer still draws the 8-bit frame; the GPU
+		// does the palette lookup and the scaling (no CPU RGBA expansion).
+		rend, err := render.NewPresentRenderer(runner.Pre2DDraw, gpu)
+		if err != nil {
+			return fmt.Errorf("presenter: %w", err)
+		}
+		runner.Renderer = rend
+	}
 
 	// 7. Surface a runtime-visible "ready" badge on the page so the
 	//    user knows the wasm payload is alive even before the first
@@ -205,6 +216,77 @@ func run() error {
 	//    the blocking loop) -- minus the explicit dt clamp, which the
 	//    runner's MinFrameTime fallback handles inside RunFrame.
 	return runUntilQuitYielding(runner)
+}
+
+// gpuFramebuffer is the wasm backend's framebuffer when the WebGPU
+// presenter shows the frame: the renderer presents it itself
+// (render.PresentRenderer.Resolve), so the RGBA the runner hands to
+// PresentFrame is not used.
+type gpuFramebuffer struct{ w, h int }
+
+func (f gpuFramebuffer) PresentRGBA([]byte) error { return nil }
+func (f gpuFramebuffer) Width() int               { return f.w }
+func (f gpuFramebuffer) Height() int              { return f.h }
+
+func presenterName(gpu *webgpupresent.Presenter) string {
+	if gpu == nil {
+		return "canvas2d (software)"
+	}
+	info := gpu.Adapter()
+	return fmt.Sprintf("webgpu (%s %s)", info.Vendor, info.Architecture)
+}
+
+// newBackend builds the browser backend. It tries the WebGPU presenter
+// on canvas#quake first (add ?present=soft to the page URL to skip it)
+// and keeps the Canvas2D software path as the fallback when no adapter
+// is available, the adapter is a software one, or anything in the
+// presenter's setup fails. The second result is nil on the fallback.
+func newBackend() (*wasm.Backend, *webgpupresent.Presenter, error) {
+	doc := js.Global().Get("document")
+	canvas := doc.Call("querySelector", "#quake")
+	soft := strings.Contains(js.Global().Get("location").Get("search").String(), "present=soft")
+	if canvas.Truthy() && !soft {
+		gpu, err := newGPUPresenter(canvas)
+		if err == nil {
+			au, aerr := wasm.NewWebAudio()
+			if aerr != nil {
+				au = nil
+			}
+			var audio wasm.AudioDevice
+			if au != nil {
+				audio = au
+			}
+			be, err := wasm.New(gpuFramebuffer{fbWidth, fbHeight}, wasm.NewDOMInput(canvas), audio, wasm.PerformanceNow())
+			return be, gpu, err
+		}
+		logf("webgpu presenter unavailable: %v -- Canvas2D software path", err)
+		// transferControlToOffscreen may have taken the canvas's context:
+		// continue on a fresh element of the same id and style.
+		fresh := canvas.Call("cloneNode", false)
+		canvas.Call("replaceWith", fresh)
+	}
+	be, err := wasm.NewDefault("#quake", fbWidth, fbHeight)
+	return be, nil, err
+}
+
+// newGPUPresenter hands canvas#quake to WebGPU, scaled up by the largest
+// integer that fits its CSS size (the shader does the scaling).
+func newGPUPresenter(canvas js.Value) (*webgpupresent.Presenter, error) {
+	scale := 1
+	dpr := js.Global().Get("devicePixelRatio").Float()
+	if dpr < 1 {
+		dpr = 1
+	}
+	cw, ch := canvas.Get("clientWidth").Float()*dpr, canvas.Get("clientHeight").Float()*dpr
+	for float64((scale+1)*fbWidth) <= cw && float64((scale+1)*fbHeight) <= ch {
+		scale++
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return webgpupresent.New(ctx, webgpupresent.Config{
+		Width: fbWidth, Height: fbHeight, OutWidth: fbWidth * scale, OutHeight: fbHeight * scale,
+		Canvas: canvas.Call("transferControlToOffscreen"),
+	})
 }
 
 // runUntilQuitYielding is the GOOS=js cmd-side equivalent of
