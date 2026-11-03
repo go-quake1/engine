@@ -61,6 +61,7 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 		{Binding: 0, Visibility: webgpu.ShaderStageVertex | webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeUniform}},
 		{Binding: 1, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
 		{Binding: 2, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
+		{Binding: 3, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 	}})
 	if err != nil {
 		return nil, err
@@ -69,8 +70,16 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 	if err != nil {
 		return nil, err
 	}
+	ftab := geo.FaceTab
+	if len(ftab) == 0 {
+		ftab = make([]byte, 64)
+	}
+	fb, err := buf(label+" faces", ftab, webgpu.BufferUsageStorage)
+	if err != nil {
+		return nil, err
+	}
 	if s.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
-		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: tv}, {Binding: 2, TextureView: r.cmView},
+		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: tv}, {Binding: 2, TextureView: r.cmView}, {Binding: 3, Buffer: fb},
 	}}); err != nil {
 		return nil, err
 	}
@@ -84,6 +93,7 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 			{Format: webgpu.VertexFormatFloat32x3, Offset: 0, ShaderLocation: 0},
 			{Format: webgpu.VertexFormatFloat32x2, Offset: 12, ShaderLocation: 1},
 			{Format: webgpu.VertexFormatUint32x4, Offset: 20, ShaderLocation: 2},
+			{Format: webgpu.VertexFormatUint32, Offset: 36, ShaderLocation: 3},
 		}}}},
 		Primitive: webgpu.PrimitiveState{Topology: webgpu.PrimitiveTopologyTriangleList, CullMode: webgpu.CullModeNone},
 		Fragment:  &webgpu.FragmentState{Module: mod, EntryPoint: entry, Targets: []webgpu.ColorTargetState{{Format: webgpu.TextureFormatR8Uint}}},

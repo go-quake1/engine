@@ -11,31 +11,26 @@ import (
 	"github.com/go-quake1/engine/render"
 )
 
-// TestTurbShaderTableIsTheEngines parses the table back out of the shader
-// text: it must be the engine's, bit for bit, with every literal a float.
-func TestTurbShaderTableIsTheEngines(t *testing.T) {
+// TestTurbShaderTableIsQuakes parses sintable back out of the shader text:
+// it must be the port's table, entry for entry.
+func TestTurbShaderTableIsQuakes(t *testing.T) {
 	src := TurbShaderWGSL()
-	i := strings.Index(src, "array<f32, 256>(")
+	i := strings.Index(src, "array<i32, 256>(")
 	if i < 0 {
 		t.Fatal("no table in the shader")
 	}
-	rest := src[i+len("array<f32, 256>("):]
-	body, _, ok := strings.Cut(rest, ");")
+	body, _, ok := strings.Cut(src[i+len("array<i32, 256>("):], ");")
 	if !ok {
 		t.Fatal("table not closed")
 	}
 	got := strings.Split(body, ", ")
-	want := render.TurbSinTable()
-	if len(got) != len(want) {
-		t.Fatalf("%d entries, want %d", len(got), len(want))
+	if len(got) != len(render.QuakeTurbTable) {
+		t.Fatalf("%d entries, want %d", len(got), len(render.QuakeTurbTable))
 	}
 	for k, s := range got {
-		if !strings.ContainsAny(s, ".e") {
-			t.Fatalf("entry %d %q is not a float literal", k, s)
-		}
-		f, err := strconv.ParseFloat(s, 32)
-		if err != nil || float32(f) != want[k] {
-			t.Fatalf("entry %d: %q, want %v", k, s, want[k])
+		n, err := strconv.Atoi(s)
+		if err != nil || int32(n) != render.QuakeTurbTable[k] {
+			t.Fatalf("entry %d: %q, want %d", k, s, render.QuakeTurbTable[k])
 		}
 	}
 	if !strings.Contains(src, "fsSky") || !strings.Contains(src, "fsTurb") {

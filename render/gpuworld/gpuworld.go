@@ -191,7 +191,7 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 }
 
 // UniformSize is the size of the frame uniform in bytes.
-const UniformSize = 80
+const UniformSize = 96
 
 // Uniform packs the frame uniform at time 0; see [UniformAt].
 func Uniform(v worldview.View, fov float32, width, height int) []byte {
@@ -217,6 +217,16 @@ func UniformAt(v worldview.View, fov float32, width, height int, t float32) []by
 	f(56, float32(width)/2/(float32(height)/2*tanHalf))
 	f(60, 1/float32(width))
 	f(64, t)
+	f(68, float32(width))
+	f(72, float32(height))
+	// the viewer's position: view maps p to R p + T, so it is -R^T T.
+	for i := 0; i < 3; i++ {
+		var o float32
+		for k := 0; k < 3; k++ {
+			o -= view.R[k][i] * view.T[k]
+		}
+		f(80+4*i, o)
+	}
 	return b
 }
 

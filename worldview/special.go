@@ -28,6 +28,14 @@ type SpecialFace struct {
 	Name  string
 	Tex   *render.Pic
 	Verts bsprender.FaceVerts
+	// Plane is what Quake's D_CalcGradients reads from the face (water).
+	Plane render.SurfacePlane
+}
+
+// surfacePlane computes a face's plane from its vertices (Newell's method)
+// and takes its texture axes, texturemins and extents.
+func surfacePlane(fv bsprender.FaceVerts, info bsprender.LightmapInfo) render.SurfacePlane {
+	return bsprender.SurfacePlaneOf(fv, info)
 }
 
 // DemoTime is the time in seconds the sky scroll and the water warp are
@@ -64,7 +72,11 @@ func (w *World) DrawSpecialSoftware(fb *render.FrameBuffer, cm *render.ColorMap,
 		case KindSky:
 			_ = render.FillSkyPolygon(fb, f.Tex, verts, t)
 		case KindTurb:
-			_ = render.FillTurbulentPolygon(fb, f.Tex, cm, 0, verts, t)
+			g, ok := render.NewSurfaceGradients(view, w.FOV, fb.Width, fb.Height, f.Plane)
+			if !ok {
+				continue
+			}
+			_ = render.FillTurbulentQuake(fb, f.Tex, &g, float64(t), verts)
 		default:
 			return fmt.Errorf("worldview: unknown special kind %d", kind)
 		}

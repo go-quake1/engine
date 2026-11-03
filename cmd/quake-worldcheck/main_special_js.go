@@ -71,6 +71,9 @@ func checkSpecial(ctx context.Context, v verdict, w *worldview.World, cm *render
 			}
 		}
 	}
+	if opts.ablate["--exactSpans"] {
+		render.TurbSubSpan = 1 // the reference exact per pixel: what the 16-pixel steps cost
+	}
 	views := w.SpecialViews(kind, 16)
 	if len(views) == 0 {
 		v.Detail = "no " + part + " views"

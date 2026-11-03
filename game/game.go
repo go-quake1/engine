@@ -538,7 +538,12 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 			case strings.HasPrefix(name, "sky"):
 				_ = render.FillSkyPolygon(fb, tex, verts, skyTime)
 			case strings.HasPrefix(name, "*"):
-				_ = render.FillTurbulentPolygon(fb, tex, &cm, 0, verts, turbTime)
+				// Quake's Turbulent8 on the face's own gradients.
+				if info, ierr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx); ierr == nil {
+					if g, ok := render.NewSurfaceGradients(view, fov, fb.Width, fb.Height, bsprender.SurfacePlaneOf(fv, info)); ok {
+						_ = render.FillTurbulentQuake(fb, tex, &g, float64(turbTime), verts)
+					}
+				}
 			default:
 				_ = render.FillTexturedPolygon(fb, tex, &cm, 0, verts)
 			}
