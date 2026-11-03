@@ -772,7 +772,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
 			}
-			if err := render.DrawAliasInterpLit(fb, rd, &cm, aliasShade, am, skin, ent); err != nil {
+			if err := render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, am, skin, ent); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit modelIdx=%d from=%d to=%d lerp=%v err: %v",
 						es.ModelIdx, prevIdx, frameIdx, lerp, err)
@@ -905,7 +905,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				FrameIdxNext: 0,
 				Lerp:         0,
 			}
-			if err := render.DrawAliasInterpLit(fb, rd, &cm, aliasShade, bm, bskin, ent); err != nil {
+			if err := render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, bm, bskin, ent); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit(bolt kind=%d) err: %v", seg.Kind, err)
 				}

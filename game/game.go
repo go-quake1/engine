@@ -584,12 +584,6 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 
 		// Alias entities (interp + lit).
 		const aliasFramePeriod = float32(0.1)
-		aliasShade := render.AliasShadeRange{
-			Ambient:   0.3,
-			DirectMin: 0.0,
-			DirectMax: 0.7,
-			LightDir:  [3]float32{0, 0, -1},
-		}
 		now := runner.Client.MsgTime
 		for _, es := range runner.Client.Entities {
 			if es.ModelIdx <= 0 || es.ModelIdx >= len(cfg.aliasModels) {
@@ -632,7 +626,7 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
 			}
-			_ = render.DrawAliasInterpLit(fb, rd, &cm, aliasShade, am, skin, ent)
+			_ = render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, am, skin, ent)
 		}
 
 		// Particles.
@@ -673,7 +667,7 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 					AngleYaw:   seg.Yaw,
 				},
 			}
-			_ = render.DrawAliasInterpLit(fb, rd, &cm, aliasShade, m, bskin, ent)
+			_ = render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, m, bskin, ent)
 		})
 
 		// HUD / status bar.

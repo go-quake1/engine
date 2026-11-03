@@ -20,10 +20,10 @@ func TestAliasShaderMatchesTheReferenceConstants(t *testing.T) {
 	if render.AliasNearClip != 8 || !strings.Contains(AliasShaderWGSL, "< 8.0") {
 		t.Errorf("alias near clip %v is not the shader's 8.0", render.AliasNearClip)
 	}
-	if render.ColorMapRows != 64 || !strings.Contains(AliasShaderWGSL, "* 64u / 256u") {
+	if render.ColorMapRows != 64 || !strings.Contains(AliasShaderWGSL, "0, 63)") {
 		t.Errorf("colormap rows %d are not the shader's 64", render.ColorMapRows)
 	}
-	if EntRecordSize != 7*16 {
+	if EntRecordSize != 8*16 {
 		t.Errorf("entity record %d bytes", EntRecordSize)
 	}
 }
@@ -49,7 +49,7 @@ func TestAliasE1M1(t *testing.T) {
 	for _, e := range ents {
 		models = append(models, e.Model)
 	}
-	set, err := BuildAlias(models, worldview.AliasShade)
+	set, err := BuildAlias(models)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestAliasE1M1(t *testing.T) {
 		// Models of the views are in the set built from every entity,
 		// except the weapon, which has its own.
 		all := append(append([]*worldview.AliasModel(nil), models...), v.Ents[len(v.Ents)-1].Model)
-		s2, err := BuildAlias(all, worldview.AliasShade)
+		s2, err := BuildAlias(all)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +106,7 @@ func TestAliasE1M1(t *testing.T) {
 }
 
 func TestEntitiesRejectsAModelOutsideTheSet(t *testing.T) {
-	set, err := BuildAlias(nil, worldview.AliasShade)
+	set, err := BuildAlias(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
