@@ -19,11 +19,10 @@ import (
 
 // aliasContent loads the map's alias entities and the 16 alias views, with
 // the ablations of opts applied to the data both sides read.
-func aliasContent(fsys fs.FS, w *worldview.World) ([]worldview.AliasEnt, []worldview.AliasView, render.AliasShadeRange, error) {
-	shade := worldview.AliasShade
+func aliasContent(fsys fs.FS, w *worldview.World) ([]worldview.AliasEnt, []worldview.AliasView, error) {
 	ents, err := w.AliasEntities(fsys)
 	if err != nil {
-		return nil, nil, shade, err
+		return nil, nil, err
 	}
 	var weapon worldview.AliasEnt
 	haveWeapon := false
@@ -40,13 +39,10 @@ func aliasContent(fsys fs.FS, w *worldview.World) ([]worldview.AliasEnt, []world
 		return we, nil
 	})
 	if err != nil {
-		return nil, nil, shade, err
-	}
-	if opts.ablate["--flatLight"] {
-		shade = render.AliasShadeRange{Ambient: 1, LightDir: [3]float32{0, 0, -1}}
+		return nil, nil, err
 	}
 	flat := &render.Pic{Width: 1, Height: 1, Pixels: []byte{0x70}}
-	seen := map[*worldview.AliasModel]bool{}
+	seen, flatLit := map[*worldview.AliasModel]bool{}, map[*worldview.AliasModel]bool{}
 	for vi := range views {
 		kept := views[vi].Ents[:0]
 		for _, e := range views[vi].Ents {
@@ -62,11 +58,22 @@ func aliasContent(fsys fs.FS, w *worldview.World) ([]worldview.AliasEnt, []world
 					e.Model.Skins[i] = flat
 				}
 			}
+			if opts.ablate["--flatLight"] && !flatLit[e.Model] {
+				// every vertex the same light normal: Quake's lighting, but no
+				// variation across a triangle (and no Gouraud gradient to test).
+				flatLit[e.Model] = true
+				for fi := range e.Model.M.Frames {
+					f := &e.Model.M.Frames[fi]
+					for vi := range f.Single.Verts {
+						f.Single.Verts[vi].LightNormalIndex = 0
+					}
+				}
+			}
 			kept = append(kept, e)
 		}
 		views[vi].Ents = kept
 	}
-	return ents, views, shade, nil
+	return ents, views, nil
 }
 
 // modelsOf lists the distinct models of the views' entities.
@@ -139,7 +146,7 @@ func compare(ref []byte, pitch int, got []byte, width, height int, mask []bool) 
 // the 16 alias views. The figures are over the alias region: the pixels where
 // either side's alias frame differs from the same side's world-only frame.
 func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, cm *render.ColorMap, gr *gpuworld.Renderer, corrupt, benchRun bool) verdict {
-	_, views, shade, err := aliasContent(fsys, w)
+	_, views, err := aliasContent(fsys, w)
 	if err != nil {
 		v.Detail = err.Error()
 		return v
@@ -153,7 +160,7 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 	if corrupt {
 		gpuModels, swap = corruptSkins(gpuModels)
 	}
-	set, err := gpuworld.BuildAlias(gpuModels, shade)
+	set, err := gpuworld.BuildAlias(gpuModels)
 	if err != nil {
 		v.Detail = fmt.Sprintf("alias set: %v", err)
 		return v
@@ -163,7 +170,7 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 		return v
 	}
 	if benchRun {
-		v.PartBench = benchAlias(ctx, w, gr, cm, shade, views, swap, v.Width, v.Height)
+		v.PartBench = benchAlias(ctx, w, gr, cm, views, swap, v.Width, v.Height)
 		v.Check = "BENCH"
 		return v
 	}
@@ -176,7 +183,7 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 		}
 		refA, _ := render.NewFrameBuffer(width, height)
 		copy(refA.Pixels, refW.Pixels)
-		if err := w.DrawAliasSoftware(refA, cm, shade, av.View, av.Ents); err != nil {
+		if err := w.DrawAliasSoftware(refA, cm, av.View, av.Ents); err != nil {
 			v.Detail = fmt.Sprintf("reference view %d: %v", i, err)
 			return v
 		}
@@ -247,7 +254,7 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 // benchAlias alternates, per frame, the engine's software path for the same
 // content (DrawEngine world, then the engine's alias pass), the software
 // reference, the GPU world alone and the GPU world with entities.
-func benchAlias(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *render.ColorMap, shade render.AliasShadeRange, views []worldview.AliasView, swap map[*worldview.AliasModel]*worldview.AliasModel, width, height int) *partBench {
+func benchAlias(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *render.ColorMap, views []worldview.AliasView, swap map[*worldview.AliasModel]*worldview.AliasModel, width, height int) *partBench {
 	fb, _ := render.NewFrameBuffer(width, height)
 	const passes = 8
 	var en, al, gw, ga, go2 []float64
@@ -257,7 +264,7 @@ func benchAlias(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, 
 			t0 := time.Now()
 			_ = w.DrawEngine(fb, av.View)
 			t1 := time.Now()
-			_ = w.DrawAliasSoftware(fb, cm, shade, av.View, av.Ents)
+			_ = w.DrawAliasSoftware(fb, cm, av.View, av.Ents)
 			t2 := time.Now()
 			_ = gr.Draw(av.View)
 			_ = gr.Wait(ctx)

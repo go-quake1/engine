@@ -15,11 +15,6 @@ import (
 	"github.com/go-quake1/engine/render"
 )
 
-// AliasShade is the shading envelope the engine's own alias pass uses
-// (game.setupRenderer): a 0.3 ambient and up to 0.7 from a light straight
-// down.
-var AliasShade = render.AliasShadeRange{Ambient: 0.3, DirectMin: 0, DirectMax: 0.7, LightDir: [3]float32{0, 0, -1}}
-
 // AliasModel is an alias model with its skins as pictures.
 type AliasModel struct {
 	Path  string
@@ -234,9 +229,9 @@ func (w *World) clear(a, b [3]float32) bool {
 }
 
 // DrawAliasSoftware draws ents over fb the way the engine does
-// (game.setupRenderer): render.DrawAliasInterpLit with the given shade
-// (normally [AliasShade]), no depth test, after the world.
-func (w *World) DrawAliasSoftware(fb *render.FrameBuffer, cm *render.ColorMap, shade render.AliasShadeRange, v View, ents []AliasEnt) error {
+// (game.setupRenderer): render.DrawAliasInterpQuake (Quake's lighting, at
+// render.AliasStandInLight), no depth test, after the world.
+func (w *World) DrawAliasSoftware(fb *render.FrameBuffer, cm *render.ColorMap, v View, ents []AliasEnt) error {
 	rd := &render.RefDef{
 		VRect: render.VRect{Width: fb.Width, Height: fb.Height}, ViewAngles: v.Angles, ViewOrigin: v.Origin,
 		FovX: w.FOV, FovY: w.FOV,
@@ -248,7 +243,7 @@ func (w *World) DrawAliasSoftware(fb *render.FrameBuffer, cm *render.ColorMap, s
 			},
 			FrameIdxNext: e.Next, Lerp: e.Lerp,
 		}
-		if err := render.DrawAliasInterpLit(fb, rd, cm, shade, e.Model.M, e.Model.Skins[e.Skin], ent); err != nil {
+		if err := render.DrawAliasInterpQuake(fb, rd, cm, render.AliasStandInLight, e.IsViewWeapon, e.Model.M, e.Model.Skins[e.Skin], ent); err != nil {
 			return fmt.Errorf("%s: %w", e.Model.Path, err)
 		}
 	}
