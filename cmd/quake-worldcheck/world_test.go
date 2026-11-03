@@ -163,6 +163,8 @@ func TestGPUWorldMatchesTheSoftwareWorld(t *testing.T) {
 type benchRes struct {
 	Frames        int     `json:"frames"`
 	SoftwareMS    float64 `json:"software_ms"`
+	EngineMS      float64 `json:"engine_ms"`
+	EngineP95MS   float64 `json:"engine_p95_ms"`
 	GPUCPUMS      float64 `json:"gpu_cpu_ms"`
 	GPUWallMS     float64 `json:"gpu_wall_ms"`
 	SoftwareP95MS float64 `json:"software_p95_ms"`
@@ -232,6 +234,8 @@ func TestBenchWorld(t *testing.T) {
 		name string
 		f    func(benchRes) float64
 	}{
+		{"engine software world (ms)", func(r benchRes) float64 { return r.EngineMS }},
+		{"engine software world p95 (ms)", func(r benchRes) float64 { return r.EngineP95MS }},
 		{"software frame (ms)", func(r benchRes) float64 { return r.SoftwareMS }},
 		{"gpu frame, CPU time (ms)", func(r benchRes) float64 { return r.GPUCPUMS }},
 		{"gpu frame, wall to GPU idle (ms)", func(r benchRes) float64 { return r.GPUWallMS }},
@@ -243,4 +247,16 @@ func TestBenchWorld(t *testing.T) {
 		t.Logf("| %s | %.3f (%.3f-%.3f) |", c.name, m, lo, hi)
 	}
 	t.Logf("rounds %d, discarded %d", len(all), discarded)
+}
+
+// TestAttribution reruns the comparison with one ingredient removed on both
+// sides, to see which one the unexplained pixels come from (QUAKE_ATTRIBUTION=1).
+func TestAttribution(t *testing.T) {
+	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
+		t.Skip("QUAKE_ATTRIBUTION not set")
+	}
+	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}} {
+		t.Logf("probe %v", c)
+		runInBrowser(t, append([]string{"--tolerance", "1"}, c...)...)
+	}
 }

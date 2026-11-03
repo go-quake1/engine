@@ -267,3 +267,43 @@ func (w *World) DrawSoftware(fb *render.FrameBuffer, cm *render.ColorMap, v View
 	}
 	return nil
 }
+
+// identityColorMap is the colormap the engine's world loop (game.setupRenderer)
+// draws with: every light level maps a texel to itself, so the world is
+// unlit.
+var identityColorMap = func() *render.ColorMap {
+	var cm render.ColorMap
+	for r := range cm {
+		for c := range cm[r] {
+			cm[r][c] = byte(c)
+		}
+	}
+	return &cm
+}()
+
+// DrawEngine is the engine's own software world path, as game.setupRenderer
+// runs it for the faces this package draws: the same visible faces, each
+// through TransformFace and the affine render.FillTexturedPolygon with the
+// identity colormap at light level 0 (no lightmap). It exists to measure
+// the cost of what the engine ships next to the lightmapped reference
+// ([World.DrawSoftware]) and the GPU world; its pixels are not compared
+// with the GPU's.
+func (w *World) DrawEngine(fb *render.FrameBuffer, v View) error {
+	for i := range fb.Pixels {
+		fb.Pixels[i] = ClearIndex
+	}
+	faces, err := w.Visible(v, fb.Width, fb.Height)
+	if err != nil {
+		return err
+	}
+	view := w.rd.SetupView()
+	for _, idx := range faces {
+		f := w.Faces[idx]
+		verts, err := bsprender.TransformFace(view, fb, w.FOV, f.Verts)
+		if err != nil {
+			continue
+		}
+		_ = render.FillTexturedPolygon(fb, f.Tex, identityColorMap, 0, verts)
+	}
+	return nil
+}

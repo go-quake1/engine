@@ -99,6 +99,7 @@ func fetchBytes(url string) ([]byte, error) {
 func main() {
 	width, height, tol := 320, 200, 0.025
 	corrupt, requireGPU, benchRun := false, false, false
+	noLight, noTex := false, false
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -106,6 +107,10 @@ func main() {
 			corrupt = true
 		case "--require-gpu":
 			requireGPU = true
+		case "--nolight":
+			noLight = true
+		case "--flatTex":
+			noTex = true
 		case "--bench":
 			benchRun = true
 		case "--width":
@@ -119,12 +124,12 @@ func main() {
 			tol, _ = strconv.ParseFloat(args[i], 64)
 		}
 	}
-	v := check(width, height, tol, corrupt, requireGPU, benchRun)
+	v := check(width, height, tol, corrupt, requireGPU, benchRun, noLight, noTex)
 	b, _ := json.Marshal(v)
 	fmt.Println(string(b))
 }
 
-func check(width, height int, tol float64, corrupt, requireGPU, benchRun bool) verdict {
+func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLight, noTex bool) verdict {
 	v := verdict{Check: "FAIL", Width: width, Height: height, Tolerance: tol}
 	data, err := fetchBytes("/pak0.pak")
 	if err != nil {
@@ -147,6 +152,19 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun bool) v
 	if err != nil {
 		v.Detail = err.Error()
 		return v
+	}
+	// Attribution probes (not part of the acceptance check): every face's
+	// lightmap full bright, or every texture one flat colour, on both sides.
+	for _, f := range w.Faces {
+		if f == nil {
+			continue
+		}
+		if noLight {
+			f.Light, f.Info.Width, f.Info.Height = []byte{128}, 1, 1
+		}
+		if noTex {
+			f.Tex = &render.Pic{Width: 1, Height: 1, Pixels: []byte{0x70}}
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -254,6 +272,8 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun bool) v
 type benchRes struct {
 	Frames        int     `json:"frames"`
 	SoftwareMS    float64 `json:"software_ms"`
+	EngineMS      float64 `json:"engine_ms"`
+	EngineP95MS   float64 `json:"engine_p95_ms"`
 	GPUCPUMS      float64 `json:"gpu_cpu_ms"`
 	GPUWallMS     float64 `json:"gpu_wall_ms"`
 	SoftwareP95MS float64 `json:"software_p95_ms"`
@@ -274,10 +294,13 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 	views := w.Views()
 	fb, _ := render.NewFrameBuffer(width, height)
 	const passes = 8
-	var sw, gc, gw []float64
+	var sw, gc, gw, en []float64
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	for p := 0; p < passes+1; p++ { // the first pass warms up
 		for _, view := range views {
+			e0 := time.Now()
+			_ = w.DrawEngine(fb, view)
+			e1 := time.Now()
 			t0 := time.Now()
 			_ = w.DrawSoftware(fb, cm, view)
 			t1 := time.Now()
@@ -287,9 +310,10 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 			t3 := time.Now()
 			if p > 0 {
 				sw, gc, gw = append(sw, ms(t1.Sub(t0))), append(gc, ms(t2.Sub(t1))), append(gw, ms(t3.Sub(t1)))
+				en = append(en, ms(e1.Sub(e0)))
 			}
 		}
 	}
-	return &benchRes{Frames: len(sw), SoftwareMS: pct(sw, .5), GPUCPUMS: pct(gc, .5), GPUWallMS: pct(gw, .5),
+	return &benchRes{Frames: len(sw), SoftwareMS: pct(sw, .5), EngineMS: pct(en, .5), EngineP95MS: pct(en, .95), GPUCPUMS: pct(gc, .5), GPUWallMS: pct(gw, .5),
 		SoftwareP95MS: pct(sw, .95), GPUCPUP95MS: pct(gc, .95), GPUWallP95MS: pct(gw, .95)}
 }
