@@ -33,10 +33,16 @@ type Renderer struct {
 	clear    float64
 	cmView   *webgpu.TextureView
 	alias    *aliasGPU
+	sky      *specialGPU
+	cur      worldview.View
 
 	// SkipWorld leaves the lit faces out of the pass (the target is still
 	// cleared): to time what is drawn after them on its own.
 	SkipWorld bool
+	// Time is the time in seconds the sky scroll is evaluated at.
+	Time float32
+	// DrawSky switches the sky pass (see [Renderer.EnableSky]) on or off.
+	DrawSky bool
 }
 
 func (r *Renderer) upload(tex *webgpu.Texture, a *Atlas) error {
@@ -180,11 +186,12 @@ func (r *Renderer) Draw(v worldview.View) error { return r.DrawEntities(v, nil) 
 // ents (see [Renderer.EnableAlias]); with no entities it is Draw.
 func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) error {
 	var err error
+	r.cur = v
 	if r.draws, err = r.geo.Draws(r.w, v, r.width, r.height, r.draws); err != nil {
 		return err
 	}
 	r.rec.Reset()
-	r.rec.WriteBuffer(r.ub, 0, Uniform(v, r.w.FOV, r.width, r.height))
+	r.rec.WriteBuffer(r.ub, 0, UniformAt(v, r.w.FOV, r.width, r.height, r.Time))
 	if err := r.prepareAlias(ents); err != nil {
 		return err
 	}
@@ -198,6 +205,7 @@ func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) err
 			p.DrawIndexed(d.Count, 1, d.First, 0, 0)
 		}
 	}
+	r.recordSpecial(p)
 	r.recordAlias(p)
 	if err := p.End(); err != nil {
 		return err

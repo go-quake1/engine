@@ -124,7 +124,7 @@ func main() {
 		case "--part":
 			i++
 			opts.part = args[i]
-		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon":
+		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++
@@ -220,6 +220,8 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 	switch opts.part {
 	case "alias":
 		return checkAlias(ctx, v, p, w, cm, gr, corrupt, benchRun)
+	case "sky", "turb":
+		return checkSpecial(ctx, v, w, cm, gr, opts.part, corrupt, benchRun)
 	}
 	if benchRun {
 		v.Bench = bench(ctx, w, gr, cm, width, height)
