@@ -152,7 +152,11 @@ func New(bsp []byte) (*World, error) {
 				if turb {
 					kind = KindTurb
 				}
-				special[i] = &SpecialFace{Idx: i, Kind: kind, Tex: pics[mi], Verts: fv, Name: names[mi]}
+				sf := &SpecialFace{Idx: i, Kind: kind, Tex: pics[mi], Verts: fv, Name: names[mi]}
+				if info, err := bsprender.FaceLightmapInfo(bm, i); err == nil {
+					sf.Plane = surfacePlane(fv, info)
+				}
+				special[i] = sf
 			}
 			continue
 		}

@@ -68,7 +68,7 @@ func TestTurbAttribution(t *testing.T) {
 	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
 		t.Skip("QUAKE_ATTRIBUTION not set")
 	}
-	for _, c := range [][]string{{}, {"--flatSkin"}, {"--noScroll"}, {"--flatSkin", "--noScroll"}} {
+	for _, c := range [][]string{{}, {"--flatSkin"}, {"--noScroll"}, {"--exactSpans"}, {"--flatSkin", "--noScroll"}} {
 		t.Logf("probe %v", c)
 		runInBrowser(t, append([]string{"--part", "turb", "--tolerance", "1"}, c...)...)
 	}

@@ -38,6 +38,10 @@ type Special struct {
 	Count    []uint32 // 0 = not drawn
 	Tex      *Atlas
 	Faces    int
+	// FaceTab is 64 bytes per drawn face: the plane (normal, dist), the
+	// texture axes with offsets, texturemins and extents, as the water
+	// shader needs to rebuild D_CalcGradients each frame.
+	FaceTab []byte
 }
 
 // BuildSpecial packs the textures and the triangle fans of the faces of
@@ -66,6 +70,7 @@ func BuildSpecial(w *worldview.World, kind worldview.SpecialKind) (*Special, err
 			for k, x := range [4]uint32{tr.X, tr.Y, tr.W, tr.H} {
 				binary.LittleEndian.PutUint32(vb[20+4*k:], x)
 			}
+			binary.LittleEndian.PutUint32(vb[36:], uint32(s.Faces)) // index in FaceTab
 			s.Vertices = append(s.Vertices, vb[:]...)
 		}
 		s.First[f.Idx] = uint32(len(s.Indices))
@@ -73,6 +78,15 @@ func BuildSpecial(w *worldview.World, kind worldview.SpecialKind) (*Special, err
 			s.Indices = append(s.Indices, base, base+uint32(i), base+uint32(i+1))
 		}
 		s.Count[f.Idx] = uint32(len(s.Indices)) - s.First[f.Idx]
+		pl := f.Plane
+		for _, x := range [16]float32{
+			pl.Normal[0], pl.Normal[1], pl.Normal[2], pl.Dist,
+			pl.AxisS[0], pl.AxisS[1], pl.AxisS[2], pl.OffS,
+			pl.AxisT[0], pl.AxisT[1], pl.AxisT[2], pl.OffT,
+			pl.MinS, pl.MinT, float32(pl.ExtS), float32(pl.ExtT),
+		} {
+			s.FaceTab = binary.LittleEndian.AppendUint32(s.FaceTab, math.Float32bits(x))
+		}
 		s.Faces++
 	}
 	s.Tex = tex.finish()
@@ -100,38 +114,50 @@ func (s *Special) Draws(w *worldview.World, v worldview.View, out []Draw) []Draw
 	return out
 }
 
-// TurbShaderWGSL is [SpecialShaderWGSL] plus fsTurb: render.FillTurbulentPolygon
-// per fragment. The warp is the engine's: u' = u + turbsin[floor((v + 40 t) /
-// 16) & 255] and v' = v + turbsin[floor((u + 40 t) / 16) & 255], with the
-// table the engine builds (peak 8 texels), wrapped into the texture and looked
-// up through colormap row 0 (light level 0).
+// TurbShaderWGSL is [SpecialShaderWGSL] plus fsTurb: Quake's Turbulent8 per
+// fragment (render.TurbSpan). The gradients of D_CalcGradients are rebuilt
+// per fragment from the face's plane and the view (the 16-pixel sub-spans are
+// not reproduced: the coordinates are perspective-exact at every pixel);
+// s and t are 16.16 fixed point relative to the face's texturemins, clamped to
+// [0, extent]; the warp is render.QuakeTurbTable (sintable), written into the
+// shader, indexed by the other coordinate's integer part modulo 128 plus
+// (int)(time * 20) modulo 128; the texel is written as is (water is not lit).
 func TurbShaderWGSL() string {
 	var b strings.Builder
 	b.WriteString(SpecialShaderWGSL)
-	b.WriteString("\nvar<private> turbsin = array<f32, 256>(")
-	for i, v := range render.TurbSinTable() {
+	b.WriteString("\nvar<private> sintable = array<i32, 256>(")
+	for i, v := range render.QuakeTurbTable {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		s := strconv.FormatFloat(float64(v), 'g', -1, 32)
-		if !strings.ContainsAny(s, ".e") {
-			s += ".0" // a literal such as "8" must be a float in WGSL
-		}
-		b.WriteString(s)
+		b.WriteString(strconv.Itoa(int(v)))
 	}
 	b.WriteString(`);
 
-fn warp(coord: f32, t: f32) -> f32 {
-  return turbsin[u32(i32(floor((coord + t * 40.0) / 16.0)) & 255)];
-}
-
 @fragment fn fsTurb(v: VOut) -> @location(0) vec4u {
-  let uv = v.uv + 0.5 * dpdxFine(v.uv);
-  let t = u.q.x;
-  let uw = uv.x + warp(uv.y, t);
-  let vw = uv.y + warp(uv.x, t);
-  let texel = at(v.tr, wrap(i32(floor(uw)), i32(v.tr.z)), wrap(i32(floor(vw)), i32(v.tr.w)));
-  return vec4u(textureLoad(cmap, vec2u(texel, 0u), 0).r, 0u, 0u, 0u);
+  let f0 = faces[v.fi * 4u]; let f1 = faces[v.fi * 4u + 1u];
+  let f2 = faces[v.fi * 4u + 2u]; let f3 = faces[v.fi * 4u + 3u];
+  let W = u.q.y; let H = u.q.z;
+  let halfW = W * 0.5; let halfH = H * 0.5;
+  let X = floor(v.p.x) + 0.5; let Y = floor(v.p.y) + 0.5;
+  let right = u.rows[0].xyz; let up = u.rows[1].xyz; let fwd = u.rows[2].xyz;
+  let D = fwd + (X - halfW) * u.p.x / halfW * right + (halfH - Y) * u.p.x / halfW * up;
+  let org = u.o.xyz;
+  let nd = dot(f0.xyz, D);
+  let z = (f0.w - dot(f0.xyz, org)) / nd;
+  let cs = dot(f1.xyz, org) + f1.w - f3.x;
+  let ct = dot(f2.xyz, org) + f2.w - f3.y;
+  var s = i32((cs + z * dot(f1.xyz, D)) * 65536.0);
+  var t = i32((ct + z * dot(f2.xyz, D)) * 65536.0);
+  s = clamp(s, 0, i32(f3.z) * 65536 - 1);
+  t = clamp(t, 0, i32(f3.w) * 65536 - 1);
+  let off = i32(u.q.x * 20.0) & 127;
+  let sturb = s + sintable[off + ((t >> 16u) & 127)];
+  let tturb = t + sintable[off + ((s >> 16u) & 127)];
+  let tw = i32(v.tr.z); let th = i32(v.tr.w);
+  let col = i32((u32(sturb) >> 16u) % u32(tw));
+  let row = i32((u32(tturb) >> 16u) % u32(th));
+  return vec4u(at(v.tr, col, row), 0u, 0u, 0u);
 }
 `)
 	return b.String()
@@ -140,16 +166,18 @@ fn warp(coord: f32, t: f32) -> f32 {
 // SpecialShaderWGSL draws sky faces (fsSky) and, with [TurbShaderWGSL],
 // water faces into the r8uint target.
 const SpecialShaderWGSL = `
-struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f };
+struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f, o: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<u32>;
 @group(0) @binding(2) var cmap: texture_2d<u32>;
+@group(0) @binding(3) var<storage, read> faces: array<vec4f>;
 
-struct VIn { @location(0) pos: vec3f, @location(1) uv: vec2f, @location(2) tr: vec4u };
+struct VIn { @location(0) pos: vec3f, @location(1) uv: vec2f, @location(2) tr: vec4u, @location(3) fi: u32 };
 struct VOut {
   @builtin(position) p: vec4f,
   @location(0) @interpolate(linear) uv: vec2f,
   @location(1) @interpolate(flat) tr: vec4u,
+  @location(2) @interpolate(flat) fi: u32,
 };
 
 @vertex fn vs(v: VIn) -> VOut {
@@ -160,7 +188,7 @@ struct VOut {
   var o: VOut;
   // Half a pixel to the right (u.p.w is 1 / width, in clip units 1 / width * w).
   o.p = vec4f(vp.x / u.p.x + u.p.w * d, vp.y * u.p.z, 0.5 * d, d);
-  o.uv = v.uv; o.tr = v.tr;
+  o.uv = v.uv; o.tr = v.tr; o.fi = v.fi;
   return o;
 }
 
