@@ -220,9 +220,16 @@ reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 `cmd/quake-worldcheck` compares the two on 16 fixed e1m1 views on a real GPU
 (tolerance 2.5 % of pixels not explained by a one-pixel shift; 1.52 %
 measured). They need the shareware `pak0.pak`, which is never in the
-repository: point `QUAKE_PAK` at it. Sky, water, alias models, dynamic lights and
+repository: point `QUAKE_PAK` at it. Sky, water, dynamic lights and
 animated lightstyles are later steps. Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
+
+Alias models (monsters, items, the view weapon) are drawn on the GPU too,
+after the world, with `Renderer.EnableAlias` and `DrawEntities`: the engine's
+`DrawAliasInterpLit` is the reference (`quake-worldcheck --part alias`, 16
+fixed e1m1 views, 3 % tolerance on the alias region, 0.10 % measured, a
+corrupted skin must fail). Alone, the GPU alias pass is not faster than the
+CPU one at 1280x800; see [docs/webgpu-world/2026-11-03-alias.md](docs/webgpu-world/2026-11-03-alias.md).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

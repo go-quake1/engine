@@ -31,6 +31,12 @@ type Renderer struct {
 	passDesc webgpu.RenderPassDescriptor
 	draws    []Draw
 	clear    float64
+	cmView   *webgpu.TextureView
+	alias    *aliasGPU
+
+	// SkipWorld leaves the lit faces out of the pass (the target is still
+	// cleared): to time what is drawn after them on its own.
+	SkipWorld bool
 }
 
 func (r *Renderer) upload(tex *webgpu.Texture, a *Atlas) error {
@@ -124,6 +130,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 			return nil, err
 		}
 	}
+	r.cmView = views[2]
 	if r.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
 		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: views[0]}, {Binding: 2, TextureView: views[1]}, {Binding: 3, TextureView: views[2]},
 	}}); err != nil {
@@ -167,21 +174,31 @@ func (r *Renderer) Faces() int { return r.geo.Faces }
 
 // Draw records and submits one frame of the world from v: the uniform
 // write and one pass, in one Recorder submit.
-func (r *Renderer) Draw(v worldview.View) error {
+func (r *Renderer) Draw(v worldview.View) error { return r.DrawEntities(v, nil) }
+
+// DrawEntities is Draw followed, in the same pass, by the alias entities
+// ents (see [Renderer.EnableAlias]); with no entities it is Draw.
+func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) error {
 	var err error
 	if r.draws, err = r.geo.Draws(r.w, v, r.width, r.height, r.draws); err != nil {
 		return err
 	}
 	r.rec.Reset()
 	r.rec.WriteBuffer(r.ub, 0, Uniform(v, r.w.FOV, r.width, r.height))
+	if err := r.prepareAlias(ents); err != nil {
+		return err
+	}
 	p := r.rec.BeginRenderPass(r.passDesc)
 	p.SetPipeline(r.pipe)
 	p.SetBindGroup(0, r.group)
 	p.SetVertexBuffer(0, r.vb, 0, 0)
 	p.SetIndexBuffer(r.ib, webgpu.IndexFormatUint32, 0, 0)
-	for _, d := range r.draws {
-		p.DrawIndexed(d.Count, 1, d.First, 0, 0)
+	if !r.SkipWorld {
+		for _, d := range r.draws {
+			p.DrawIndexed(d.Count, 1, d.First, 0, 0)
+		}
 	}
+	r.recordAlias(p)
 	if err := p.End(); err != nil {
 		return err
 	}

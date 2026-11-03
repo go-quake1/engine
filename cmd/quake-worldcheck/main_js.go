@@ -61,6 +61,7 @@ type verdict struct {
 	TotalRate    float64    `json:"total_rate"`
 	Tolerance    float64    `json:"tolerance"`
 	Bench        *benchRes  `json:"bench,omitempty"`
+	PartBench    *partBench `json:"part_bench,omitempty"`
 }
 
 func fetchBytes(url string) ([]byte, error) {
@@ -96,6 +97,13 @@ func fetchBytes(url string) ([]byte, error) {
 	return r.b, r.err
 }
 
+// opts are the options of the parts after the world: which part is checked
+// ("" is the world alone) and the ablations of that part.
+var opts = struct {
+	part   string
+	ablate map[string]bool
+}{ablate: map[string]bool{}}
+
 func main() {
 	width, height, tol := 320, 200, 0.025
 	corrupt, requireGPU, benchRun := false, false, false
@@ -113,6 +121,11 @@ func main() {
 			noTex = true
 		case "--bench":
 			benchRun = true
+		case "--part":
+			i++
+			opts.part = args[i]
+		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon":
+			opts.ablate[args[i]] = true
 		case "--width":
 			i++
 			width, _ = strconv.Atoi(args[i])
@@ -184,7 +197,7 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		v.Detail = err.Error()
 		return v
 	}
-	dev, err := adapter.RequestDevice(ctx, &webgpu.DeviceDescriptor{Label: "worldcheck", Quota: &webgpu.Quota{MemoryBytes: 512 << 20, Pipelines: 4, ShaderBytes: 32 << 10}})
+	dev, err := adapter.RequestDevice(ctx, &webgpu.DeviceDescriptor{Label: "worldcheck", Quota: &webgpu.Quota{MemoryBytes: 512 << 20, Pipelines: 8, ShaderBytes: 32 << 10}})
 	if err != nil {
 		v.Detail = err.Error()
 		return v
@@ -204,6 +217,10 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		return v
 	}
 	v.Faces = gr.Faces()
+	switch opts.part {
+	case "alias":
+		return checkAlias(ctx, v, p, w, cm, gr, corrupt, benchRun)
+	}
 	if benchRun {
 		v.Bench = bench(ctx, w, gr, cm, width, height)
 		v.Check = "BENCH"
