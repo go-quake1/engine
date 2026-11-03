@@ -199,14 +199,22 @@ fn at(tr: vec4u, x: i32, y: i32) -> u32 { return textureLoad(tex, vec2u(tr.x + u
 // render.FillSkyPolygon: the front layer (left half, index 0 is clear)
 // scrolls twice as fast as the back layer (right half, at half the scale).
 @fragment fn fsSky(v: VOut) -> @location(0) vec4u {
-  let uv = v.uv + 0.5 * dpdxFine(v.uv);
-  let halfW = i32(v.tr.z) / 2;
-  let th = i32(v.tr.w);
-  let back = u.q.x * 8.0;
-  let front = u.q.x * 8.0 * 2.0;
-  let f = at(v.tr, wrap(i32(floor(uv.x + front)), halfW), wrap(i32(floor(uv.y)), th));
+  let W = u.q.y; let H = u.q.z;
+  let px = floor(v.p.x); let py = floor(v.p.y);
+  let temp = max(W, H);
+  let wu = 8192.0 * (px - floor(W * 0.5)) / temp;
+  let wv = 8192.0 * (floor(H * 0.5) - py) / temp;
+  var e = 4096.0 * u.rows[2].xyz + wu * u.rows[0].xyz + wv * u.rows[1].xyz;
+  e.z = e.z * 3.0;
+  e = normalize(e);
+  let off = u.q.w * 8.0;
+  let s = i32((off + 378.0 * e.x) * 65536.0);
+  let t = i32((off + 378.0 * e.y) * 65536.0);
+  let col = (s >> 16u) & 127;
+  let row = (t >> 16u) & 127;
+  let shift = i32(off);
+  let f = at(v.tr, (col + shift) & 127, (row + shift) & 127);
   if (f != 0u) { return vec4u(f, 0u, 0u, 0u); }
-  let b = at(v.tr, halfW + wrap(i32(floor(uv.x * 0.5 + back)), halfW), wrap(i32(floor(uv.y * 0.5)), th));
-  return vec4u(b, 0u, 0u, 0u);
+  return vec4u(at(v.tr, 128 + col, row), 0u, 0u, 0u);
 }
 `

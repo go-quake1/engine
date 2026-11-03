@@ -217,6 +217,7 @@ func UniformAt(v worldview.View, fov float32, width, height int, t float32) []by
 	f(56, float32(width)/2/(float32(height)/2*tanHalf))
 	f(60, 1/float32(width))
 	f(64, t)
+	f(76, float32(render.SkyFrameTime(float64(t))))
 	f(68, float32(width))
 	f(72, float32(height))
 	// the viewer's position: view maps p to R p + T, so it is -R^T T.

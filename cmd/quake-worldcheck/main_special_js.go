@@ -64,7 +64,14 @@ func checkSpecial(ctx context.Context, v verdict, w *worldview.World, cm *render
 		t = 0
 	}
 	if opts.ablate["--flatSkin"] {
-		flat := &render.Pic{Width: 2, Height: 1, Pixels: []byte{0x70, 0x70}}
+		fw, fh := 64, 64 // the sizes the original draws: 64 x 64 water, 256 x 128 sky
+		if kind == worldview.KindSky {
+			fw, fh = 256, 128
+		}
+		flat := &render.Pic{Width: fw, Height: fh, Pixels: make([]byte, fw*fh)}
+		for i := range flat.Pixels {
+			flat.Pixels[i] = 0x70
+		}
 		for _, f := range w.Special {
 			if f != nil && f.Kind == kind {
 				f.Tex = flat

@@ -197,6 +197,7 @@ func setupRenderer(opts setupRendererOpts) error {
 	// never changes for static faces, so no invalidation is needed).
 	faceSurfCache := make(map[int]*render.CachedSurface)
 	var cachedVertScratch []render.CachedVertex
+	var skyCache render.SkyCache
 	frameCount := 0
 	prevEntityOrigin := make(map[int][3]float32)
 	loggedWireSpawn := false
@@ -589,7 +590,13 @@ func setupRenderer(opts setupRendererOpts) error {
 				if err != nil {
 					continue
 				}
-				_ = render.FillSkyPolygon(fb, tex, verts, skyTimeSec)
+				// Quake's dome sky (render.FillSkyQuake); a texture that is
+				// not 256 x 128 keeps the old fill.
+				if tab := skyCache.Table(tex, float64(skyTimeSec)); tab != nil {
+					_ = render.FillSkyQuake(fb, tab, view, render.SkyFrameTime(float64(skyTimeSec)), verts)
+				} else {
+					_ = render.FillSkyPolygon(fb, tex, verts, skyTimeSec)
+				}
 			case strings.HasPrefix(name, "*"):
 				verts, err := bsprender.TransformFace(view, fb, fovX, fv)
 				if err != nil {
