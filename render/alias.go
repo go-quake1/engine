@@ -224,6 +224,11 @@ func entityRotation(pitch, yaw, roll float32) Mat3 {
 	}
 }
 
+// EntityRotation is the rotation DrawAlias applies to an object-space
+// vertex (columns: forward, -right, up). Exported so that a renderer that
+// transforms the vertices itself (the GPU alias pass) uses the same matrix.
+func EntityRotation(pitch, yaw, roll float32) Mat3 { return entityRotation(pitch, yaw, roll) }
+
 // FramePose returns the per-vertex byte triples for the time=0
 // pose of a Frame: FrameSingle returns its single record verbatim,
 // FrameGroup returns the FIRST sub-frame. Prefer FramePoseAt(f, t)

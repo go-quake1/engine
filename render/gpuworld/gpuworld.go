@@ -210,6 +210,7 @@ func Uniform(v worldview.View, fov float32, width, height int) []byte {
 	f(48, tanHalf)
 	f(52, render.ParticleNearClip)
 	f(56, float32(width)/2/(float32(height)/2*tanHalf))
+	f(60, 1/float32(width))
 	return b
 }
 
