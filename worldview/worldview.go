@@ -64,6 +64,12 @@ type World struct {
 	Faces []*Face // by face index; nil for faces that are not drawn
 	FOV   float32
 
+	// Special is the sky and water faces by face index (nil elsewhere).
+	// They are not in Faces and not in [World.Visible]'s result; the ones
+	// the last Visible call selected are in [World.VisibleSpecial].
+	Special    []*SpecialFace
+	visSpecial []int
+
 	walk     bsprender.WalkContext
 	mark     bsprender.MarkContext
 	surfaces bsprender.SurfaceList
@@ -131,14 +137,24 @@ func New(bsp []byte) (*World, error) {
 		names[i] = mt.Name
 	}
 	light := file.Lighting()
-	w := &World{BM: bm, File: file, FOV: DefaultFOV, Faces: make([]*Face, len(nf))}
+	special := make([]*SpecialFace, len(nf))
+	w := &World{BM: bm, File: file, FOV: DefaultFOV, Faces: make([]*Face, len(nf)), Special: special}
 	for i := range nf {
 		mi, ok, _ := bm.FaceMipTexIdx(i)
 		if !ok || mi < 0 || mi >= len(pics) || pics[mi] == nil {
 			continue
 		}
-		if strings.HasPrefix(names[mi], "sky") || strings.HasPrefix(names[mi], "*") {
-			continue // sky and water: a later step
+		if sky, turb := strings.HasPrefix(names[mi], "sky"), strings.HasPrefix(names[mi], "*"); sky || turb {
+			// Sky and water have no lightmap and their own fill: they are
+			// kept apart from the lit faces (see [SpecialFace]).
+			if fv, err := bsprender.NewBrushFaceVerts(bm, i); err == nil {
+				kind := KindSky
+				if turb {
+					kind = KindTurb
+				}
+				special[i] = &SpecialFace{Idx: i, Kind: kind, Tex: pics[mi], Verts: fv, Name: names[mi]}
+			}
+			continue
 		}
 		fv, err := bsprender.NewBrushFaceVerts(bm, i)
 		if err != nil {
@@ -226,6 +242,7 @@ func (w *World) Visible(v View, width, height int) ([]int, error) {
 		FovX: w.FOV, FovY: w.FOV,
 	}
 	w.frame++
+	w.visSpecial = w.visSpecial[:0]
 	leaf := w.BM.PointInLeaf(v.Origin)
 	if leaf <= 0 {
 		return nil, nil
@@ -239,8 +256,11 @@ func (w *World) Visible(v View, width, height int) ([]int, error) {
 	}
 	var out []int
 	for i := 0; i < w.surfaces.Len(); i++ {
-		if idx := w.surfaces.Refs[i].FaceIdx; w.Faces[idx] != nil {
+		idx := w.surfaces.Refs[i].FaceIdx
+		if w.Faces[idx] != nil {
 			out = append(out, idx)
+		} else if w.Special[idx] != nil {
+			w.visSpecial = append(w.visSpecial, idx)
 		}
 	}
 	return out, nil

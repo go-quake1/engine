@@ -220,7 +220,7 @@ reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 `cmd/quake-worldcheck` compares the two on 16 fixed e1m1 views on a real GPU
 (tolerance 2.5 % of pixels not explained by a one-pixel shift; 1.52 %
 measured). They need the shareware `pak0.pak`, which is never in the
-repository: point `QUAKE_PAK` at it. Sky, water, dynamic lights and
+repository: point `QUAKE_PAK` at it. Water, dynamic lights and
 animated lightstyles are later steps. Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
@@ -230,6 +230,12 @@ after the world, with `Renderer.EnableAlias` and `DrawEntities`: the engine's
 fixed e1m1 views, 3 % tolerance on the alias region, 0.10 % measured, a
 corrupted skin must fail). Alone, the GPU alias pass is not faster than the
 CPU one at 1280x800; see [docs/webgpu-world/2026-11-03-alias.md](docs/webgpu-world/2026-11-03-alias.md).
+
+The sky is on the GPU as well (`Renderer.EnableSky`, `Time`): the two scrolling
+layers of `render.FillSkyPolygon` (the engine's port, not tyrquake's dome),
+`quake-worldcheck --part sky`, 3 % tolerance, 2.32 % measured, a corrupted
+sky texture must fail; at 1280x800 the sky alone is 6.1 ms in software and
+0.585 ms of GPU wall time. See [docs/webgpu-world/2026-11-03-sky.md](docs/webgpu-world/2026-11-03-sky.md).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

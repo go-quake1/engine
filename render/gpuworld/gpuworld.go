@@ -191,12 +191,17 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 }
 
 // UniformSize is the size of the frame uniform in bytes.
-const UniformSize = 64
+const UniformSize = 80
 
-// Uniform packs the frame uniform: the three rows of the view transform
-// (rotation row and translation, as vec4s) and (tan(fov/2), near clip,
-// halfW/(halfH tan(fov/2)), 0).
+// Uniform packs the frame uniform at time 0; see [UniformAt].
 func Uniform(v worldview.View, fov float32, width, height int) []byte {
+	return UniformAt(v, fov, width, height, 0)
+}
+
+// UniformAt packs the frame uniform: the three rows of the view transform
+// (rotation row and translation, as vec4s), (tan(fov/2), near clip,
+// halfW/(halfH tan(fov/2)), 1/width) and (time in seconds, 0, 0, 0).
+func UniformAt(v worldview.View, fov float32, width, height int, t float32) []byte {
 	view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
 	b := make([]byte, UniformSize)
 	f := func(o int, x float32) { binary.LittleEndian.PutUint32(b[o:], math.Float32bits(x)) }
@@ -211,6 +216,7 @@ func Uniform(v worldview.View, fov float32, width, height int) []byte {
 	f(52, render.ParticleNearClip)
 	f(56, float32(width)/2/(float32(height)/2*tanHalf))
 	f(60, 1/float32(width))
+	f(64, t)
 	return b
 }
 
