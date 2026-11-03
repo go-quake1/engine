@@ -43,6 +43,9 @@ type Renderer struct {
 	Time float32
 	// DrawSky switches the sky pass (see [Renderer.EnableSky]) on or off.
 	DrawSky bool
+	// DrawTurb switches the water pass (see [Renderer.EnableTurb]) on or off.
+	DrawTurb bool
+	turb     *specialGPU
 }
 
 func (r *Renderer) upload(tex *webgpu.Texture, a *Atlas) error {

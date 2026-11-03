@@ -51,6 +51,29 @@ func TestCorruptedSkyFails(t *testing.T) { corruptedPartFails(t, "sky") }
 // TestBenchSky measures the sky at 1280x800 (QUAKE_BENCH_ROUNDS=7).
 func TestBenchSky(t *testing.T) { benchPart(t, "sky") }
 
+// TestGPUTurbMatchesTheSoftwareTurb compares the GPU water with
+// render.FillTurbulentPolygon on 16 fixed e1m1 views of "*" faces.
+func TestGPUTurbMatchesTheSoftwareTurb(t *testing.T) { checkPart(t, "turb") }
+
+// TestCorruptedWaterFails is the planted negative: the GPU gets a water
+// texture with every palette index shifted while the reference keeps the true one.
+func TestCorruptedWaterFails(t *testing.T) { corruptedPartFails(t, "turb") }
+
+// TestBenchTurb measures the water at 1280x800 (QUAKE_BENCH_ROUNDS=7).
+func TestBenchTurb(t *testing.T) { benchPart(t, "turb") }
+
+// TestTurbAttribution removes one ingredient on both sides at a time
+// (QUAKE_ATTRIBUTION=1): the texture (one flat colour) and the animation.
+func TestTurbAttribution(t *testing.T) {
+	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
+		t.Skip("QUAKE_ATTRIBUTION not set")
+	}
+	for _, c := range [][]string{{}, {"--flatSkin"}, {"--noScroll"}, {"--flatSkin", "--noScroll"}} {
+		t.Logf("probe %v", c)
+		runInBrowser(t, append([]string{"--part", "turb", "--tolerance", "1"}, c...)...)
+	}
+}
+
 // TestSkyAttribution removes one ingredient on both sides at a time
 // (QUAKE_ATTRIBUTION=1): the texture (one flat colour) and the scroll.
 func TestSkyAttribution(t *testing.T) {

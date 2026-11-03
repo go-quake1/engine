@@ -162,10 +162,17 @@ func checkSpecial(ctx context.Context, v verdict, w *worldview.World, cm *render
 }
 
 func enableSpecial(gr *gpuworld.Renderer, kind worldview.SpecialKind) error {
+	if kind == worldview.KindTurb {
+		return gr.EnableTurb()
+	}
 	return gr.EnableSky()
 }
 
 func setSpecial(gr *gpuworld.Renderer, kind worldview.SpecialKind, on bool) {
+	if kind == worldview.KindTurb {
+		gr.DrawTurb = on
+		return
+	}
 	gr.DrawSky = on
 }
 

@@ -6,6 +6,8 @@ package gpuworld
 import (
 	"encoding/binary"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/worldview"
@@ -98,8 +100,45 @@ func (s *Special) Draws(w *worldview.World, v worldview.View, out []Draw) []Draw
 	return out
 }
 
-// SpecialShaderWGSL draws sky faces (fsSky) and, in a later step, water
-// faces into the r8uint target.
+// TurbShaderWGSL is [SpecialShaderWGSL] plus fsTurb: render.FillTurbulentPolygon
+// per fragment. The warp is the engine's: u' = u + turbsin[floor((v + 40 t) /
+// 16) & 255] and v' = v + turbsin[floor((u + 40 t) / 16) & 255], with the
+// table the engine builds (peak 8 texels), wrapped into the texture and looked
+// up through colormap row 0 (light level 0).
+func TurbShaderWGSL() string {
+	var b strings.Builder
+	b.WriteString(SpecialShaderWGSL)
+	b.WriteString("\nvar<private> turbsin = array<f32, 256>(")
+	for i, v := range render.TurbSinTable() {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		s := strconv.FormatFloat(float64(v), 'g', -1, 32)
+		if !strings.ContainsAny(s, ".e") {
+			s += ".0" // a literal such as "8" must be a float in WGSL
+		}
+		b.WriteString(s)
+	}
+	b.WriteString(`);
+
+fn warp(coord: f32, t: f32) -> f32 {
+  return turbsin[u32(i32(floor((coord + t * 40.0) / 16.0)) & 255)];
+}
+
+@fragment fn fsTurb(v: VOut) -> @location(0) vec4u {
+  let uv = v.uv + 0.5 * dpdxFine(v.uv);
+  let t = u.q.x;
+  let uw = uv.x + warp(uv.y, t);
+  let vw = uv.y + warp(uv.x, t);
+  let texel = at(v.tr, wrap(i32(floor(uw)), i32(v.tr.z)), wrap(i32(floor(vw)), i32(v.tr.w)));
+  return vec4u(textureLoad(cmap, vec2u(texel, 0u), 0).r, 0u, 0u, 0u);
+}
+`)
+	return b.String()
+}
+
+// SpecialShaderWGSL draws sky faces (fsSky) and, with [TurbShaderWGSL],
+// water faces into the r8uint target.
 const SpecialShaderWGSL = `
 struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
