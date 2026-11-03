@@ -250,7 +250,7 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 func benchAlias(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *render.ColorMap, shade render.AliasShadeRange, views []worldview.AliasView, swap map[*worldview.AliasModel]*worldview.AliasModel, width, height int) *partBench {
 	fb, _ := render.NewFrameBuffer(width, height)
 	const passes = 8
-	var en, al, gw, ga []float64
+	var en, al, gw, ga, go2 []float64
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	for p := 0; p < passes+1; p++ {
 		for _, av := range views {
@@ -262,17 +262,23 @@ func benchAlias(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, 
 			_ = gr.Draw(av.View)
 			_ = gr.Wait(ctx)
 			t3 := time.Now()
+			gr.SkipWorld = true
 			_ = gr.DrawEntities(av.View, av.Ents)
 			_ = gr.Wait(ctx)
+			gr.SkipWorld = false
 			t4 := time.Now()
+			_ = gr.DrawEntities(av.View, av.Ents)
+			_ = gr.Wait(ctx)
+			t5 := time.Now()
 			if p > 0 {
 				en, al = append(en, ms(t2.Sub(t0))), append(al, ms(t2.Sub(t1)))
-				gw, ga = append(gw, ms(t3.Sub(t2))), append(ga, ms(t4.Sub(t3)))
+				gw, ga, go2 = append(gw, ms(t3.Sub(t2))), append(ga, ms(t5.Sub(t4))), append(go2, ms(t4.Sub(t3)))
 			}
 		}
 	}
 	return &partBench{Frames: len(en), EngineFrameMS: pct(en, .5), EngineFrameP95MS: pct(en, .95), EnginePartMS: pct(al, .5), EnginePartP95MS: pct(al, .95),
-		GPUWorldWallMS: pct(gw, .5), GPUWorldWallP95MS: pct(gw, .95), GPUFrameWallMS: pct(ga, .5), GPUFrameWallP95MS: pct(ga, .95)}
+		GPUWorldWallMS: pct(gw, .5), GPUWorldWallP95MS: pct(gw, .95), GPUFrameWallMS: pct(ga, .5), GPUFrameWallP95MS: pct(ga, .95),
+		GPUPartWallMS: pct(go2, .5), GPUPartWallP95MS: pct(go2, .95)}
 }
 
 // partBench is the benchmark of a part after the world: the engine's
@@ -284,6 +290,8 @@ type partBench struct {
 	EngineFrameP95MS  float64 `json:"engine_frame_p95_ms"`
 	EnginePartMS      float64 `json:"engine_part_ms"`
 	EnginePartP95MS   float64 `json:"engine_part_p95_ms"`
+	GPUPartWallMS     float64 `json:"gpu_part_wall_ms"`
+	GPUPartWallP95MS  float64 `json:"gpu_part_wall_p95_ms"`
 	GPUWorldWallMS    float64 `json:"gpu_world_wall_ms"`
 	GPUWorldWallP95MS float64 `json:"gpu_world_wall_p95_ms"`
 	GPUFrameWallMS    float64 `json:"gpu_frame_wall_ms"`

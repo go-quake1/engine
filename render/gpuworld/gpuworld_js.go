@@ -33,6 +33,10 @@ type Renderer struct {
 	clear    float64
 	cmView   *webgpu.TextureView
 	alias    *aliasGPU
+
+	// SkipWorld leaves the lit faces out of the pass (the target is still
+	// cleared): to time what is drawn after them on its own.
+	SkipWorld bool
 }
 
 func (r *Renderer) upload(tex *webgpu.Texture, a *Atlas) error {
@@ -189,8 +193,10 @@ func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) err
 	p.SetBindGroup(0, r.group)
 	p.SetVertexBuffer(0, r.vb, 0, 0)
 	p.SetIndexBuffer(r.ib, webgpu.IndexFormatUint32, 0, 0)
-	for _, d := range r.draws {
-		p.DrawIndexed(d.Count, 1, d.First, 0, 0)
+	if !r.SkipWorld {
+		for _, d := range r.draws {
+			p.DrawIndexed(d.Count, 1, d.First, 0, 0)
+		}
 	}
 	r.recordAlias(p)
 	if err := p.End(); err != nil {

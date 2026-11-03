@@ -51,6 +51,7 @@ type partBenchRes struct {
 	GPUWorldWallMS    float64 `json:"gpu_world_wall_ms"`
 	GPUFrameWallMS    float64 `json:"gpu_frame_wall_ms"`
 	GPUFrameWallP95MS float64 `json:"gpu_frame_wall_p95_ms"`
+	GPUPartWallMS     float64 `json:"gpu_part_wall_ms"`
 }
 
 // benchPart runs QUAKE_BENCH_ROUNDS browser runs of a part at 1280x800 (a
@@ -104,6 +105,7 @@ func benchPart(t *testing.T, part string) {
 		{"engine software frame: world path + " + part + " (ms)", func(r partBenchRes) float64 { return r.EngineFrameMS }},
 		{"engine software " + part + " alone (ms)", func(r partBenchRes) float64 { return r.EnginePartMS }},
 		{"gpu world alone, wall to idle (ms)", func(r partBenchRes) float64 { return r.GPUWorldWallMS }},
+		{"gpu " + part + " alone (lit faces skipped), wall to idle (ms)", func(r partBenchRes) float64 { return r.GPUPartWallMS }},
 		{"gpu world + " + part + ", wall to idle (ms)", func(r partBenchRes) float64 { return r.GPUFrameWallMS }},
 		{"engine frame p95 (ms)", func(r partBenchRes) float64 { return r.EngineFrameP95MS }},
 		{"gpu frame p95 (ms)", func(r partBenchRes) float64 { return r.GPUFrameWallP95MS }},
