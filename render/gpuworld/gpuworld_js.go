@@ -121,10 +121,12 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 
 	uint2d := &webgpu.TextureBindingLayout{SampleType: webgpu.TextureSampleTypeUint}
 	bgl, err := dev.CreateBindGroupLayout(webgpu.BindGroupLayoutDescriptor{Entries: []webgpu.BindGroupLayoutEntry{
-		{Binding: 0, Visibility: webgpu.ShaderStageVertex, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeUniform}},
+		{Binding: 0, Visibility: webgpu.ShaderStageVertex | webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeUniform}},
 		{Binding: 1, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
 		{Binding: 2, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
 		{Binding: 3, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
+		{Binding: 4, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
+		{Binding: 5, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 	}})
 	if err != nil {
 		return nil, err
@@ -140,8 +142,27 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		}
 	}
 	r.cmView = views[2]
+	storage := func(label string, data []byte) (*webgpu.Buffer, error) {
+		if len(data) == 0 {
+			data = make([]byte, 16)
+		}
+		b, err := dev.CreateBuffer(webgpu.BufferDescriptor{Label: label, Size: uint64((len(data) + 3) &^ 3), Usage: webgpu.BufferUsageStorage | webgpu.BufferUsageCopyDst})
+		if err != nil {
+			return nil, err
+		}
+		return b, dev.Queue().WriteBuffer(b, 0, data)
+	}
+	faceTab, err := storage("world faces", geo.FaceTab)
+	if err != nil {
+		return nil, err
+	}
+	faceVerts, err := storage("world face vertices", geo.FaceVerts)
+	if err != nil {
+		return nil, err
+	}
 	if r.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
 		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: views[0]}, {Binding: 2, TextureView: views[1]}, {Binding: 3, TextureView: views[2]},
+		{Binding: 4, Buffer: faceTab}, {Binding: 5, Buffer: faceVerts},
 	}}); err != nil {
 		return nil, err
 	}
@@ -153,10 +174,9 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		Layout: pl,
 		Vertex: webgpu.VertexState{Module: mod, EntryPoint: "vs", Buffers: []webgpu.VertexBufferLayout{{ArrayStride: VertexStride, Attributes: []webgpu.VertexAttribute{
 			{Format: webgpu.VertexFormatFloat32x3, Offset: 0, ShaderLocation: 0},
-			{Format: webgpu.VertexFormatFloat32x2, Offset: 12, ShaderLocation: 1},
-			{Format: webgpu.VertexFormatFloat32x2, Offset: 20, ShaderLocation: 2},
 			{Format: webgpu.VertexFormatUint32x4, Offset: 28, ShaderLocation: 3},
 			{Format: webgpu.VertexFormatUint32x4, Offset: 44, ShaderLocation: 4},
+			{Format: webgpu.VertexFormatUint32, Offset: 60, ShaderLocation: 5},
 		}}}},
 		Primitive: webgpu.PrimitiveState{Topology: webgpu.PrimitiveTopologyTriangleList, CullMode: webgpu.CullModeNone},
 		Fragment:  &webgpu.FragmentState{Module: mod, EntryPoint: "fs", Targets: []webgpu.ColorTargetState{{Format: webgpu.TextureFormatR8Uint}}},
