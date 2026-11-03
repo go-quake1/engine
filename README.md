@@ -220,7 +220,7 @@ reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 `cmd/quake-worldcheck` compares the two on 16 fixed e1m1 views on a real GPU
 (tolerance 2.5 % of pixels not explained by a one-pixel shift; 1.52 %
 measured). They need the shareware `pak0.pak`, which is never in the
-repository: point `QUAKE_PAK` at it. Water, dynamic lights and
+repository: point `QUAKE_PAK` at it. Dynamic lights and
 animated lightstyles are later steps. Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
@@ -236,6 +236,12 @@ layers of `render.FillSkyPolygon` (the engine's port, not tyrquake's dome),
 `quake-worldcheck --part sky`, 3 % tolerance, 2.32 % measured, a corrupted
 sky texture must fail; at 1280x800 the sky alone is 6.1 ms in software and
 0.585 ms of GPU wall time. See [docs/webgpu-world/2026-11-03-sky.md](docs/webgpu-world/2026-11-03-sky.md).
+
+So is the water (`*` textures: water, slime, lava, teleporters;
+`Renderer.EnableTurb`): the warp of `render.FillTurbulentPolygon`,
+`quake-worldcheck --part turb`, 3 % tolerance, 0.05 % measured, a corrupted
+texture must fail; 8.4 ms in software against 2.0 ms of GPU wall time at
+1280x800. See [docs/webgpu-world/2026-11-03-water.md](docs/webgpu-world/2026-11-03-water.md).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

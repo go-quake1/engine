@@ -21,7 +21,7 @@ type specialGPU struct {
 	draws  []Draw
 }
 
-func (r *Renderer) newSpecial(geo *Special, entry, label string) (*specialGPU, error) {
+func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*specialGPU, error) {
 	dev := r.dev
 	s := &specialGPU{geo: geo}
 	tex, err := dev.CreateTexture(webgpu.TextureDescriptor{Label: label + " textures", Size: webgpu.Extent3D{Width: uint32(geo.Tex.Width), Height: uint32(geo.Tex.Height)},
@@ -74,7 +74,7 @@ func (r *Renderer) newSpecial(geo *Special, entry, label string) (*specialGPU, e
 	}}); err != nil {
 		return nil, err
 	}
-	mod, err := dev.CreateShaderModule(webgpu.ShaderModuleDescriptor{Label: label, Code: SpecialShaderWGSL})
+	mod, err := dev.CreateShaderModule(webgpu.ShaderModuleDescriptor{Label: label, Code: code})
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +99,34 @@ func (r *Renderer) EnableSky() error {
 	if err != nil {
 		return err
 	}
-	if r.sky, err = r.newSpecial(geo, "fsSky", "sky"); err != nil {
+	if r.sky, err = r.newSpecial(geo, "fsSky", "sky", SpecialShaderWGSL); err != nil {
 		return err
 	}
 	r.DrawSky = true
 	return nil
+}
+
+// EnableTurb uploads the map's water, slime, lava and teleporter faces
+// ("*" textures) and builds the warp pipeline; with [Renderer.DrawTurb] set,
+// [Renderer.DrawEntities] draws them after the sky, at [Renderer.Time].
+func (r *Renderer) EnableTurb() error {
+	geo, err := BuildSpecial(r.w, worldview.KindTurb)
+	if err != nil {
+		return err
+	}
+	if r.turb, err = r.newSpecial(geo, "fsTurb", "turb", TurbShaderWGSL()); err != nil {
+		return err
+	}
+	r.DrawTurb = true
+	return nil
+}
+
+// TurbFaces is the number of water faces on the GPU.
+func (r *Renderer) TurbFaces() int {
+	if r.turb == nil {
+		return 0
+	}
+	return r.turb.geo.Faces
 }
 
 // SkyFaces is the number of sky faces on the GPU.
@@ -119,6 +142,9 @@ func (r *Renderer) SkyFaces() int {
 func (r *Renderer) recordSpecial(p *webgpu.RenderPassRecorder) {
 	if r.sky != nil && r.DrawSky {
 		r.sky.record(r, p)
+	}
+	if r.turb != nil && r.DrawTurb {
+		r.turb.record(r, p)
 	}
 }
 
