@@ -27,8 +27,8 @@ package main
 import (
 	"fmt"
 
-	_ "github.com/go-virtio/validate/board"
-	"github.com/go-virtio/validate/transport"
+	_ "github.com/go-virtio/validate/guest/board"
+	"github.com/go-virtio/validate/guest/transport"
 
 	"github.com/usbarmory/tamago/soc/intel/pci"
 
