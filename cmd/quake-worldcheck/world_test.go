@@ -255,7 +255,7 @@ func TestAttribution(t *testing.T) {
 	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
 		t.Skip("QUAKE_ATTRIBUTION not set")
 	}
-	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}} {
+	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}, {"--exactSpans"}, {"--exactSpans", "--nolight"}} {
 		t.Logf("probe %v", c)
 		runInBrowser(t, append([]string{"--tolerance", "1"}, c...)...)
 	}

@@ -218,8 +218,9 @@ palette indices, the same indices the software renderer writes, so the
 presenter above can display it unchanged. `worldview` is the software
 reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 `cmd/quake-worldcheck` compares the two on 16 fixed e1m1 views on a real GPU
-(tolerance 2.5 % of pixels not explained by a one-pixel shift; 1.52 %
-measured). They need the shareware `pak0.pak`, which is never in the
+(tolerance 2.5 % of pixels not explained by a one-pixel shift; 0.006 %
+measured since the shader reproduces the reference's 8-pixel sub-spans and
+left-edge coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
 repository: point `QUAKE_PAK` at it. Dynamic lights and
 animated lightstyles are later steps. Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
@@ -242,6 +243,17 @@ So is the water (`*` textures: water, slime, lava, teleporters;
 `quake-worldcheck --part turb`, 3 % tolerance, 0.05 % measured, a corrupted
 texture must fail; 8.4 ms in software against 2.0 ms of GPU wall time at
 1280x800. See [docs/webgpu-world/2026-11-03-water.md](docs/webgpu-world/2026-11-03-water.md).
+
+**The software reference is Quake's own** (step 5): the engine's software
+water, sky and alias lighting are ports of tyrquake's `Turbulent8` /
+`D_CalcGradients` / `sintable`, `R_MakeSky` / `D_Sky_uv_To_st`, and
+`R_AliasSetupLighting` with Gouraud light and `anorms.h`, with tests pinned on
+table entries and worked values from the source. The GPU is compared with
+those: water 0.13 %, sky 0.30 %, alias 0.10 % unexplained, world 0.006 %.
+Not ported: `R_LightPoint` (entities use a constant light), `d_polyse.c`'s
+fixed-point edge walk, the surface cache and its mip levels, and the GPU does
+not reproduce the 16- and 32-pixel sub-spans of water and sky. The results
+are in the dated files of [docs/webgpu-world/](docs/webgpu-world/).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

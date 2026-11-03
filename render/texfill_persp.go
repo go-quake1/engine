@@ -38,9 +38,11 @@ type PerspTexturedVertex struct {
 // PerspSubdivStep is the per-scanline sub-span length in pixels.
 // Within each sub-span U/V are interpolated linearly (cheap); at
 // every sub-span boundary we divide 1/Z to get real Z then real
-// U/V. 8 is the upstream default; smaller = more accurate (more
-// divides) per scanline.
-const PerspSubdivStep = 8
+// U/V. 8 is the upstream default (d_scan.c D_DrawSpans8: `count >= 8`);
+// smaller = more accurate (more divides) per scanline. It is a variable so
+// that an ablation can set it to 1 and make the reference exact per pixel;
+// the 8-pixel steps of the fixed-point original are only right for 8.
+var PerspSubdivStep = 8
 
 // Sentinel errors returned by FillPerspectiveTexturedPolygon.
 var (

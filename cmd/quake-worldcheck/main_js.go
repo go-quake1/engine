@@ -228,6 +228,9 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		v.Check = "BENCH"
 		return v
 	}
+	if opts.ablate["--exactSpans"] {
+		render.PerspSubdivStep = 1 // the reference exact per pixel: what the 8-pixel steps cost
+	}
 	for i, view := range w.Views() {
 		ref, _ := render.NewFrameBuffer(width, height)
 		if err := w.DrawSoftware(ref, cm, view); err != nil {
