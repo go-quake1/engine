@@ -70,7 +70,12 @@ func (w *World) DrawSpecialSoftware(fb *render.FrameBuffer, cm *render.ColorMap,
 		}
 		switch kind {
 		case KindSky:
-			_ = render.FillSkyPolygon(fb, f.Tex, verts, t)
+			tab := w.sky.Table(f.Tex, float64(t))
+			if tab == nil {
+				_ = render.FillSkyPolygon(fb, f.Tex, verts, t) // not a 256 x 128 sky
+				continue
+			}
+			_ = render.FillSkyQuake(fb, tab, view, render.SkyFrameTime(float64(t)), verts)
 		case KindTurb:
 			g, ok := render.NewSurfaceGradients(view, w.FOV, fb.Width, fb.Height, f.Plane)
 			if !ok {

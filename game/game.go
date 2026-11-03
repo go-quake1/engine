@@ -512,6 +512,7 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 
 		// Rasterize faces (sky / turb / textured dispatch).
 		var skyTime, turbTime float32
+		var skyCache render.SkyCache
 		if realHost != nil {
 			skyTime = float32(realHost.Server.Time)
 			turbTime = skyTime
@@ -536,7 +537,11 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 			}
 			switch {
 			case strings.HasPrefix(name, "sky"):
-				_ = render.FillSkyPolygon(fb, tex, verts, skyTime)
+				if tab := skyCache.Table(tex, float64(skyTime)); tab != nil {
+					_ = render.FillSkyQuake(fb, tab, view, render.SkyFrameTime(float64(skyTime)), verts)
+				} else {
+					_ = render.FillSkyPolygon(fb, tex, verts, skyTime)
+				}
 			case strings.HasPrefix(name, "*"):
 				// Quake's Turbulent8 on the face's own gradients.
 				if info, ierr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx); ierr == nil {

@@ -69,6 +69,7 @@ type World struct {
 	// the last Visible call selected are in [World.VisibleSpecial].
 	Special    []*SpecialFace
 	visSpecial []int
+	sky        render.SkyCache
 
 	walk     bsprender.WalkContext
 	mark     bsprender.MarkContext
