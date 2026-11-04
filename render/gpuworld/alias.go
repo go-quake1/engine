@@ -284,8 +284,10 @@ fn finalVert(c: vec4u, q: vec2i) -> vec4i {
   let w = f32(mx.x + 1 - mn.x); let h = f32(mx.y + 1 - mn.y);
   var px = f32(mn.x); var py = f32(mn.y);
   let k = vidx - base;
-  if (k == 1u) { px += 3.0 * w; }
-  if (k == 2u) { py += 3.0 * h; }
+  // legs of 2w and 2h cover the box: the last pixel centre, (w - 0.5, h - 0.5),
+  // is inside the hypotenuse (it lies at x/2w + y/2h = 1 - 1/(4w) - 1/(4h)).
+  if (k == 1u) { px += 2.0 * w; }
+  if (k == 2u) { py += 2.0 * h; }
   o.p = vec4f(px / (u.q.y * 0.5) - 1.0, 1.0 - py / (u.q.z * 0.5), 0.0, 1.0);
   return o;
 }
