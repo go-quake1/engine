@@ -53,6 +53,16 @@ func TestWrongLightFails(t *testing.T) {
 	}
 }
 
+// TestWrongWalkFails is the planted negative of the edge-walk step: the
+// shader takes the floor of j dx / dy for the edge columns where the error
+// term of d_polyse.c gives the ceiling.
+func TestWrongWalkFails(t *testing.T) {
+	v := runInBrowser(t, "--part", "alias", "--tolerance", aliasTolerance, "--wrongWalk")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a wrong edge column was not caught: %+v", v)
+	}
+}
+
 type partBenchRes struct {
 	Frames            int     `json:"frames"`
 	EngineFrameMS     float64 `json:"engine_frame_ms"`
@@ -135,7 +145,7 @@ func TestAliasAttribution(t *testing.T) {
 	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
 		t.Skip("QUAKE_ATTRIBUTION not set")
 	}
-	for _, c := range [][]string{{}, {"--flatSkin"}, {"--flatLight"}, {"--noLerp"}, {"--noWeapon"}, {"--standInLight"}, {"--flatSkin", "--flatLight", "--noLerp"}} {
+	for _, c := range [][]string{{}, {"--flatSkin"}, {"--flatLight"}, {"--noLerp"}, {"--noWeapon"}, {"--noFar"}, {"--standInLight"}, {"--flatSkin", "--flatLight", "--noLerp"}} {
 		t.Logf("probe %v", c)
 		runInBrowser(t, append([]string{"--part", "alias", "--tolerance", "1"}, c...)...)
 	}

@@ -139,7 +139,7 @@ func TestFillGouraudTriangleInterpolatesTheLight(t *testing.T) {
 
 func TestDrawAliasInterpQuake(t *testing.T) {
 	fb, rd, skin := newAliasCtx(t)
-	m := frontFacingTri()
+	m := quakeFrontTri()
 	cm := litColormap()
 	ent := AliasEntityInterp{AliasEntity: AliasEntity{Origin: [3]float32{100, 0, 0}}}
 	if err := DrawAliasInterpQuake(fb, rd, cm, 100, false, m, skin, ent); err != nil {
@@ -150,7 +150,7 @@ func TestDrawAliasInterpQuake(t *testing.T) {
 		t.Errorf("centre pixel row %d, want 19", got)
 	}
 	// a frame blend takes the nearer pose's normals; a second frame of the same triangle
-	m2 := frontFacingTri()
+	m2 := quakeFrontTri()
 	m2.Frames = append(m2.Frames, m2.Frames[0])
 	for _, lerp := range []float32{0.25, 1} {
 		e := ent
@@ -172,17 +172,17 @@ func TestDrawAliasInterpQuake(t *testing.T) {
 		t.Errorf("view model centre row %d", got)
 	}
 	// culled and clipped triangles, empty frame group, bad field of view
-	back := makeTriModel([3][3]byte{{0, 15, 10}, {0, 10, 15}, {0, 5, 10}}, 1)
+	back := frontFacingTri() // wound the other way: back-facing for d_polyse.c
 	fbc, _, _ := newAliasCtx(t)
 	_ = DrawAliasInterpQuake(fbc, rd, cm, 100, false, back, skin, ent)
 	near := ent
 	near.Origin = [3]float32{1, 0, 0}
 	_ = DrawAliasInterpQuake(fbc, rd, cm, 100, false, m, skin, near)
-	seam := frontFacingTri()
+	seam := quakeFrontTri()
 	seam.Triangles[0].FacesFront = 0
 	seam.STVerts[0].OnSeam = 1
 	_ = DrawAliasInterpQuake(fbc, rd, cm, 100, false, seam, skin, ent)
-	empty := frontFacingTri()
+	empty := quakeFrontTri()
 	empty.Frames[0] = mdl.Frame{Type: mdl.FrameGroup, Group: &mdl.GroupFrame{}}
 	if err := DrawAliasInterpQuake(fbc, rd, cm, 100, false, empty, skin, ent); err != nil {
 		t.Errorf("empty group: %v", err)
@@ -211,6 +211,101 @@ func TestDrawAliasInterpQuake(t *testing.T) {
 	} {
 		if c.got != c.err {
 			t.Errorf("%s: %v, want %v", c.name, c.got, c.err)
+		}
+	}
+}
+
+// quakeFrontTri is frontFacingTri wound the way d_polyse.c draws it: the
+// screen-space d_xdenom is negative (clockwise on screen, y down), where
+// DrawAlias's own convention is the opposite. A model drawn by the engine
+// before the port was inside out: its back-facing triangles were the ones
+// drawn.
+func quakeFrontTri() *mdl.Model {
+	m := frontFacingTri()
+	m.Triangles[0].VertIndex = [3]int32{0, 2, 1}
+	return m
+}
+
+// A far model is drawn by recursive subdivision and vertex points
+// (D_DrawSubdiv, D_PolysetDrawFinalVerts); one across the near plane keeps
+// only the triangles whose vertices are all in front of it; one wholly behind
+// the view is not drawn.
+func TestDrawAliasInterpQuakeFarAndClipped(t *testing.T) {
+	_, rd, skin := newAliasCtx(t)
+	cm := litColormap()
+	count := func(fb *FrameBuffer) int {
+		n := 0
+		for _, p := range fb.Pixels {
+			if p != 0 {
+				n++
+			}
+		}
+		return n
+	}
+	// far: three vertices are plotted by DrawFinalVerts, the edges' midpoints
+	// by the recursion (the triangle is a few pixels across at z 600)
+	far := quakeFrontTri()
+	fb, _, _ := newAliasCtx(t)
+	if err := DrawAliasInterpQuake(fb, rd, cm, 100, false, far, skin, AliasEntityInterp{AliasEntity: AliasEntity{Origin: [3]float32{600, 0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(fb); n < 3 {
+		t.Errorf("far model: %d pixels, want its vertices at least", n)
+	}
+	// partly in front of the near plane: bbox from z 0 to 40 (object x), one
+	// vertex beyond z 5, two before it: the triangle is dropped
+	part := quakeFrontTri()
+	part.Frames[0].Single.BBoxMax = mdl.TriVertx{V: [3]byte{40, 20, 20}}
+	part.Frames[0].Single.Verts[2].V[0] = 40
+	fb2, _, _ := newAliasCtx(t)
+	if err := DrawAliasInterpQuake(fb2, rd, cm, 100, false, part, skin, AliasEntityInterp{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(fb2); n != 0 {
+		t.Errorf("clipped model: %d pixels, want none (r_aclip.c not ported)", n)
+	}
+	// wholly behind the view
+	fb3, _, _ := newAliasCtx(t)
+	if err := DrawAliasInterpQuake(fb3, rd, cm, 100, false, quakeFrontTri(), skin, AliasEntityInterp{AliasEntity: AliasEntity{Origin: [3]float32{-100, 0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(fb3); n != 0 {
+		t.Errorf("model behind the view: %d pixels", n)
+	}
+}
+
+// AliasClassify is R_AliasCheckBBox for an entity: a model in view is drawn,
+// unclipped, and far ones take the recursive drawer; unusable input is not drawn.
+func TestAliasClassify(t *testing.T) {
+	fb, rd, _ := newAliasCtx(t)
+	m := quakeFrontTri()
+	at := func(x float32) AliasEntityInterp {
+		return AliasEntityInterp{AliasEntity: AliasEntity{Origin: [3]float32{x, 0, 0}}}
+	}
+	if d, a := AliasClassify(fb.Width, fb.Height, rd, m, at(100)); !d || a != AliasUnclipped {
+		t.Errorf("near: %v %d", d, a)
+	}
+	if d, a := AliasClassify(fb.Width, fb.Height, rd, m, at(600)); !d || a != AliasFarSubdiv {
+		t.Errorf("far: %v %d", d, a)
+	}
+	if d, _ := AliasClassify(fb.Width, fb.Height, rd, m, at(-100)); d {
+		t.Error("a model behind the view is drawn")
+	}
+	flat := *rd
+	flat.FovX = 0
+	bad := at(100)
+	bad.FrameIdxNext = 5
+	neg := at(100)
+	neg.FrameIdx = -1
+	for name, f := range map[string]func() bool{
+		"nil refdef": func() bool { d, _ := AliasClassify(fb.Width, fb.Height, nil, m, at(100)); return d },
+		"nil model":  func() bool { d, _ := AliasClassify(fb.Width, fb.Height, rd, nil, at(100)); return d },
+		"zero fov":   func() bool { d, _ := AliasClassify(fb.Width, fb.Height, &flat, m, at(100)); return d },
+		"bad frame":  func() bool { d, _ := AliasClassify(fb.Width, fb.Height, rd, m, bad); return d },
+		"neg frame":  func() bool { d, _ := AliasClassify(fb.Width, fb.Height, rd, m, neg); return d },
+	} {
+		if f() {
+			t.Errorf("%s: drawn", name)
 		}
 	}
 }
