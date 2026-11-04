@@ -4,7 +4,10 @@
 
 package render
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 // This file ports Quake's software alias-model rasteriser as tyrquake has it
 // (d_polyse.c): the fixed-point edge walk of D_DrawNonSubdiv that every alias
@@ -263,7 +266,9 @@ func (w *polyWalk) drawSpans(from int) {
 		} else {
 			w.aspancount += w.e.ubase
 		}
-		if lcount != 0 {
+		if lcount > 0 && w.onPlot == nil && p.y >= 0 && int(p.y) < w.fb.Height && p.x >= 0 && int(p.x)+int(lcount) <= w.fb.Width {
+			w.fastSpan(p, lcount) // wholly inside the frame: no per-pixel bounds
+		} else if lcount != 0 {
 			ptex, sfrac, tfrac, light := p.ptex, p.sfrac, p.tfrac, p.light
 			x := p.x
 			for ; lcount > 0; lcount-- {
@@ -280,6 +285,38 @@ func (w *polyWalk) drawSpans(from int) {
 					tfrac &= 0xFFFF
 				}
 			}
+		}
+	}
+}
+
+// fastSpan is the inner loop of D_PolysetDrawSpans8 for a span that lies
+// inside the frame (the skin offset is still kept inside the skin).
+func (w *polyWalk) fastSpan(p *polySpan, n int32) {
+	g := &w.g
+	dst := w.fb.Pixels[int(p.y)*w.fb.Pitch+int(p.x):][:n]
+	skin := w.skin.Pixels
+	last := int32(len(skin) - 1)
+	cm := w.cm
+	ptex, sfrac, tfrac, light := p.ptex, p.sfrac, p.tfrac, p.light
+	for i := range dst {
+		t := ptex
+		if uint32(t) > uint32(last) {
+			t = max(0, min(t, last))
+		}
+		row := (light & 0xFF00) >> 8
+		if row > ColorMapRows-1 {
+			row = ColorMapRows - 1
+		}
+		dst[i] = cm[row][skin[t]]
+		light += g.lstepx
+		ptex += g.ststepxwhole
+		sfrac += g.sstepxfrac
+		ptex += sfrac >> 16
+		sfrac &= 0xFFFF
+		tfrac += g.tstepxfr
+		if tfrac&0x10000 != 0 {
+			ptex += w.skinwidth
+			tfrac &= 0xFFFF
 		}
 	}
 }
@@ -322,10 +359,18 @@ func PolysetDrawTriangle(fb *FrameBuffer, skin *Pic, cm *ColorMap, v0, v1, v2 Fi
 			}
 		}
 	}
-	w := &polyWalk{fb: fb, skin: skin, cm: cm, skinwidth: int32(skin.Width)}
+	if len(skin.Pixels) == 0 {
+		return false
+	}
+	w := polyPool.Get().(*polyWalk)
+	*w = polyWalk{fb: fb, skin: skin, cm: cm, skinwidth: int32(skin.Width), spans: w.spans[:0]}
 	w.rasterize(&p, xdenom)
+	polyPool.Put(w)
 	return true
 }
+
+// polyPool keeps the walk state (and its span list) between triangles.
+var polyPool = sync.Pool{New: func() any { return &polyWalk{spans: make([]polySpan, 0, 256)} }}
 
 // rasterize is D_RasterizeAliasPolySmooth with D_PolysetSetEdgeTable done.
 func (w *polyWalk) rasterize(p *[3][6]int32, xdenom int32) {

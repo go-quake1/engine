@@ -333,3 +333,43 @@ func TestPolysetRecursiveRandom(t *testing.T) {
 		t.Fatalf("only %d triangles drawn", drawn)
 	}
 }
+
+// A span wholly inside the frame takes the fast loop; it must write what the
+// per-pixel plot writes (the skin offset kept inside the skin, the colormap row
+// clamped), on triangles whose skin positions and lights run off both ends.
+func TestPolysetFastSpanMatchesPlot(t *testing.T) {
+	rng := rand.New(rand.NewSource(3))
+	cm := polyTestCM()
+	skin := polySkin(8, 8)
+	for n := 0; n < 300; n++ {
+		var vs [3]FinalVert
+		for i := range vs {
+			vs[i].V = [6]int32{8 + rng.Int31n(48), 8 + rng.Int31n(48), rng.Int31n(40<<16) - 8<<16, rng.Int31n(40<<16) - 8<<16, rng.Int31n(0x7000) - 0x800}
+		}
+		fast, _ := NewFrameBuffer(64, 64)
+		slow, _ := NewFrameBuffer(64, 64)
+		if !PolysetDrawTriangle(fast, skin, cm, vs[0], vs[1], vs[2], true, 0) {
+			continue
+		}
+		// the same triangle through the per-pixel plot (a hook that writes as plot does)
+		p := [3][6]int32{vs[0].V, vs[1].V, vs[2].V}
+		xdenom := (p[0][1]-p[1][1])*(p[0][0]-p[2][0]) - (p[0][0]-p[1][0])*(p[0][1]-p[2][1])
+		w := &polyWalk{fb: slow, skin: skin, cm: cm, skinwidth: 8}
+		w.onPlot = func(x, y, ptex, light int32) {
+			w2 := &polyWalk{fb: slow, skin: skin, cm: cm, skinwidth: 8}
+			w2.plot(x, y, ptex, light)
+		}
+		w.rasterize(&p, xdenom)
+		for i := range fast.Pixels {
+			if fast.Pixels[i] != slow.Pixels[i] {
+				t.Fatalf("triangle %v: pixel %d: fast %#02x, plot %#02x", p, i, fast.Pixels[i], slow.Pixels[i])
+			}
+		}
+	}
+	// an empty skin draws nothing
+	fb, _ := NewFrameBuffer(8, 8)
+	v := FinalVert{V: [6]int32{1, 1}}
+	if PolysetDrawTriangle(fb, &Pic{}, cm, v, FinalVert{V: [6]int32{5, 1}}, FinalVert{V: [6]int32{1, 5}}, true, 0) {
+		t.Error("a triangle was drawn with an empty skin")
+	}
+}

@@ -20,7 +20,7 @@ import (
 // pak is not in the repository: the tests skip without it.
 const pakEnv = "QUAKE_PAK"
 
-func load(t *testing.T) (*worldview.World, *render.ColorMap) {
+func load(t testing.TB) (*worldview.World, *render.ColorMap) {
 	t.Helper()
 	path := os.Getenv(pakEnv)
 	if path == "" {
