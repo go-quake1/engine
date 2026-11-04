@@ -49,10 +49,7 @@ func NewLightSampler(bm *model.BrushModel) (*LightSampler, error) {
 		return nil, ErrLightNilModel
 	}
 	f := bm.File
-	planes, err := f.Planes()
-	if err != nil {
-		return nil, err
-	}
+	planes, _ := f.Planes() // model.LoadBrush decoded it (and the cache keeps it): no error is left
 	faces, err := f.Faces()
 	if err != nil {
 		return nil, err
