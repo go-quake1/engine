@@ -62,6 +62,7 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 		{Binding: 1, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
 		{Binding: 2, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
 		{Binding: 3, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
+		{Binding: 4, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 	}})
 	if err != nil {
 		return nil, err
@@ -70,16 +71,23 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 	if err != nil {
 		return nil, err
 	}
-	ftab := geo.FaceTab
+	ftab, fverts := geo.FaceTab, geo.FaceVerts
 	if len(ftab) == 0 {
-		ftab = make([]byte, 64)
+		ftab = make([]byte, FaceTabStride)
+	}
+	if len(fverts) == 0 {
+		fverts = make([]byte, 16)
 	}
 	fb, err := buf(label+" faces", ftab, webgpu.BufferUsageStorage)
 	if err != nil {
 		return nil, err
 	}
+	fvb, err := buf(label+" face vertices", fverts, webgpu.BufferUsageStorage)
+	if err != nil {
+		return nil, err
+	}
 	if s.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
-		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: tv}, {Binding: 2, TextureView: r.cmView}, {Binding: 3, Buffer: fb},
+		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: tv}, {Binding: 2, TextureView: r.cmView}, {Binding: 3, Buffer: fb}, {Binding: 4, Buffer: fvb},
 	}}); err != nil {
 		return nil, err
 	}
