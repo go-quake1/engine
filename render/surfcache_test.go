@@ -401,3 +401,63 @@ func TestCacheSurfaceReuseAndRebuild(t *testing.T) {
 		t.Error("a flush must empty the surface's cachespots")
 	}
 }
+
+func TestSurfaceErrorPaths(t *testing.T) {
+	env := &SurfaceEnv{Colormap: testMap(), HaveLightData: true}
+	// fewer samples than the extents need
+	d := &SurfaceDesc{Extents: [2]int{16, 16}, Samples: []byte{1, 2, 3}, Styles: [4]byte{0, 255, 255, 255}}
+	if err := BuildLightMap(make([]uint32, 18*18), d, [4]int{256}, env); !errors.Is(err, ErrSurfaceExtents) {
+		t.Errorf("short samples: %v", err)
+	}
+	// no texture, no colormap
+	if err := DrawSurface(make([]byte, 256), &SurfaceDesc{Extents: [2]int{16, 16}}, [4]int{}, 0, env); !errors.Is(err, ErrSurfaceTexture) {
+		t.Errorf("no texture: %v", err)
+	}
+	d = &SurfaceDesc{Extents: [2]int{16, 16}, Texture: testTexture(16, 16, 0), Styles: [4]byte{255, 255, 255, 255}}
+	if err := DrawSurface(make([]byte, 256), d, [4]int{}, 0, &SurfaceEnv{}); !errors.Is(err, ErrSurfaceTexture) {
+		t.Errorf("no colormap: %v", err)
+	}
+	// the light grid errors surface through DrawSurface and Cache
+	d.Extents = [2]int{16 * 18, 16}
+	if err := DrawSurface(make([]byte, 16*18*16), d, [4]int{}, 0, env); !errors.Is(err, ErrSurfaceExtents) {
+		t.Errorf("19 samples wide: %v", err)
+	}
+}
+
+func TestCacheSurfaceErrorPaths(t *testing.T) {
+	env := &SurfaceEnv{Colormap: testMap(), HaveLightData: true}
+	f := &SurfaceFace{Desc: SurfaceDesc{Extents: [2]int{16, 16}, Texture: testTexture(16, 16, 0), Styles: [4]byte{255, 255, 255, 255}}}
+	c := NewSurfaceCache(100000)
+	if _, err := c.Cache(f, 4, [4]int{}, env); !errors.Is(err, ErrSurfaceMip) {
+		t.Errorf("mip 4: %v", err)
+	}
+	if _, err := NewSurfaceCache(200).Cache(f, 0, [4]int{}, env); !errors.Is(err, ErrCacheTooBig) {
+		t.Errorf("a surface larger than the cache: %v", err)
+	}
+	f.Desc.Texture = nil
+	if _, err := c.Cache(f, 0, [4]int{}, env); !errors.Is(err, ErrSurfaceTexture) {
+		t.Errorf("no texture: %v", err)
+	}
+}
+
+// A cache whose blocks do not add up to its size (never reached by the
+// allocator itself) runs off its end: D_SCAlloc's "hit the end of memory".
+func TestSurfaceCacheHitsTheEnd(t *testing.T) {
+	c := NewSurfaceCache(4100)
+	c.base.Size = 100
+	if _, err := c.Alloc(16, 256); !errors.Is(err, ErrCacheEnd) {
+		t.Errorf("got %v", err)
+	}
+}
+
+// With no frame set up, d_initial_rover is NULL and any rover is past it.
+func TestSurfaceCacheThrashWithoutInitialRover(t *testing.T) {
+	c := NewSurfaceCache(4100)
+	c.wrapped = true
+	if _, err := c.Alloc(16, 256); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Thrash {
+		t.Error("a wrapped cache with no initial rover thrashes")
+	}
+}

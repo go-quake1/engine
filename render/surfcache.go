@@ -250,10 +250,10 @@ func DrawSurface(dst []byte, d *SurfaceDesc, lightadj [4]int, mip int, env *Surf
 				lightstep := lighttemp >> blockdivshift
 				light := lightright
 				for b := blocksize - 1; b >= 0; b-- {
-					row := int(light&0xFF00) >> 8
-					if row > ColorMapRows-1 {
-						row = ColorMapRows - 1
-					}
+					// (light & 0xFF00) >> 8 is at most 63 for the grid's range
+					// (64 to 16320 in 8.8); the mask keeps a bad value from
+					// leaving the table.
+					row := (int(light&0xFF00) >> 8) & (ColorMapRows - 1)
 					dst[prowdest+b] = cm[row][source[psource+b]]
 					light += lightstep
 				}
