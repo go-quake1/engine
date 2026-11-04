@@ -147,6 +147,25 @@ func TestDamagedColormapFails(t *testing.T) {
 	}
 }
 
+// TestWrongMipFails is the planted negative of the surface cache: the GPU
+// takes every face one mip level too far while the reference keeps Quake's,
+// and the comparison must fail.
+func TestWrongMipFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--mipBias")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a wrong mip level was not caught: %+v", v)
+	}
+}
+
+// TestNoMipFails: the GPU without the mip choice (every face at level 0, the
+// old full-size lookup) against the surface-cache reference must fail too.
+func TestNoMipFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--noMip")
+	if v.Check != "FAIL" {
+		t.Fatalf("the GPU without mip levels passed: %+v", v)
+	}
+}
+
 // TestGPUWorldMatchesTheSoftwareWorld compares the GPU world with the
 // software reference on the fixed e1m1 views (see the results document for
 // the measured rates and where the two differ).
@@ -161,15 +180,16 @@ func TestGPUWorldMatchesTheSoftwareWorld(t *testing.T) {
 }
 
 type benchRes struct {
-	Frames        int     `json:"frames"`
-	SoftwareMS    float64 `json:"software_ms"`
-	EngineMS      float64 `json:"engine_ms"`
-	EngineP95MS   float64 `json:"engine_p95_ms"`
-	GPUCPUMS      float64 `json:"gpu_cpu_ms"`
-	GPUWallMS     float64 `json:"gpu_wall_ms"`
-	SoftwareP95MS float64 `json:"software_p95_ms"`
-	GPUCPUP95MS   float64 `json:"gpu_cpu_p95_ms"`
-	GPUWallP95MS  float64 `json:"gpu_wall_p95_ms"`
+	Frames         int     `json:"frames"`
+	SoftwareMS     float64 `json:"software_ms"`
+	SoftwareColdMS float64 `json:"software_cold_ms"`
+	EngineMS       float64 `json:"engine_ms"`
+	EngineP95MS    float64 `json:"engine_p95_ms"`
+	GPUCPUMS       float64 `json:"gpu_cpu_ms"`
+	GPUWallMS      float64 `json:"gpu_wall_ms"`
+	SoftwareP95MS  float64 `json:"software_p95_ms"`
+	GPUCPUP95MS    float64 `json:"gpu_cpu_p95_ms"`
+	GPUWallP95MS   float64 `json:"gpu_wall_p95_ms"`
 }
 
 func load(t *testing.T) float64 {
@@ -237,6 +257,7 @@ func TestBenchWorld(t *testing.T) {
 		{"engine software world (ms)", func(r benchRes) float64 { return r.EngineMS }},
 		{"engine software world p95 (ms)", func(r benchRes) float64 { return r.EngineP95MS }},
 		{"software frame (ms)", func(r benchRes) float64 { return r.SoftwareMS }},
+		{"software frame, surface cache emptied first (ms)", func(r benchRes) float64 { return r.SoftwareColdMS }},
 		{"gpu frame, CPU time (ms)", func(r benchRes) float64 { return r.GPUCPUMS }},
 		{"gpu frame, wall to GPU idle (ms)", func(r benchRes) float64 { return r.GPUWallMS }},
 		{"software p95 (ms)", func(r benchRes) float64 { return r.SoftwareP95MS }},
@@ -255,7 +276,11 @@ func TestAttribution(t *testing.T) {
 	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
 		t.Skip("QUAKE_ATTRIBUTION not set")
 	}
-	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}, {"--exactSpans"}, {"--exactSpans", "--nolight"}} {
+	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}, {"--exactSpans"}, {"--exactSpans", "--nolight"},
+		// the surface cache's ingredients: no mip choice on the GPU, the
+		// reference at level 0 against the GPU's choice, both at level 0, and
+		// the reference of v0.6.1 (what the GPU matched before the cache)
+		{"--noMip"}, {"--refMip0"}, {"--noMip", "--refMip0"}, {"--oldRef"}, {"--mipBias"}} {
 		t.Logf("probe %v", c)
 		runInBrowser(t, append([]string{"--tolerance", "1"}, c...)...)
 	}

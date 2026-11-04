@@ -52,6 +52,13 @@ type Face struct {
 	// bytes; a face without static lighting has the 1x1 plane {255}
 	// (full bright).
 	Light []byte
+
+	// Surf is the face as the surface cache sees it (msurface_t): extents,
+	// texturemins, the styles' lightmaps (Samples, nil when the face has none),
+	// the texture with its four mip levels, and the cachespots.
+	Surf render.SurfaceFace
+	// MipAdjust is texinfo->mipadjust.
+	MipAdjust float32
 }
 
 // ErrNoMap is returned by [LoadMap] when the pak has no such map.
@@ -73,6 +80,18 @@ type World struct {
 	Special    []*SpecialFace
 	visSpecial []int
 	sky        render.SkyCache
+
+	// HaveLightData is cl.worldmodel->lightdata != NULL.
+	HaveLightData bool
+
+	// cache is the surface cache DrawSoftware draws through (d_surf.c), made
+	// for a frame size on first use.
+	cache       *render.SurfaceCache
+	cacheW      int
+	cacheH      int
+	cacheThrash int // frames in which r_cache_thrash was set
+	cacheBuilds int // surfaces built (c_surf)
+	cacheHits   int
 
 	walk     bsprender.WalkContext
 	mark     bsprender.MarkContext
@@ -127,6 +146,7 @@ func New(bsp []byte) (*World, error) {
 		return nil, fmt.Errorf("worldview: %w", err)
 	}
 	pics := make([]*render.Pic, mtl.NumMipTex)
+	surfTex := make([]*render.SurfaceTexture, mtl.NumMipTex)
 	names := make([]string, mtl.NumMipTex)
 	for i := range pics {
 		mt, ok, err := mtl.MipTex(i)
@@ -139,6 +159,13 @@ func New(bsp []byte) (*World, error) {
 		}
 		pics[i] = &render.Pic{Width: int(mt.Width), Height: int(mt.Height), Pixels: append([]byte(nil), px...)}
 		names[i] = mt.Name
+		st := &render.SurfaceTexture{Width: int(mt.Width), Height: int(mt.Height)}
+		for k := 0; k < render.SurfMips; k++ {
+			if mp, err := mt.Pixels(k); err == nil {
+				st.Mips[k] = append([]byte(nil), mp...)
+			}
+		}
+		surfTex[i] = st
 	}
 	light := file.Lighting()
 	special := make([]*SpecialFace, len(nf))
@@ -173,13 +200,29 @@ func New(bsp []byte) (*World, error) {
 			continue
 		}
 		plane := []byte{255}
-		if n := info.Width * info.Height; info.LightOfs >= 0 && int(info.LightOfs)+n <= len(light) {
+		desc := render.SurfaceDesc{
+			Extents:     [2]int{(info.Width - 1) * 16, (info.Height - 1) * 16},
+			TextureMins: [2]int{info.MinS, info.MinT},
+			Styles:      info.Styles,
+			Texture:     surfTex[mi],
+		}
+		n := info.Width * info.Height
+		if info.LightOfs >= 0 && int(info.LightOfs)+n <= len(light) {
 			plane = append([]byte(nil), light[info.LightOfs:int(info.LightOfs)+n]...)
+			styles := 0
+			for styles < 4 && info.Styles[styles] != 255 {
+				styles++
+			}
+			if int(info.LightOfs)+styles*n <= len(light) {
+				desc.Samples = append([]byte(nil), light[info.LightOfs:int(info.LightOfs)+styles*n]...)
+			}
 		} else {
 			info.Width, info.Height = 1, 1
 		}
-		w.Faces[i] = &Face{Idx: i, Tex: pics[mi], Verts: fv, Info: info, Light: plane}
+		w.Faces[i] = &Face{Idx: i, Tex: pics[mi], Verts: fv, Info: info, Light: plane,
+			Surf: render.SurfaceFace{Desc: desc}, MipAdjust: render.MipAdjust(fv.UVAxisS, fv.UVAxisT)}
 	}
+	w.HaveLightData = len(light) > 0
 	w.walk = bsprender.NewWalkContext(bm)
 	w.mark = bsprender.NewMarkContext(bm)
 	if w.Lights, err = bsprender.NewLightSampler(bm); err != nil {
@@ -277,9 +320,112 @@ func (w *World) Visible(v View, width, height int) ([]int, error) {
 	return out, nil
 }
 
-// DrawSoftware is the reference: it clears fb to [ClearIndex] and draws
-// the visible faces in the walk's order, as the engine does, with lightmapped perspective texturing through cm.
+// StyleAdj is d_lightstylevalue[surface->styles[0..3]]: the light styles of the
+// fixed views are all at their resting value ([bsprender.NormalLightStyle]).
+func StyleAdj(styles [4]byte) [4]int {
+	var a [4]int
+	for i := range a {
+		a[i] = bsprender.NormalLightStyle(styles[i])
+	}
+	return a
+}
+
+// SurfaceCacheStats counts what DrawSoftware's surface cache did since
+// [World.ResetSurfaceCache]: surfaces built (c_surf), cache hits, and frames
+// in which the cache thrashed (r_cache_thrash).
+type SurfaceCacheStats struct{ Builds, Hits, ThrashFrames int }
+
+// SurfaceCacheStats returns the counters.
+func (w *World) SurfaceCacheStats() SurfaceCacheStats {
+	return SurfaceCacheStats{w.cacheBuilds, w.cacheHits, w.cacheThrash}
+}
+
+// ResetSurfaceCache empties the surface cache and its counters (D_FlushCaches).
+func (w *World) ResetSurfaceCache() {
+	if w.cache != nil {
+		w.cache.Flush()
+	}
+	w.cacheBuilds, w.cacheHits, w.cacheThrash = 0, 0, 0
+}
+
+// DrawSoftware is the reference: it clears fb to [ClearIndex] and draws the
+// visible faces in the walk's order, as the engine does, from Quake's surface
+// cache with mip levels (render.SurfaceCache; d_edge.c D_DrawSurface): each
+// face's mip level comes from its distance ([MipView.Level]), its lit surface
+// from D_CacheSurface, and the span drawer reads that surface with the face's
+// own gradients (render.FillPerspectiveCachedPolygon, 8-pixel sub-spans).
 func (w *World) DrawSoftware(fb *render.FrameBuffer, cm *render.ColorMap, v View) error {
+	return w.drawCached(fb, cm, v, -1)
+}
+
+// DrawSoftwareMip is DrawSoftware with every face at one mip level (an
+// ablation of the mip choice).
+func (w *World) DrawSoftwareMip(fb *render.FrameBuffer, cm *render.ColorMap, v View, mip int) error {
+	return w.drawCached(fb, cm, v, mip)
+}
+
+func (w *World) drawCached(fb *render.FrameBuffer, cm *render.ColorMap, v View, forceMip int) error {
+	for i := range fb.Pixels {
+		fb.Pixels[i] = ClearIndex
+	}
+	faces, err := w.Visible(v, fb.Width, fb.Height)
+	if err != nil {
+		return err
+	}
+	if w.cache == nil || w.cacheW != fb.Width || w.cacheH != fb.Height {
+		w.cache = render.NewSurfaceCache(render.SurfaceCacheForRes(fb.Width, fb.Height))
+		w.cacheW, w.cacheH = fb.Width, fb.Height
+	}
+	w.cache.SetupFrame()
+	w.cache.Thrash = false
+	env := &render.SurfaceEnv{Colormap: cm, HaveLightData: w.HaveLightData}
+	view := w.rd.SetupView()
+	mv := NewMipView(fb.Width, fb.Height, w.FOV)
+	var cv [render.MaxPolyVerts]render.CachedVertex
+	for _, idx := range faces {
+		f := w.Faces[idx]
+		verts, err := bsprender.TransformFaceLightmapped(view, fb, w.FOV, f.Verts, f.Info)
+		if err != nil {
+			continue // behind the camera, or not a polygon the filler takes
+		}
+		mip := forceMip
+		if mip < 0 {
+			mip = mv.Level(view, f)
+		}
+		adj := StyleAdj(f.Surf.Desc.Styles)
+		had := f.Surf.Spot(mip)
+		blk, err := w.cache.Cache(&f.Surf, mip, adj, env)
+		if err != nil {
+			continue // a surface the cache cannot hold (Quake stops with an error)
+		}
+		if had == blk {
+			w.cacheHits++
+		} else {
+			w.cacheBuilds++
+		}
+		sw, sh := f.Surf.Desc.Extents[0]>>mip, f.Surf.Desc.Extents[1]>>mip
+		if sw <= 0 || sh <= 0 {
+			continue
+		}
+		scale := 1 / float32(int(1)<<mip)
+		c := cv[:len(verts)]
+		for i, lv := range verts {
+			c[i] = render.CachedVertex{X: lv.X, Y: lv.Y, Z: lv.Z, CU: lv.LmS * 16 * scale, CV: lv.LmT * 16 * scale}
+		}
+		_ = render.FillPerspectiveCachedPolygon(fb, &render.CachedSurface{W: sw, H: sh, Pixels: blk.Data}, c)
+	}
+	if w.cache.Thrash {
+		w.cacheThrash++
+	}
+	return nil
+}
+
+// DrawLightmapped is the reference of the first steps: the same faces, each
+// sampled per pixel from its texture at full size and its lightmap
+// (bilinear), no surface cache and no mip levels
+// (render.FillPerspectiveLightmappedPolygon). It is what DrawSoftware was
+// before the surface cache, kept for the ablation.
+func (w *World) DrawLightmapped(fb *render.FrameBuffer, cm *render.ColorMap, v View) error {
 	for i := range fb.Pixels {
 		fb.Pixels[i] = ClearIndex
 	}

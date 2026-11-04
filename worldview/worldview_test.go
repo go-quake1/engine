@@ -43,6 +43,94 @@ func load(t testing.TB) (*worldview.World, *render.ColorMap) {
 	return w, cm
 }
 
+// TestSurfaceCacheOnE1M1 draws the 16 views through the surface cache: the mip
+// levels the views choose, what the cache holds, and that a second pass over
+// the same views builds nothing.
+func TestSurfaceCacheOnE1M1(t *testing.T) {
+	w, cm := load(t)
+	views := w.Views()
+	var hist [render.SurfMips]int
+	noLight := 0
+	for _, f := range w.Faces {
+		if f != nil && f.Surf.Desc.Samples == nil {
+			noLight++
+		}
+	}
+	mv := worldview.NewMipView(320, 200, w.FOV)
+	for _, v := range views {
+		fb, _ := render.NewFrameBuffer(320, 200)
+		if err := w.DrawSoftware(fb, cm, v); err != nil {
+			t.Fatal(err)
+		}
+		faces, _ := w.Visible(v, 320, 200)
+		view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
+		for _, idx := range faces {
+			hist[mv.Level(view, w.Faces[idx])]++
+		}
+	}
+	first := w.SurfaceCacheStats()
+	t.Logf("mip levels of the visible faces over %d views: %v; faces without a lightmap: %d; first pass %+v", len(views), hist, noLight, first)
+	for k, n := range hist {
+		if n == 0 {
+			t.Errorf("no face at mip %d in the 16 views: the views do not exercise it", k)
+		}
+	}
+	for _, v := range views {
+		fb, _ := render.NewFrameBuffer(320, 200)
+		_ = w.DrawSoftware(fb, cm, v)
+	}
+	second := w.SurfaceCacheStats()
+	t.Logf("second pass %+v", second)
+	if second.Hits <= first.Hits {
+		t.Error("the second pass never hit the cache")
+	}
+}
+
+// TestSurfaceCacheMovesTheReference measures how far the surface cache moved
+// the reference: the per-pixel lightmapped frame of v0.6.1 (which the GPU of
+// v0.6.1 matched to 0.006 %) against the surface-cache frame, with the same
+// metric as the browser check (unexplained: not equal at any of the 8
+// neighbours).
+func TestSurfaceCacheMovesTheReference(t *testing.T) {
+	w, cm := load(t)
+	differ, unexplained, total := 0, 0, 0
+	for _, v := range w.Views() {
+		a, _ := render.NewFrameBuffer(320, 200)
+		b, _ := render.NewFrameBuffer(320, 200)
+		if err := w.DrawLightmapped(a, cm, v); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.DrawSoftware(b, cm, v); err != nil {
+			t.Fatal(err)
+		}
+		for y := 0; y < 200; y++ {
+			for x := 0; x < 320; x++ {
+				g, r := a.Pixels[y*a.Pitch+x], b.Pixels[y*b.Pitch+x]
+				total++
+				if g == r {
+					continue
+				}
+				differ++
+				near := false
+				for dy := -1; dy <= 1 && !near; dy++ {
+					for dx := -1; dx <= 1 && !near; dx++ {
+						nx, ny := x+dx, y+dy
+						near = nx >= 0 && ny >= 0 && nx < 320 && ny < 200 && b.Pixels[ny*b.Pitch+nx] == g
+					}
+				}
+				if !near {
+					unexplained++
+				}
+			}
+		}
+	}
+	t.Logf("v0.6.1's reference against the surface-cache reference: %d of %d differ (%.4f), %d unexplained (%.4f)",
+		differ, total, float64(differ)/float64(total), unexplained, float64(unexplained)/float64(total))
+	if float64(unexplained)/float64(total) < 0.03 {
+		t.Errorf("the surface cache did not move the reference: %d unexplained", unexplained)
+	}
+}
+
 func TestLoadMapMissing(t *testing.T) {
 	fsys, _, _ := bench.OpenPak("")
 	if _, err := worldview.LoadMap(fsys, "e1m1"); err == nil {

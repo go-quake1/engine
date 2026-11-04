@@ -124,7 +124,8 @@ func main() {
 		case "--part":
 			i++
 			opts.part = args[i]
-		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk":
+		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
+			"--noMip", "--refMip0", "--mipBias", "--oldRef":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++
@@ -174,9 +175,18 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		}
 		if noLight {
 			f.Light, f.Info.Width, f.Info.Height = []byte{128}, 1, 1
+			// the surface cache's light: one style, every sample 128
+			n := ((f.Surf.Desc.Extents[0] >> 4) + 1) * ((f.Surf.Desc.Extents[1] >> 4) + 1)
+			f.Surf.Desc.Samples = bytes.Repeat([]byte{128}, n)
+			f.Surf.Desc.Styles = [4]byte{0, 255, 255, 255}
 		}
 		if noTex {
 			f.Tex = &render.Pic{Width: 1, Height: 1, Pixels: []byte{0x70}}
+			flat := &render.SurfaceTexture{Width: 16, Height: 16}
+			for k := range flat.Mips {
+				flat.Mips[k] = bytes.Repeat([]byte{0x70}, (16>>k)*(16>>k))
+			}
+			f.Surf.Desc.Texture = flat
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -217,6 +227,14 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		return v
 	}
 	v.Faces = gr.Faces()
+	// Mip ablations and the planted negative: the GPU draws every face at
+	// level 0, or one level too far.
+	if opts.ablate["--noMip"] {
+		gr.Mip = gpuworld.MipPolicy{Fixed: 0}
+	}
+	if opts.ablate["--mipBias"] {
+		gr.Mip = gpuworld.MipPolicy{Fixed: -1, Bias: 1}
+	}
 	switch opts.part {
 	case "alias":
 		return checkAlias(ctx, v, p, w, cm, gr, corrupt, benchRun)
@@ -233,7 +251,17 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 	}
 	for i, view := range w.Views() {
 		ref, _ := render.NewFrameBuffer(width, height)
-		if err := w.DrawSoftware(ref, cm, view); err != nil {
+		var err error
+		switch {
+		case opts.ablate["--oldRef"]:
+			// the reference of v0.6.1: per-pixel lightmap, full-size texture
+			err = w.DrawLightmapped(ref, cm, view)
+		case opts.ablate["--refMip0"]:
+			err = w.DrawSoftwareMip(ref, cm, view, 0)
+		default:
+			err = w.DrawSoftware(ref, cm, view)
+		}
+		if err != nil {
 			v.Detail = err.Error()
 			return v
 		}
@@ -292,15 +320,17 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 }
 
 type benchRes struct {
-	Frames        int     `json:"frames"`
-	SoftwareMS    float64 `json:"software_ms"`
-	EngineMS      float64 `json:"engine_ms"`
-	EngineP95MS   float64 `json:"engine_p95_ms"`
-	GPUCPUMS      float64 `json:"gpu_cpu_ms"`
-	GPUWallMS     float64 `json:"gpu_wall_ms"`
-	SoftwareP95MS float64 `json:"software_p95_ms"`
-	GPUCPUP95MS   float64 `json:"gpu_cpu_p95_ms"`
-	GPUWallP95MS  float64 `json:"gpu_wall_p95_ms"`
+	Frames     int     `json:"frames"`
+	SoftwareMS float64 `json:"software_ms"`
+	// SoftwareColdMS is the same frame with the surface cache emptied first.
+	SoftwareColdMS float64 `json:"software_cold_ms"`
+	EngineMS       float64 `json:"engine_ms"`
+	EngineP95MS    float64 `json:"engine_p95_ms"`
+	GPUCPUMS       float64 `json:"gpu_cpu_ms"`
+	GPUWallMS      float64 `json:"gpu_wall_ms"`
+	SoftwareP95MS  float64 `json:"software_p95_ms"`
+	GPUCPUP95MS    float64 `json:"gpu_cpu_p95_ms"`
+	GPUWallP95MS   float64 `json:"gpu_wall_p95_ms"`
 }
 
 func pct(v []float64, p float64) float64 {
@@ -316,7 +346,7 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 	views := w.Views()
 	fb, _ := render.NewFrameBuffer(width, height)
 	const passes = 8
-	var sw, gc, gw, en []float64
+	var sw, gc, gw, en, cold []float64
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	for p := 0; p < passes+1; p++ { // the first pass warms up
 		for _, view := range views {
@@ -336,6 +366,19 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 			}
 		}
 	}
-	return &benchRes{Frames: len(sw), SoftwareMS: pct(sw, .5), EngineMS: pct(en, .5), EngineP95MS: pct(en, .95), GPUCPUMS: pct(gc, .5), GPUWallMS: pct(gw, .5),
+	// The same frames with the surface cache emptied before each (every
+	// surface of the frame built), after the alternating passes so that they
+	// do not disturb what the cache holds there.
+	for p := 0; p < 2; p++ {
+		for _, view := range views {
+			w.ResetSurfaceCache()
+			c0 := time.Now()
+			_ = w.DrawSoftware(fb, cm, view)
+			if p > 0 {
+				cold = append(cold, ms(time.Since(c0)))
+			}
+		}
+	}
+	return &benchRes{Frames: len(sw), SoftwareColdMS: pct(cold, .5), SoftwareMS: pct(sw, .5), EngineMS: pct(en, .5), EngineP95MS: pct(en, .95), GPUCPUMS: pct(gc, .5), GPUWallMS: pct(gw, .5),
 		SoftwareP95MS: pct(sw, .95), GPUCPUP95MS: pct(gc, .95), GPUWallP95MS: pct(gw, .95)}
 }

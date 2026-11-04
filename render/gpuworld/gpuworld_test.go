@@ -4,13 +4,17 @@
 package gpuworld
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"math"
 	"os"
 	"testing"
 
+	"github.com/go-quake1/engine/assets"
 	"github.com/go-quake1/engine/bench"
+	"github.com/go-quake1/engine/render"
+	"github.com/go-quake1/engine/vfs"
 	"github.com/go-quake1/engine/worldview"
 )
 
@@ -65,23 +69,91 @@ func TestBuildE1M1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := Build(w)
+	v := vfs.New()
+	v.Add(fsys)
+	cm, err := assets.LoadColorMapFrom(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Faces == 0 || len(g.Vertices)%VertexStride != 0 || len(g.Indices)%3 != 0 || g.Tex.Height > MaxAtlasHeight {
-		t.Fatalf("faces %d, vertex bytes %d, indices %d, texture atlas %dx%d, lightmap atlas %dx%d",
-			g.Faces, len(g.Vertices), len(g.Indices), g.Tex.Width, g.Tex.Height, g.Lm.Width, g.Lm.Height)
+	g, err := Build(w, cm)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("e1m1: %d faces, %d vertices, %d triangles, texture atlas %dx%d, lightmap atlas %dx%d",
-		g.Faces, len(g.Vertices)/VertexStride, len(g.Indices)/3, g.Tex.Width, g.Tex.Height, g.Lm.Width, g.Lm.Height)
+	if g.Faces == 0 || len(g.Vertices)%VertexStride != 0 || len(g.Indices)%3 != 0 || g.Surf.Height > MaxAtlasHeight {
+		t.Fatalf("faces %d, vertex bytes %d, indices %d, surface atlas %dx%d",
+			g.Faces, len(g.Vertices), len(g.Indices), g.Surf.Width, g.Surf.Height)
+	}
+	t.Logf("e1m1: %d faces, %d vertices, %d triangles, surface atlas %dx%d (%d bytes of surfaces per mip level: %v)",
+		g.Faces, len(g.Vertices)/VertexStride, len(g.Indices)/3, g.Surf.Width, g.Surf.Height, g.SurfBytes[0], g.SurfBytes)
+
+	// The atlas holds exactly what the software path's DrawSurface builds,
+	// at the rectangle the face table gives.
+	env := &render.SurfaceEnv{Colormap: cm, HaveLightData: w.HaveLightData}
+	checked := 0
+	for _, f := range w.Faces {
+		if f == nil || g.Ord[f.Idx] < 0 {
+			continue
+		}
+		ord := int(g.Ord[f.Idx])
+		for mip := 0; mip < render.SurfMips; mip++ {
+			rect := g.SurfTab[ord*64+mip*16:]
+			x, y := int(binary.LittleEndian.Uint32(rect)), int(binary.LittleEndian.Uint32(rect[4:]))
+			sw, sh := int(binary.LittleEndian.Uint32(rect[8:])), int(binary.LittleEndian.Uint32(rect[12:]))
+			if sw != f.Surf.Desc.Extents[0]>>mip || sh != f.Surf.Desc.Extents[1]>>mip {
+				t.Fatalf("face %d mip %d: rect %dx%d, extents %v", f.Idx, mip, sw, sh, f.Surf.Desc.Extents)
+			}
+			want := make([]byte, sw*sh)
+			if err := render.DrawSurface(want, &f.Surf.Desc, worldview.StyleAdj(f.Surf.Desc.Styles), mip, env); err != nil {
+				t.Fatal(err)
+			}
+			for row := 0; row < sh; row++ {
+				if !bytes.Equal(g.Surf.Pixels[(y+row)*g.Surf.Width+x:][:sw], want[row*sw:][:sw]) {
+					t.Fatalf("face %d mip %d row %d differs from DrawSurface", f.Idx, mip, row)
+				}
+			}
+		}
+		if checked++; checked >= 400 {
+			break
+		}
+	}
+
+	// The frame's mip levels are worldview's.
 	var draws []Draw
+	mips := make([]uint32, g.Faces)
+	var hist [render.SurfMips]int
 	for i, v := range w.Views() {
-		if draws, err = g.Draws(w, v, 320, 200, draws); err != nil {
+		if draws, err = g.Draws(w, v, 320, 200, draws, mips, Chosen); err != nil {
 			t.Fatal(err)
 		}
 		if len(draws) == 0 {
 			t.Errorf("view %d draws nothing", i)
 		}
+		view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
+		mv := worldview.NewMipView(320, 200, w.FOV)
+		faces, _ := w.Visible(v, 320, 200)
+		for _, idx := range faces {
+			if g.Ord[idx] < 0 {
+				continue
+			}
+			if want := uint32(mv.Level(view, w.Faces[idx])); mips[g.Ord[idx]] != want && g.Count[idx] > 0 {
+				// faces wholly behind the near plane are not in the list
+				fv := w.Faces[idx].Verts
+				front := false
+				for k := 0; k < fv.NumVerts && !front; k++ {
+					front = render.TransformAffine(view, fv.Vert(k))[2] >= render.ParticleNearClip
+				}
+				if front {
+					t.Fatalf("view %d face %d: mip %d, worldview says %d", i, idx, mips[g.Ord[idx]], want)
+				}
+			}
+			hist[mips[g.Ord[idx]]]++
+		}
+	}
+	t.Logf("mip levels of the faces drawn over the views: %v", hist)
+}
+
+func TestMipPolicy(t *testing.T) {
+	if Chosen.Fixed != -1 || (MipPolicy{}).Fixed != 0 {
+		t.Fatal("Chosen must be Fixed -1; the zero MipPolicy is level 0 (the ablation)")
 	}
 }
