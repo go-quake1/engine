@@ -11,6 +11,36 @@ import (
 	"github.com/go-quake1/engine/render"
 )
 
+// TestSpecialShadersHoldTheSourcesSubSpans: the sub-span lengths, steps and
+// masks of the shaders are those of the sources they port: Turbulent8's 16
+// pixels (shift 4, coordinates masked to TURB_CYCLE << 16) in d_scan.c, and
+// D_DrawSkyScans8's 32 (shift 5) in d_sky.c.
+func TestSpecialShadersHoldTheSourcesSubSpans(t *testing.T) {
+	turb := TurbShaderWGSL()
+	for _, want := range []string{
+		"/ 16;",                                // sub-span index
+		"clamp(remain, 1, 16)",                 // the sub-span's length
+		"vec2u(4u)",                            // (snext - s) >> 4
+		strconv.Itoa(render.TurbCycle<<16 - 1), // s &= (TURB_CYCLE << 16) - 1
+		"clamp(v.x, 16,",                       // a sub-span end is at least 16
+	} {
+		if !strings.Contains(turb, want) {
+			t.Errorf("the water shader lacks %q", want)
+		}
+	}
+	if render.TurbSubSpan != 16 {
+		t.Errorf("render.TurbSubSpan = %d, the shader's is 16", render.TurbSubSpan)
+	}
+	for _, want := range []string{"/ 32;", "clamp(remain, 1, 32)", "vec2u(5u)"} {
+		if !strings.Contains(SpecialShaderWGSL, want) {
+			t.Errorf("the sky shader lacks %q", want)
+		}
+	}
+	if FaceTabStride != 5*16 {
+		t.Errorf("FaceTabStride = %d, the shaders read 5 vec4f", FaceTabStride)
+	}
+}
+
 // TestTurbShaderTableIsQuakes parses sintable back out of the shader text:
 // it must be the port's table, entry for entry.
 func TestTurbShaderTableIsQuakes(t *testing.T) {
