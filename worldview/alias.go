@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"math"
 
+	"github.com/go-quake1/engine/bsprender"
 	"github.com/go-quake1/engine/bsptrace"
 	"github.com/go-quake1/engine/entparse"
 	"github.com/go-quake1/engine/mdl"
@@ -63,6 +64,16 @@ type AliasEnt struct {
 	Lerp         float32
 	Class        string
 	IsViewWeapon bool
+
+	// Light is R_LightPoint at Origin ([World.LightEnt]); both the
+	// software and the GPU path light the entity from it.
+	Light int
+}
+
+// LightEnt sets e.Light to R_LightPoint at the entity's origin, with the
+// light styles at their resting value ([bsprender.NormalLightStyle]).
+func (w *World) LightEnt(e *AliasEnt) {
+	e.Light = w.Lights.LightPoint(e.Origin, bsprender.NormalLightStyle)
 }
 
 // classModels maps the e1m1 classes that are alias models to their model
@@ -117,6 +128,7 @@ func (w *World) AliasEntities(fsys fs.FS) ([]AliasEnt, error) {
 			continue
 		}
 		ae := AliasEnt{Model: am, Skin: min(cm.skin, len(am.Skins)-1), Origin: org, Class: e["classname"]}
+		w.LightEnt(&ae)
 		if a, err := entparse.ParseFloat(e["angle"]); err == nil {
 			ae.Angles[1] = a
 		}
@@ -213,6 +225,7 @@ func (w *World) AliasViews(ents []AliasEnt, weapon func(View) (AliasEnt, error))
 			if err != nil {
 				return nil, err
 			}
+			w.LightEnt(&we)
 			all = append(all, we)
 		}
 		views = append(views, AliasView{View: cam, Target: ti, Ents: all})
@@ -230,7 +243,7 @@ func (w *World) clear(a, b [3]float32) bool {
 
 // DrawAliasSoftware draws ents over fb the way the engine does
 // (game.setupRenderer): render.DrawAliasInterpQuake (Quake's lighting, at
-// render.AliasStandInLight), no depth test, after the world.
+// each entity's R_LightPoint), no depth test, after the world.
 func (w *World) DrawAliasSoftware(fb *render.FrameBuffer, cm *render.ColorMap, v View, ents []AliasEnt) error {
 	rd := &render.RefDef{
 		VRect: render.VRect{Width: fb.Width, Height: fb.Height}, ViewAngles: v.Angles, ViewOrigin: v.Origin,
@@ -243,7 +256,7 @@ func (w *World) DrawAliasSoftware(fb *render.FrameBuffer, cm *render.ColorMap, v
 			},
 			FrameIdxNext: e.Next, Lerp: e.Lerp,
 		}
-		if err := render.DrawAliasInterpQuake(fb, rd, cm, render.AliasStandInLight, e.IsViewWeapon, e.Model.M, e.Model.Skins[e.Skin], ent); err != nil {
+		if err := render.DrawAliasInterpQuake(fb, rd, cm, e.Light, e.IsViewWeapon, e.Model.M, e.Model.Skins[e.Skin], ent); err != nil {
 			return fmt.Errorf("%s: %w", e.Model.Path, err)
 		}
 	}

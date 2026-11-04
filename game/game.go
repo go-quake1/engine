@@ -339,6 +339,7 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 	if err != nil {
 		return fmt.Errorf("model.LoadBrush: %w", err)
 	}
+	lightSampler, _ := bsprender.NewLightSampler(bm) // R_LightPoint; nil = stand-in light
 	faces, err := file.Faces()
 	if err != nil {
 		return fmt.Errorf("file.Faces: %w", err)
@@ -626,7 +627,7 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
 			}
-			_ = render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, am, skin, ent)
+			_ = render.DrawAliasInterpQuake(fb, rd, &cm, lightSampler.LightPointOr(es.Origin, bsprender.NormalLightStyle, render.AliasStandInLight), false, am, skin, ent)
 		}
 
 		// Particles.
@@ -667,7 +668,7 @@ func setupRenderer(runner *runloop.Runner, cfg rendererConfig) error {
 					AngleYaw:   seg.Yaw,
 				},
 			}
-			_ = render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, m, bskin, ent)
+			_ = render.DrawAliasInterpQuake(fb, rd, &cm, lightSampler.LightPointOr(seg.Origin, bsprender.NormalLightStyle, render.AliasStandInLight), false, m, bskin, ent)
 		})
 
 		// HUD / status bar.

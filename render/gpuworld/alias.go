@@ -145,7 +145,7 @@ func (s *AliasSet) Entities(ents []worldview.AliasEnt, out []byte, draws []Alias
 			f(64+4*c, h.ScaleOrigin[c])
 		}
 		f(60, e.Lerp)
-		l := render.NewAliasLighting(render.AliasStandInLight, e.IsViewWeapon, nil, rot)
+		l := render.NewAliasLighting(e.Light, e.IsViewWeapon, nil, rot)
 		f(76, float32(l.Ambient))
 		f(112, l.Vec[0])
 		f(116, l.Vec[1])

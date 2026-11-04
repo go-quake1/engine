@@ -23,11 +23,11 @@ import (
 // D_PolysetScanLeftEdge), and the light of a pixel is the plane through the
 // three vertex lights at its centre, not the stepped integer sum with the
 // ceil of r_lstepx. The ambient light comes from the caller: Quake takes it
-// from R_LightPoint, which is not ported.
+// from R_LightPoint (ported as bsprender.LightSampler).
 
-// AliasStandInLight is the R_LightPoint value (0..255) the engine uses for
-// every entity until R_LightPoint is ported: 76, the ambient 0.3 the engine's
-// earlier shade range had.
+// AliasStandInLight is the R_LightPoint value (0..255) used where there is no
+// map to sample (synthetic scenes): 76, the ambient 0.3 the engine's earlier
+// shade range had.
 const AliasStandInLight = 76
 
 // AliasLightMin is LIGHT_MIN (r_alias.c): no vertex is lit below it.

@@ -49,6 +49,11 @@ func aliasContent(fsys fs.FS, w *worldview.World) ([]worldview.AliasEnt, []world
 			if opts.ablate["--noWeapon"] && e.IsViewWeapon {
 				continue
 			}
+			if opts.ablate["--standInLight"] {
+				// both sides at the constant light the engine used before
+				// R_LightPoint was ported
+				e.Light = render.AliasStandInLight
+			}
 			if opts.ablate["--noLerp"] {
 				e.Next, e.Lerp = e.Frame, 0
 			}
@@ -188,10 +193,17 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 			return v
 		}
 		gents := av.Ents
-		if swap != nil {
+		if swap != nil || opts.ablate["--wrongLight"] {
 			gents = make([]worldview.AliasEnt, len(av.Ents))
 			for k, e := range av.Ents {
-				e.Model = swap[e.Model]
+				if swap != nil {
+					e.Model = swap[e.Model]
+				}
+				if opts.ablate["--wrongLight"] {
+					// planted negative: the GPU lights every entity at the
+					// old constant, the reference at R_LightPoint
+					e.Light = render.AliasStandInLight
+				}
 				gents[k] = e
 			}
 		}
