@@ -124,7 +124,7 @@ func main() {
 		case "--part":
 			i++
 			opts.part = args[i]
-		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans":
+		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++

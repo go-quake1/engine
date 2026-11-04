@@ -98,6 +98,9 @@ func setupRenderer(opts setupRendererOpts) error {
 	if err != nil {
 		return fmt.Errorf("model.LoadBrush: %w", err)
 	}
+	// R_LightPoint's sampler; nil (stand-in light) for a scene without a
+	// readable map.
+	lightSampler, _ := bsprender.NewLightSampler(bm)
 	faces, err := file.Faces()
 	if err != nil {
 		return fmt.Errorf("file.Faces: %w", err)
@@ -772,7 +775,8 @@ func setupRenderer(opts setupRendererOpts) error {
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
 			}
-			if err := render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, am, skin, ent); err != nil {
+			light := lightSampler.LightPointOr(es.Origin, func(s byte) int { return lightStyleBrightness(s, now) }, render.AliasStandInLight)
+			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, am, skin, ent); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit modelIdx=%d from=%d to=%d lerp=%v err: %v",
 						es.ModelIdx, prevIdx, frameIdx, lerp, err)
@@ -905,7 +909,8 @@ func setupRenderer(opts setupRendererOpts) error {
 				FrameIdxNext: 0,
 				Lerp:         0,
 			}
-			if err := render.DrawAliasInterpQuake(fb, rd, &cm, render.AliasStandInLight, false, bm, bskin, ent); err != nil {
+			light := lightSampler.LightPointOr(seg.Origin, func(s byte) int { return lightStyleBrightness(s, now) }, render.AliasStandInLight)
+			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, bm, bskin, ent); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit(bolt kind=%d) err: %v", seg.Kind, err)
 				}

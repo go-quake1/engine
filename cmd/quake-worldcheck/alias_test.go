@@ -43,6 +43,16 @@ func TestCorruptedSkinFails(t *testing.T) {
 	}
 }
 
+// TestWrongLightFails is the planted negative of the R_LightPoint step: the
+// GPU lights every entity at the old constant (76), the reference at each
+// entity's R_LightPoint.
+func TestWrongLightFails(t *testing.T) {
+	v := runInBrowser(t, "--part", "alias", "--tolerance", aliasTolerance, "--wrongLight")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a wrong entity light was not caught: %+v", v)
+	}
+}
+
 type partBenchRes struct {
 	Frames            int     `json:"frames"`
 	EngineFrameMS     float64 `json:"engine_frame_ms"`
@@ -125,7 +135,7 @@ func TestAliasAttribution(t *testing.T) {
 	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
 		t.Skip("QUAKE_ATTRIBUTION not set")
 	}
-	for _, c := range [][]string{{}, {"--flatSkin"}, {"--flatLight"}, {"--noLerp"}, {"--noWeapon"}, {"--flatSkin", "--flatLight", "--noLerp"}} {
+	for _, c := range [][]string{{}, {"--flatSkin"}, {"--flatLight"}, {"--noLerp"}, {"--noWeapon"}, {"--standInLight"}, {"--flatSkin", "--flatLight", "--noLerp"}} {
 		t.Logf("probe %v", c)
 		runInBrowser(t, append([]string{"--part", "alias", "--tolerance", "1"}, c...)...)
 	}

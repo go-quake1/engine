@@ -64,6 +64,9 @@ type World struct {
 	Faces []*Face // by face index; nil for faces that are not drawn
 	FOV   float32
 
+	// Lights is R_LightPoint's sampler over the map's lightmaps.
+	Lights *bsprender.LightSampler
+
 	// Special is the sky and water faces by face index (nil elsewhere).
 	// They are not in Faces and not in [World.Visible]'s result; the ones
 	// the last Visible call selected are in [World.VisibleSpecial].
@@ -179,6 +182,9 @@ func New(bsp []byte) (*World, error) {
 	}
 	w.walk = bsprender.NewWalkContext(bm)
 	w.mark = bsprender.NewMarkContext(bm)
+	if w.Lights, err = bsprender.NewLightSampler(bm); err != nil {
+		return nil, fmt.Errorf("worldview: %w", err)
+	}
 	return w, nil
 }
 
