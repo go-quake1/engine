@@ -250,10 +250,32 @@ water, sky and alias lighting are ports of tyrquake's `Turbulent8` /
 `R_AliasSetupLighting` with Gouraud light and `anorms.h`, with tests pinned on
 table entries and worked values from the source. The GPU is compared with
 those: water 0.13 %, sky 0.30 %, alias 0.10 % unexplained, world 0.006 %.
-Not ported: `R_LightPoint` (entities use a constant light), `d_polyse.c`'s
-fixed-point edge walk, the surface cache and its mip levels, and the GPU does
-not reproduce the 16- and 32-pixel sub-spans of water and sky. The results
-are in the dated files of [docs/webgpu-world/](docs/webgpu-world/).
+The results are in the dated files of [docs/webgpu-world/](docs/webgpu-world/).
+
+**Step 6** ports three of the four pieces step 5 left, each with tests pinned
+on values worked from the source, the GPU re-compared on the same 16 views and
+the same 3 % tolerance, and a planted defect that must fail:
+
+- `R_LightPoint`: entities are lit from the lightmap under them
+  (`bsprender.LightSampler`; 0.10 % unexplained, lighting the GPU at the old
+  constant 76 instead fails at 56 %);
+  [docs/webgpu-world/2026-11-04-lightpoint.md](docs/webgpu-world/2026-11-04-lightpoint.md).
+- the 16-pixel water and 32-pixel sky sub-spans on the GPU (sky 4.90 % of
+  pixels differing before, 0.08 % now; water 2.50 % to 0.62 %);
+  [docs/webgpu-world/2026-11-04-subspans.md](docs/webgpu-world/2026-11-04-subspans.md).
+- `d_polyse.c`'s fixed-point edge walk for alias models
+  (`render.PolysetDrawTriangle`, the recursive drawer for far models,
+  `R_AliasCheckBBox`), on the CPU and reproduced per pixel by the GPU shader:
+  0.75 % unexplained, 0.03 % without the far models, which the GPU does not draw
+  by recursion; the shader taking the floor for the ceiling fails at 7.7 %.
+  It also fixed models being drawn inside out. The software pass is about 6 %
+  slower than before in the browser and the GPU pass about 24 % slower in wall
+  time, both open defects;
+  [docs/webgpu-world/2026-11-04-polyse.md](docs/webgpu-world/2026-11-04-polyse.md).
+
+Not ported: the surface cache and its mip levels (`D_CacheSurface`,
+`R_DrawSurface`), the clipping of triangles that cross the near plane
+(`r_aclip.c`: they are dropped), and dynamic lights.
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The
