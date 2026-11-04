@@ -16,9 +16,9 @@ import (
 )
 
 func TestAliasShaderMatchesTheReferenceConstants(t *testing.T) {
-	// The shader hard-codes the engine's near clip and the colormap size.
-	if render.AliasNearClip != 8 || !strings.Contains(AliasShaderWGSL, "< 8.0") {
-		t.Errorf("alias near clip %v is not the shader's 8.0", render.AliasNearClip)
+	// The shader hard-codes ALIAS_Z_CLIP_PLANE and the colormap size.
+	if render.AliasClipPlane != 5 || !strings.Contains(AliasShaderWGSL, "< 5.0") {
+		t.Errorf("alias clip plane %v is not the shader's 5.0", render.AliasClipPlane)
 	}
 	if render.ColorMapRows != 64 || !strings.Contains(AliasShaderWGSL, "0, 63)") {
 		t.Errorf("colormap rows %d are not the shader's 64", render.ColorMapRows)

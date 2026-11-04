@@ -173,9 +173,50 @@ func aliasPose(model *mdl.Model, ent AliasEntityInterp) []mdl.TriVertx {
 	return lerpAliasPose(a, b, ent.Lerp)
 }
 
-// DrawAliasInterpQuake draws an entity with Quake's lighting: the lighting
-// of R_AliasSetupLighting for lightPoint, Gouraud-shaded. Projection, near
-// clip, back-face cull and the skin seam are those of [DrawAlias].
+// aliasToView maps a model-space point (in model bytes, as the vertices are)
+// to view space for an entity at origin.
+func aliasToView(model *mdl.Model, view Affine, entRot Mat3, origin [3]float32) func([3]float32) [3]float32 {
+	hdr := model.Header
+	return func(b [3]float32) [3]float32 {
+		obj := [3]float32{
+			b[0]*hdr.Scale[0] + hdr.ScaleOrigin[0],
+			b[1]*hdr.Scale[1] + hdr.ScaleOrigin[1],
+			b[2]*hdr.Scale[2] + hdr.ScaleOrigin[2],
+		}
+		r := TransformVector(entRot, obj)
+		return TransformAffine(view, [3]float32{r[0] + origin[0], r[1] + origin[1], r[2] + origin[2]})
+	}
+}
+
+func aliasClassify(av aliasView, model *mdl.Model, ent AliasEntityInterp, toView func([3]float32) [3]float32) (draw bool, accept int) {
+	mins, maxs := AliasBBox(model, ent.FrameIdx, ent.FrameIdxNext)
+	return aliasCheckBBox(av, mins, maxs, model.Header.Size*(1.0/11.0), toView)
+}
+
+// AliasClassify is R_AliasCheckBBox for an entity in a w x h frame: whether
+// the model is drawn at all, and its trivial-accept value ([AliasClipped],
+// [AliasUnclipped], [AliasFarSubdiv]). It reports false when the frame, the
+// view or the model is unusable.
+func AliasClassify(w, h int, rd *RefDef, model *mdl.Model, ent AliasEntityInterp) (draw bool, accept int) {
+	if rd == nil || model == nil || ent.FrameIdx < 0 || ent.FrameIdx >= len(model.Frames) || ent.FrameIdxNext < 0 || ent.FrameIdxNext >= len(model.Frames) {
+		return false, 0
+	}
+	tanHalfX := float32(math.Tan(float64(rd.FovX/2) * math.Pi / 180))
+	if tanHalfX <= 0 {
+		return false, 0
+	}
+	return aliasClassify(newAliasView(w, h, tanHalfX), model, ent, aliasToView(model, rd.SetupView(),
+		entityRotation(ent.AnglePitch, ent.AngleYaw, ent.AngleRoll), ent.Origin))
+}
+
+// DrawAliasInterpQuake draws an entity as Quake's software renderer does: the
+// lighting of R_AliasSetupLighting for lightPoint, the vertices projected to
+// integer screen positions (R_AliasTransformAndProjectFinalVerts), the
+// bounding-box test of R_AliasCheckBBox, and the triangles drawn by d_polyse.c's
+// fixed-point edge walk ([PolysetDrawTriangle]) or, for a model that is far
+// enough away and whole in the view, by recursive subdivision
+// ([PolysetDrawSubdivTriangle]). Not ported: r_aclip.c's clipping of
+// triangles that cross the near plane (they are dropped).
 func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint int, viewModel bool,
 	model *mdl.Model, skin *Pic, ent AliasEntityInterp) error {
 	if fb == nil {
@@ -204,51 +245,55 @@ func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint 
 	if tanHalfX <= 0 {
 		return nil
 	}
-	halfW, halfH := float32(fb.Width)/2, float32(fb.Height)/2
-	scale := halfW / tanHalfX
 	view := rd.SetupView()
 	entRot := entityRotation(ent.AnglePitch, ent.AngleYaw, ent.AngleRoll)
 	light := NewAliasLighting(lightPoint, viewModel, nil, entRot)
 
-	type sv struct{ x, y, z, l float32 }
-	pts := make([]sv, len(verts))
+	if skin.Width*skin.Height != len(skin.Pixels) {
+		return ErrPicShape
+	}
+	hdr := model.Header
+	toView := aliasToView(model, view, entRot, ent.Origin)
+	// R_AliasCheckBBox: a model entirely off one side of the screen is not
+	// drawn, and the unclipped ones far enough away take the recursive drawer.
+	av := newAliasView(fb.Width, fb.Height, tanHalfX)
+	draw, accept := aliasClassify(av, model, ent, toView)
+	if !draw {
+		return nil
+	}
+	// R_AliasTransformAndProjectFinalVerts (and R_AliasPreparePoints for the
+	// clipped case): u and v are truncated to integers; a vertex nearer than
+	// ALIAS_Z_CLIP_PLANE has none.
+	fvs := make([]FinalVert, len(verts))
+	near := make([]bool, len(verts))
 	for i, tv := range verts {
-		obj := [3]float32{
-			float32(tv.V[0])*model.Header.Scale[0] + model.Header.ScaleOrigin[0],
-			float32(tv.V[1])*model.Header.Scale[1] + model.Header.ScaleOrigin[1],
-			float32(tv.V[2])*model.Header.Scale[2] + model.Header.ScaleOrigin[2],
-		}
-		r := TransformVector(entRot, obj)
-		vp := TransformAffine(view, [3]float32{r[0] + ent.Origin[0], r[1] + ent.Origin[1], r[2] + ent.Origin[2]})
-		pts[i].z = vp[2]
-		pts[i].l = float32(light.VertexLight(tv.LightNormalIndex))
-		if vp[2] >= AliasNearClip {
-			pts[i].x = halfW + vp[0]*scale/vp[2]
-			pts[i].y = halfH - vp[1]*scale/vp[2]
+		vp := toView([3]float32{float32(tv.V[0]), float32(tv.V[1]), float32(tv.V[2])})
+		st := model.STVerts[i]
+		fv := &fvs[i]
+		fv.V[2], fv.V[3] = int32(st.S)<<16, int32(st.T)<<16
+		fv.V[4] = light.VertexLight(tv.LightNormalIndex)
+		fv.OnSeam = st.OnSeam != 0
+		if vp[2] >= AliasClipPlane {
+			near[i] = true
+			px, py := av.project(vp[0], vp[1], vp[2])
+			fv.V[0], fv.V[1] = int32(px), int32(py)
 		}
 	}
-	half := float32(model.Header.SkinWidth) / 2
+	seamFixup := (int32(hdr.SkinWidth) >> 1) << 16
+	if accept == AliasFarSubdiv {
+		PolysetDrawFinalVerts(fb, skin, cm, fvs)
+	}
 	for _, t := range model.Triangles {
 		i0, i1, i2 := int(t.VertIndex[0]), int(t.VertIndex[1]), int(t.VertIndex[2])
-		a, b, c := pts[i0], pts[i1], pts[i2]
-		if a.z < AliasNearClip || b.z < AliasNearClip || c.z < AliasNearClip {
+		// r_aclip.c's clipping of partly visible triangles is not ported: a
+		// triangle with a vertex nearer than the clip plane is dropped
+		if !near[i0] || !near[i1] || !near[i2] {
 			continue
 		}
-		if (b.x-a.x)*(c.y-a.y)-(c.x-a.x)*(b.y-a.y) > 0 {
-			continue
-		}
-		var tri [3]GouraudVertex
-		for k, i := range [3]int{i0, i1, i2} {
-			st := model.STVerts[i]
-			s := float32(st.S)
-			if t.FacesFront == 0 && st.OnSeam != 0 {
-				s += half
-			}
-			p := pts[i]
-			tri[k] = GouraudVertex{X: p.x, Y: p.y, U: s, V: float32(st.T), L: p.l}
-		}
-		if err := FillGouraudTriangle(fb, skin, cm, tri); err != nil {
-			return err
+		if accept == AliasFarSubdiv {
+			PolysetDrawSubdivTriangle(fb, skin, cm, fvs[i0], fvs[i1], fvs[i2], t.FacesFront != 0, seamFixup)
+		} else {
+			PolysetDrawTriangle(fb, skin, cm, fvs[i0], fvs[i1], fvs[i2], t.FacesFront != 0, seamFixup)
 		}
 	}
 	return nil

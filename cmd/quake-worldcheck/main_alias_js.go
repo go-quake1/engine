@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-quake1/engine/render"
@@ -159,6 +160,32 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 	if len(views) == 0 {
 		v.Detail = "no alias views"
 		return v
+	}
+	if opts.ablate["--noFar"] {
+		// Quake draws a far model by recursive subdivision (render.PolysetDrawSubdivTriangle),
+		// which the GPU does not reproduce: leave those entities out of both sides.
+		for vi := range views {
+			rd := &render.RefDef{VRect: render.VRect{Width: v.Width, Height: v.Height}, ViewAngles: views[vi].Angles, ViewOrigin: views[vi].Origin, FovX: w.FOV, FovY: w.FOV}
+			kept := views[vi].Ents[:0]
+			for _, e := range views[vi].Ents {
+				ent := render.AliasEntityInterp{AliasEntity: render.AliasEntity{Origin: e.Origin, AnglePitch: e.Angles[0], AngleYaw: e.Angles[1], AngleRoll: e.Angles[2], FrameIdx: e.Frame}, FrameIdxNext: e.Next, Lerp: e.Lerp}
+				if _, accept := render.AliasClassify(v.Width, v.Height, rd, e.Model.M, ent); accept == render.AliasFarSubdiv {
+					continue
+				}
+				kept = append(kept, e)
+			}
+			views[vi].Ents = kept
+		}
+	}
+	if opts.ablate["--wrongWalk"] {
+		// planted negative: the shader takes the floor where d_polyse.c's error
+		// term steps the ceiling of j dx / dy
+		const ceil = "fn ceilDiv(a: i32, b: i32) -> i32 { return -floorDiv(-a, max(b, 1)); }"
+		if !strings.Contains(gpuworld.AliasShaderWGSL, ceil) {
+			v.Detail = "the shader has no ceilDiv to plant a defect in"
+			return v
+		}
+		gpuworld.AliasShaderWGSL = strings.Replace(gpuworld.AliasShaderWGSL, ceil, "fn ceilDiv(a: i32, b: i32) -> i32 { return floorDiv(a, max(b, 1)); }", 1)
 	}
 	gpuModels := modelsOf(views)
 	var swap map[*worldview.AliasModel]*worldview.AliasModel

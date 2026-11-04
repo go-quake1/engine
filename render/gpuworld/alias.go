@@ -23,16 +23,19 @@ import (
 // alias pass with Quake's lighting: the vertices are the model's bytes,
 // blended between two frames in byte space and rounded (R_AliasBlendPoseVerts),
 // decoded with the model's scale and origin, rotated by render.EntityRotation,
-// translated and viewed, then perspective-divided; a triangle is dropped when
-// any vertex is nearer than AliasNearClip or when its screen winding is the
-// back-facing one. Each vertex gets R_AliasTransformFinalVert's light from its
-// light normal (the anorms table, written into the shader), the entity's
-// r_ambientlight, r_shadelight and light vector (render.NewAliasLighting);
-// the light is interpolated across the triangle (Gouraud, as d_polyse.c) and
-// the colormap row is (int(light) & 0xFF00) >> 8. The skin coordinates are
-// interpolated linearly in screen space (not perspective-correct, as
-// render.FillTexturedPolygon does), wrapped into the skin. No depth test:
-// entities are drawn over the world in list order.
+// translated and viewed, then perspective-divided and truncated to integer
+// screen coordinates (R_AliasTransformAndProjectFinalVerts); a triangle is
+// dropped when any vertex is nearer than render.AliasClipPlane or when
+// d_xdenom is not negative. Each vertex gets R_AliasTransformFinalVert's
+// light from its light normal (the anorms table, written into the shader),
+// the entity's r_ambientlight, r_shadelight and light vector
+// (render.NewAliasLighting). The pixels are those of d_polyse.c's fixed-point
+// edge walk (render.PolysetDrawTriangle): the shader works out per pixel, in
+// integers, which pixels the walk's error-term steps reach, and the skin
+// offset and the light it has stepped to there, and the colormap row is
+// (light & 0xFF00) >> 8. No depth test: entities are drawn over the world in
+// list order. Not reproduced: the recursive drawer that Quake uses for a far
+// model (render.PolysetDrawSubdivTriangle).
 //
 // The pose is packed as one uint32 per vertex per frame:
 // x | y << 8 | z << 16 | light normal index << 24.
@@ -75,7 +78,7 @@ func BuildAlias(models []*worldview.AliasModel) (*AliasSet, error) {
 				s.Poses = append(s.Poses, uint32(tv.V[0])|uint32(tv.V[1])<<8|uint32(tv.V[2])<<16|uint32(tv.LightNormalIndex)<<24)
 			}
 		}
-		half := float32(m.Header.SkinWidth) / 2
+		half := float32(int(m.Header.SkinWidth) >> 1) // seamfixupX16 is (skinwidth >> 1) << 16
 		for _, t := range m.Triangles {
 			for k := 0; k < 3; k++ {
 				vi := t.VertIndex[k]
@@ -192,7 +195,7 @@ func wgslFloat(v float32) string {
 }
 
 const aliasShaderBody = `
-struct U { rows: array<vec4f, 3>, p: vec4f };
+struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f, o: vec4f };
 struct Ent { r0: vec4f, r1: vec4f, r2: vec4f, scale: vec4f, so: vec4f, info: vec4u, skin: vec4u, lv: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var skins: texture_2d<u32>;
@@ -201,11 +204,15 @@ struct Ent { r0: vec4f, r1: vec4f, r2: vec4f, scale: vec4f, so: vec4f, info: vec
 @group(0) @binding(4) var<storage, read> corners: array<vec4u>;
 @group(0) @binding(5) var<storage, read> ents: array<Ent>;
 
+// The triangle's three final vertices (d_polyse.c finalvert_t), flat: u, v,
+// s, t (16.16) of each, and their lights.
 struct VOut {
   @builtin(position) p: vec4f,
-  @location(0) @interpolate(linear) uv: vec2f,
-  @location(1) @interpolate(linear) light: f32,
-  @location(2) @interpolate(flat) skin: vec4u,
+  @location(0) @interpolate(flat) a: vec4i,
+  @location(1) @interpolate(flat) b: vec4i,
+  @location(2) @interpolate(flat) c: vec4i,
+  @location(3) @interpolate(flat) l: vec4i,
+  @location(4) @interpolate(flat) skin: vec4u,
 };
 
 // R_AliasTransformFinalVert's light: r_ambientlight, less (int)(r_shadelight *
@@ -235,8 +242,29 @@ fn view(e: Ent, m: vec3f) -> vec3f {
   return vec3f(dot(u.rows[0].xyz, w) + u.rows[0].w, dot(u.rows[1].xyz, w) + u.rows[1].w, dot(u.rows[2].xyz, w) + u.rows[2].w);
 }
 
-fn ndc(vp: vec3f) -> vec2f { return vec2f(vp.x / (u.p.x * vp.z), -vp.y * u.p.z / vp.z); }
+// R_AliasTransformAndProjectFinalVerts: u and v are (x * xscale * zi) +
+// xcenter and the same for y (down), truncated to integers; xscale is
+// halfW / tan(fov / 2) and the centres are half the frame less half a pixel.
+fn project(vp: vec3f) -> vec2i {
+  let scale = u.q.y * 0.5 / u.p.x;
+  let zi = 1.0 / vp.z;
+  let xf = (vp.x * scale) * zi + (u.q.y * 0.5 - 0.5);
+  let yf = (-vp.y * scale) * zi + (u.q.z * 0.5 - 0.5);
+  return vec2i(i32(xf), i32(yf));
+}
 
+// One of the three final vertices of the triangle: u, v, s, t (16.16, the
+// skin x and y of the corner, with the seam fixup already in s).
+fn finalVert(c: vec4u, q: vec2i) -> vec4i {
+  return vec4i(q.x, q.y, i32(bitcast<f32>(c.y)) << 16u, i32(bitcast<f32>(c.z)) << 16u);
+}
+
+// A triangle is one non-indexed run of three vertices; each invocation builds
+// the whole triangle's final vertices (the model's pose lerped, transformed
+// and projected, as R_AliasTransformAndProjectFinalVerts does), drops it when
+// a vertex is nearer than ALIAS_Z_CLIP_PLANE or d_xdenom >= 0, and emits the
+// corner of a right triangle that covers the bounding box of the pixels the
+// edge walk can reach. The fragment shader decides which of them it takes.
 @vertex fn vs(@builtin(vertex_index) vidx: u32, @builtin(instance_index) inst: u32) -> VOut {
   let e = ents[inst];
   let base = (vidx / 3u) * 3u;
@@ -245,38 +273,121 @@ fn ndc(vp: vec3f) -> vec2f { return vec2f(vp.x / (u.p.x * vp.z), -vp.y * u.p.z /
   let v0 = view(e, l0.xyz); let v1 = view(e, l1.xyz); let v2 = view(e, l2.xyz);
   var o: VOut;
   o.p = vec4f(0.0, 0.0, 0.0, 1.0);
-  o.uv = vec2f(0.0); o.light = 0.0; o.skin = e.skin;
-  if (v0.z < 8.0 || v1.z < 8.0 || v2.z < 8.0) { return o; }
-  let s0 = ndc(v0); let s1 = ndc(v1); let s2 = ndc(v2);
-  // Screen y is flipped from the clip space y; the winding test is the
-  // software one, on screen coordinates (x right, y down).
-  let area = (s1.x - s0.x) * (s2.y - s0.y) - (s2.x - s0.x) * (s1.y - s0.y);
-  if (area > 0.0) { return o; }
+  o.a = vec4i(0); o.b = vec4i(0); o.c = vec4i(0); o.l = vec4i(0); o.skin = e.skin;
+  if (v0.z < 5.0 || v1.z < 5.0 || v2.z < 5.0) { return o; }
+  let q0 = project(v0); let q1 = project(v1); let q2 = project(v2);
+  let xdenom = (q0.y - q1.y) * (q0.x - q2.x) - (q0.x - q1.x) * (q0.y - q2.y);
+  if (xdenom >= 0) { return o; }
+  o.a = finalVert(c0, q0); o.b = finalVert(c1, q1); o.c = finalVert(c2, q2);
+  o.l = vec4i(i32(vlight(e, u32(l0.w))), i32(vlight(e, u32(l1.w))), i32(vlight(e, u32(l2.w))), 0);
+  let mn = min(q0, min(q1, q2)); let mx = max(q0, max(q1, q2));
+  let w = f32(mx.x + 1 - mn.x); let h = f32(mx.y + 1 - mn.y);
+  var px = f32(mn.x); var py = f32(mn.y);
   let k = vidx - base;
-  var vp = v0; var c = c0; var nrm = l0.w;
-  if (k == 1u) { vp = v1; c = c1; nrm = l1.w; }
-  if (k == 2u) { vp = v2; c = c2; nrm = l2.w; }
-  o.light = vlight(e, u32(nrm));
-  // render.FillTexturedPolygon takes pixel x when its left edge, not its
-  // centre, is inside the span, and samples the texture at the centre; so
-  // the polygon is moved half a pixel right (u.p.w is 1 / width: half a
-  // pixel is 1 / width in clip units) and the fragment samples half a pixel
-  // further along.
-  o.p = vec4f(vp.x / u.p.x + u.p.w * vp.z, vp.y * u.p.z, 0.5 * vp.z, vp.z);
-  o.uv = vec2f(bitcast<f32>(c.y), bitcast<f32>(c.z));
+  if (k == 1u) { px += 3.0 * w; }
+  if (k == 2u) { py += 3.0 * h; }
+  o.p = vec4f(px / (u.q.y * 0.5) - 1.0, 1.0 - py / (u.q.z * 0.5), 0.0, 1.0);
   return o;
 }
 
-fn wrap(i: i32, n: i32) -> i32 { return ((i % n) + n) % n; }
+// D_PolysetSetEdgeTable and the twelve edge tables of d_polyse.c: which
+// vertices bound the left and the right side of the triangle, top part first.
+var<private> leftTab = array<vec3i, 12>(vec3i(0, 2, -1), vec3i(1, 0, 2), vec3i(0, 2, -1), vec3i(1, 0, -1), vec3i(0, 2, 1), vec3i(2, 1, -1),
+  vec3i(2, 1, -1), vec3i(2, 1, 0), vec3i(1, 0, -1), vec3i(2, 1, -1), vec3i(1, 0, -1), vec3i(0, 2, -1));
+var<private> rightTab = array<vec3i, 12>(vec3i(0, 1, 2), vec3i(1, 2, -1), vec3i(1, 2, -1), vec3i(1, 2, 0), vec3i(0, 1, -1), vec3i(2, 0, -1),
+  vec3i(2, 0, 1), vec3i(2, 0, -1), vec3i(1, 2, -1), vec3i(0, 1, -1), vec3i(2, 0, -1), vec3i(0, 1, -1));
+var<private> numLeft = array<i32, 12>(1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1);
+var<private> numRight = array<i32, 12>(2, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1);
 
+fn edgeTable(y0: i32, y1: i32, y2: i32) -> i32 {
+  var index = 0;
+  if (y0 >= y1) {
+    if (y0 == y1) {
+      if (y0 < y2) { return 2; }
+      return 5;
+    }
+    index = 1;
+  }
+  if (y0 == y2) {
+    if (index != 0) { return 8; }
+    return 9;
+  } else if (y1 == y2) {
+    if (index != 0) { return 10; }
+    return 11;
+  }
+  if (y0 > y2) { index += 2; }
+  if (y1 > y2) { index += 4; }
+  return index;
+}
+
+fn floorDiv(a: i32, b: i32) -> i32 {
+  var q = a / b;
+  if ((a % b != 0) && ((a < 0) != (b < 0))) { q -= 1; }
+  return q;
+}
+
+// ceil(a / b) for b > 0: the column of a row j below the top of an edge is
+// top + ceil(j dx / dy), which is what D_PolysetScanLeftEdge's error term steps
+// out (errorterm starts at -1 and takes the remainder of dx / dy each row).
+fn ceilDiv(a: i32, b: i32) -> i32 { return -floorDiv(-a, max(b, 1)); }
+
+// D_RasterizeAliasPolySmooth per pixel: the walk's column, skin position and
+// light are linear in the row and the column moved (the integer steps of the
+// walk add up exactly), so each fragment works out its own row's span from
+// the three vertices, takes the pixel if it is inside [left, right), and
+// reads the skin offset (s >> 16) + (t >> 16) * skinwidth with the light
+// stepped to it: acolormap[texel + (light & 0xFF00)].
 @fragment fn fs(v: VOut) -> @location(0) vec4u {
-  let uv = v.uv + 0.5 * dpdxFine(v.uv);
-  let tx = wrap(i32(floor(uv.x)), i32(v.skin.z));
-  let ty = wrap(i32(floor(uv.y)), i32(v.skin.w));
-  let texel = textureLoad(skins, vec2u(v.skin.x + u32(tx), v.skin.y + u32(ty)), 0).r;
-  // d_polyse.c: acolormap[texel + (light & 0xFF00)], the row clamped here.
-  let light = v.light + 0.5 * dpdxFine(v.light);
-  let row = u32(clamp((i32(light) & 0xFF00) >> 8u, 0, 63));
+  let px = i32(floor(v.p.x)); let py = i32(floor(v.p.y));
+  var pv = array<vec4i, 3>(v.a, v.b, v.c);
+  var pl = array<i32, 3>(v.l.x, v.l.y, v.l.z);
+  let r0 = pv[0]; let r1 = pv[1]; let r2 = pv[2];
+  let ti = edgeTable(r0.y, r1.y, r2.y);
+  let lt = leftTab[ti]; let rt = rightTab[ti];
+  let topy = pv[lt.x].y;
+  let h1 = pv[lt.y].y - topy;
+  var h2 = 0;
+  if (numLeft[ti] == 2) { h2 = pv[lt.z].y - pv[lt.y].y; }
+  let i = py - topy;
+  if (i < 0 || i >= h1 + h2) { discard; }
+  // the left edge's segment of this row
+  var seg = 0; var j = i; var tvi = lt.x; var bvi = lt.y;
+  if (i >= h1) { seg = 1; j = i - h1; tvi = lt.y; bvi = lt.z; }
+  let tv = pv[tvi]; let bv = pv[bvi];
+  let dx = bv.x - tv.x; let dy = bv.y - tv.y;
+  let xl = tv.x + ceilDiv(j * dx, dy);
+  // the right edge's
+  let hr1 = pv[rt.y].y - pv[rt.x].y;
+  var rti = rt.x; var rbi = rt.y; var jr = i;
+  if (numRight[ti] == 2 && i >= hr1) { rti = rt.y; rbi = rt.z; jr = i - hr1; }
+  let rtv = pv[rti]; let rbv = pv[rbi];
+  let xr = rtv.x + ceilDiv(jr * (rbv.x - rtv.x), rbv.y - rtv.y);
+  if (px < xl || px >= xr) { discard; }
+  // D_PolysetCalcGradients (float32; the ceil for the light only)
+  let xdenom = (r0.y - r1.y) * (r0.x - r2.x) - (r0.x - r1.x) * (r0.y - r2.y);
+  let p00 = f32(r0.x - r2.x); let p01 = f32(r0.y - r2.y);
+  let p10 = f32(r1.x - r2.x); let p11 = f32(r1.y - r2.y);
+  let xinv = 1.0 / f32(xdenom); let yinv = -xinv;
+  let ds0 = f32(r0.z - r2.z); let ds1 = f32(r1.z - r2.z);
+  let dt0 = f32(r0.w - r2.w); let dt1 = f32(r1.w - r2.w);
+  let dl0 = f32(pl[0] - pl[2]); let dl1 = f32(pl[1] - pl[2]);
+  let sstepx = i32((ds1 * p01 - ds0 * p11) * xinv); let sstepy = i32((ds1 * p00 - ds0 * p10) * yinv);
+  let tstepx = i32((dt1 * p01 - dt0 * p11) * xinv); let tstepy = i32((dt1 * p00 - dt0 * p10) * yinv);
+  let lstepx = i32(ceil((dl1 * p01 - dl0 * p11) * xinv)); let lstepy = i32(ceil((dl1 * p00 - dl0 * p10) * yinv));
+  // the walk's position at the start of this row and in the row. The second
+  // left segment starts with the vertex's fractions dropped.
+  var s0 = tv.z; var t0 = tv.w;
+  if (seg == 1) { s0 = (tv.z >> 16u) << 16u; t0 = (tv.w >> 16u) << 16u; }
+  var wl = lstepx;
+  if (floorDiv(dx, max(dy, 1)) < 0) { wl -= 1; } // bias toward overflow along a leftward edge
+  let off = xl - tv.x; let k = px - xl;
+  let ps = s0 + j * sstepy + off * sstepx + k * sstepx;
+  let pt = t0 + j * tstepy + off * tstepx + k * tstepx;
+  let light = pl[tvi] + j * lstepy + wl * off + k * lstepx;
+  let sw = i32(v.skin.z); let sh = i32(v.skin.w);
+  let idx = clamp((ps >> 16u) + (pt >> 16u) * sw, 0, sw * sh - 1);
+  let texel = textureLoad(skins, vec2u(v.skin.x + u32(idx % sw), v.skin.y + u32(idx / sw)), 0).r;
+  let row = u32(clamp((light & 0xFF00) >> 8u, 0, 63));
   return vec4u(textureLoad(cmap, vec2u(texel, row), 0).r, 0u, 0u, 0u);
 }
 `
