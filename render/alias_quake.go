@@ -280,6 +280,10 @@ func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint 
 		}
 	}
 	seamFixup := (int32(hdr.SkinWidth) >> 1) << 16
+	// the walk and its span list (one entry per row; grown when a triangle is
+	// taller) are reused by every triangle
+	var spanBuf [128]polySpan
+	walk := polyWalk{spans: spanBuf[:0]}
 	if accept == AliasFarSubdiv {
 		PolysetDrawFinalVerts(fb, skin, cm, fvs)
 	}
@@ -293,7 +297,7 @@ func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint 
 		if accept == AliasFarSubdiv {
 			PolysetDrawSubdivTriangle(fb, skin, cm, fvs[i0], fvs[i1], fvs[i2], t.FacesFront != 0, seamFixup)
 		} else {
-			PolysetDrawTriangle(fb, skin, cm, fvs[i0], fvs[i1], fvs[i2], t.FacesFront != 0, seamFixup)
+			walk.drawTriangle(fb, skin, cm, &fvs[i0], &fvs[i1], &fvs[i2], t.FacesFront != 0, seamFixup)
 		}
 	}
 	return nil

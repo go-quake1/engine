@@ -344,7 +344,8 @@ func TestPolysetFastSpanMatchesPlot(t *testing.T) {
 	for n := 0; n < 300; n++ {
 		var vs [3]FinalVert
 		for i := range vs {
-			vs[i].V = [6]int32{8 + rng.Int31n(48), 8 + rng.Int31n(48), rng.Int31n(40<<16) - 8<<16, rng.Int31n(40<<16) - 8<<16, rng.Int31n(0x7000) - 0x800}
+			// screen positions run off every side of the 64 x 64 frame
+			vs[i].V = [6]int32{rng.Int31n(112) - 24, rng.Int31n(112) - 24, rng.Int31n(40<<16) - 8<<16, rng.Int31n(40<<16) - 8<<16, rng.Int31n(0x7000) - 0x800}
 		}
 		fast, _ := NewFrameBuffer(64, 64)
 		slow, _ := NewFrameBuffer(64, 64)

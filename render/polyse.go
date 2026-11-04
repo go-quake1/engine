@@ -4,10 +4,7 @@
 
 package render
 
-import (
-	"math"
-	"sync"
-)
+import "math"
 
 // This file ports Quake's software alias-model rasteriser as tyrquake has it
 // (d_polyse.c): the fixed-point edge walk of D_DrawNonSubdiv that every alias
@@ -127,6 +124,12 @@ type polyGradients struct {
 	ststepxwhole         int32 // a_ststepxwhole
 }
 
+// gradStep is (t1 * p01 - t0 * p11) * xstepdenominv and (t1 * p00 - t0 * p10)
+// * ystepdenominv, each product rounded to float32 (no fused multiply-add).
+func gradStep(t0, t1, p00, p01, p10, p11, xinv, yinv float32) (fx, fy float32) {
+	return float32(float32(t1*p01)-float32(t0*p11)) * xinv, float32(float32(t1*p00)-float32(t0*p10)) * yinv
+}
+
 // polyCalcGradients is D_PolysetCalcGradients for the (already offset)
 // vertices r0, r1, r2 and d_xdenom. The float32 products are rounded one by
 // one (no fused multiply-add), as the C does on x86.
@@ -138,21 +141,14 @@ func polyCalcGradients(r0, r1, r2 *[6]int32, xdenom int32, skinwidth int32) poly
 	xinv := float32(1.0 / float64(float32(xdenom)))
 	yinv := -xinv
 	var g polyGradients
-	step := func(i int, ceil bool) (x, y int32) {
-		t0 := float32(r0[i] - r2[i])
-		t1 := float32(r1[i] - r2[i])
-		fx := float32(float32(t1*p01)-float32(t0*p11)) * xinv
-		fy := float32(float32(t1*p00)-float32(t0*p10)) * yinv
-		if ceil {
-			// ceil () for light so positive steps are exaggerated, negative
-			// steps diminished
-			return int32(math.Ceil(float64(fx))), int32(math.Ceil(float64(fy)))
-		}
-		return int32(fx), int32(fy)
-	}
-	g.lstepx, g.lstepy = step(4, true)
-	g.sstepx, g.sstepy = step(2, false)
-	g.tstepx, g.tstepy = step(3, false)
+	// ceil () for light so positive steps are exaggerated, negative steps
+	// diminished
+	fx, fy := gradStep(float32(r0[4]-r2[4]), float32(r1[4]-r2[4]), p00, p01, p10, p11, xinv, yinv)
+	g.lstepx, g.lstepy = int32(math.Ceil(float64(fx))), int32(math.Ceil(float64(fy)))
+	fx, fy = gradStep(float32(r0[2]-r2[2]), float32(r1[2]-r2[2]), p00, p01, p10, p11, xinv, yinv)
+	g.sstepx, g.sstepy = int32(fx), int32(fy)
+	fx, fy = gradStep(float32(r0[3]-r2[3]), float32(r1[3]-r2[3]), p00, p01, p10, p11, xinv, yinv)
+	g.tstepx, g.tstepy = int32(fx), int32(fy)
 	g.sstepxfrac = g.sstepx & 0xFFFF
 	g.tstepxfr = g.tstepx & 0xFFFF
 	g.ststepxwhole = skinwidth*(g.tstepx>>16) + (g.sstepx >> 16)
@@ -266,8 +262,10 @@ func (w *polyWalk) drawSpans(from int) {
 		} else {
 			w.aspancount += w.e.ubase
 		}
-		if lcount > 0 && w.onPlot == nil && p.y >= 0 && int(p.y) < w.fb.Height && p.x >= 0 && int(p.x)+int(lcount) <= w.fb.Width {
-			w.fastSpan(p, lcount) // wholly inside the frame: no per-pixel bounds
+		if w.onPlot == nil {
+			if lcount > 0 && p.y >= 0 && int(p.y) < w.fb.Height {
+				w.clippedSpan(p, lcount)
+			}
 		} else if lcount != 0 {
 			ptex, sfrac, tfrac, light := p.ptex, p.sfrac, p.tfrac, p.light
 			x := p.x
@@ -287,6 +285,28 @@ func (w *polyWalk) drawSpans(from int) {
 			}
 		}
 	}
+}
+
+// clippedSpan draws the part of a span of n pixels that is inside the frame's
+// columns. The pixels left of the frame are stepped over in one move: the walk
+// adds sstepx to s (and tstepx to t, lstepx to the light) per pixel, so after
+// skip pixels the skin offset and fractions are those of s + skip * sstepx.
+func (w *polyWalk) clippedSpan(p *polySpan, n int32) {
+	x0 := int(p.x)
+	lo, hi := max(x0, 0), min(x0+int(n), w.fb.Width)
+	if lo >= hi {
+		return
+	}
+	q := *p
+	q.x = int32(lo)
+	if skip := int64(lo - x0); skip > 0 {
+		sa := int64(p.sfrac) + skip*int64(w.g.sstepx)
+		ta := int64(p.tfrac) + skip*int64(w.g.tstepx)
+		q.ptex = p.ptex + int32(sa>>16) + int32(ta>>16)*w.skinwidth
+		q.sfrac, q.tfrac = int32(sa&0xFFFF), int32(ta&0xFFFF)
+		q.light = p.light + int32(skip)*w.g.lstepx
+	}
+	w.fastSpan(&q, int32(hi-lo))
 }
 
 // fastSpan is the inner loop of D_PolysetDrawSpans8 for a span that lies
@@ -347,30 +367,34 @@ func (w *polyWalk) plot(x, y, ptex, light int32) {
 // added to its s. It reports whether the triangle was drawn (a back-facing one
 // is not).
 func PolysetDrawTriangle(fb *FrameBuffer, skin *Pic, cm *ColorMap, v0, v1, v2 FinalVert, facesFront bool, seamFixup int32) bool {
+	var w polyWalk
+	return w.drawTriangle(fb, skin, cm, &v0, &v1, &v2, facesFront, seamFixup)
+}
+
+// drawTriangle is [PolysetDrawTriangle] on a walk whose span list is reused
+// from one triangle to the next.
+func (w *polyWalk) drawTriangle(fb *FrameBuffer, skin *Pic, cm *ColorMap, v0, v1, v2 *FinalVert, facesFront bool, seamFixup int32) bool {
 	xdenom := (v0.V[1]-v1.V[1])*(v0.V[0]-v2.V[0]) - (v0.V[0]-v1.V[0])*(v0.V[1]-v2.V[1])
-	if xdenom >= 0 {
+	if xdenom >= 0 || len(skin.Pixels) == 0 {
 		return false
 	}
 	p := [3][6]int32{v0.V, v1.V, v2.V}
 	if !facesFront {
-		for i, v := range [3]FinalVert{v0, v1, v2} {
-			if v.OnSeam {
-				p[i][2] += seamFixup
-			}
+		if v0.OnSeam {
+			p[0][2] += seamFixup
+		}
+		if v1.OnSeam {
+			p[1][2] += seamFixup
+		}
+		if v2.OnSeam {
+			p[2][2] += seamFixup
 		}
 	}
-	if len(skin.Pixels) == 0 {
-		return false
-	}
-	w := polyPool.Get().(*polyWalk)
-	*w = polyWalk{fb: fb, skin: skin, cm: cm, skinwidth: int32(skin.Width), spans: w.spans[:0]}
+	spans := w.spans[:0]
+	*w = polyWalk{fb: fb, skin: skin, cm: cm, skinwidth: int32(skin.Width), spans: spans}
 	w.rasterize(&p, xdenom)
-	polyPool.Put(w)
 	return true
 }
-
-// polyPool keeps the walk state (and its span list) between triangles.
-var polyPool = sync.Pool{New: func() any { return &polyWalk{spans: make([]polySpan, 0, 256)} }}
 
 // rasterize is D_RasterizeAliasPolySmooth with D_PolysetSetEdgeTable done.
 func (w *polyWalk) rasterize(p *[3][6]int32, xdenom int32) {
