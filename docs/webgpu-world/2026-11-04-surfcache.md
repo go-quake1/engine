@@ -140,7 +140,41 @@ dark, the block interpolation of the light grid, the colormap row from
 `light & 0xFF00`). With both sides at level 0 the GPU matches to 0.0023 %, so
 the remaining 6 unexplained pixels are not mip-related.
 
-COSTS
+## Cost
+
+`TestBenchAgainstBaseline`: a clean clone of the tag v0.6.1 and this tree
+alternate round by round (the order swapped every round), each round a browser
+run at 1280 x 800 (Chrome for Testing 156, wasm, single thread, Apple GPU, the
+16 views, the paths alternating frame by frame) and a native run of
+`BenchmarkDrawSoftware` (the same file copied into the clone). 5 rounds kept,
+3 discarded for a 1-minute load above 8 (the first attempt waited 40 minutes
+for the load to fall and gave up; the kept rounds ran at load 2 to 3).
+Medians (min-max).
+
+| per frame, 1280 x 800 | v0.6.1 | this step |
+|---|---|---|
+| software world, browser | 75.71 ms (73.92-76.49) | **39.71 ms** (39.03-40.62) |
+| software world, browser, surface cache emptied before every frame | | 39.04 ms (38.54-40.17) |
+| software world, native (M4 Max) | 8.92 ms (8.68-8.97) | **4.49 ms** (4.27-4.64) |
+| GPU world, wall to GPU idle | 1.480 ms (1.425-1.495) | **1.425 ms** (1.420-1.440) |
+| GPU world, CPU time | 0.180 ms (0.160-0.185) | **0.260 ms** (0.250-0.300) |
+| engine's affine world path (not changed) | 9.85 ms | 9.30 ms |
+
+The software world is 1.9 times faster: a texel read from a surface of the
+face's own size instead of a per-pixel bilinear lightmap and colormap lookup,
+and fewer texels touched at the distant levels. Emptying the cache each frame
+costs nothing measurable, because a frame builds a surface only for the
+visible faces and the 16 views do not share many. The GPU's wall time did not
+get slower (the world shader lost the lightmap bilinear and the colormap
+fetch), but its **CPU time is 0.08 ms higher, an open defect, located**: the
+draw list now runs `NearZI` on every visible face (a second transform of its
+vertices and the frustum clip), 42 microseconds natively against 16 for the
+list without the mip choice (`BenchmarkDraws`), which is the browser's
+0.08 ms. The remedy is to share the vertex transform with the near-plane test
+that `Draws` already makes, and to skip the clip for faces whose vertices are
+all inside the frustum (they already are, in one pass). The atlas costs memory
+and start-up, not frame time: 34.9 MB of `r8uint` against 1.1 MB before (the
+2048 x 320 and 2048 x 207 atlases), built in under 0.1 s natively.
 
 ## What remains
 

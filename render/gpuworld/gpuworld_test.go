@@ -152,6 +152,43 @@ func TestBuildE1M1(t *testing.T) {
 	t.Logf("mip levels of the faces drawn over the views: %v", hist)
 }
 
+// BenchmarkDraws locates the GPU path's CPU cost: the draw list with the
+// mip choice (NearZI per visible face) and with every face at level 0.
+func BenchmarkDraws(b *testing.B) {
+	path := os.Getenv("QUAKE_PAK")
+	if path == "" {
+		b.Skip("QUAKE_PAK not set")
+	}
+	fsys, _, err := bench.OpenPak(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	w, err := worldview.LoadMap(fsys, "e1m1")
+	if err != nil {
+		b.Fatal(err)
+	}
+	v := vfs.New()
+	v.Add(fsys)
+	cm, err := assets.LoadColorMapFrom(v)
+	if err != nil {
+		b.Fatal(err)
+	}
+	g, err := Build(w, cm)
+	if err != nil {
+		b.Fatal(err)
+	}
+	views := w.Views()
+	for name, pol := range map[string]MipPolicy{"chosen": Chosen, "level0": {Fixed: 0}} {
+		b.Run(name, func(b *testing.B) {
+			mips := make([]uint32, g.Faces)
+			var draws []Draw
+			for i := 0; i < b.N; i++ {
+				draws, _ = g.Draws(w, views[i%len(views)], 1280, 800, draws, mips, pol)
+			}
+		})
+	}
+}
+
 func TestMipPolicy(t *testing.T) {
 	if Chosen.Fixed != -1 || (MipPolicy{}).Fixed != 0 {
 		t.Fatal("Chosen must be Fixed -1; the zero MipPolicy is level 0 (the ablation)")
