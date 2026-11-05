@@ -200,3 +200,63 @@ func TestReferenceFrames(t *testing.T) {
 		t.Fatalf("only %d of %d views draw a textured world", drawn, len(views))
 	}
 }
+
+// TestNearestFaceWins pins the draw order on Quake's rule. r_edge.c keeps, at
+// each pixel, the surface with the smallest surf->key, and r_draw.c R_RenderFace
+// gives keys in the order the BSP walk emits faces: the first face of the
+// front-to-back list that covers a pixel is the one shown. Each visible face is
+// drawn alone to find the pixels it covers; where two or more faces cover a
+// pixel with different values the frame must show the first one's. Drawn in the
+// walk's order (far over near) this fails.
+func TestNearestFaceWins(t *testing.T) {
+	w, cm := load(t)
+	const W, H = 320, 200
+	overlaps, wrong := 0, 0
+	for k, v := range w.Views() {
+		faces, err := w.Visible(v, W, H)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := make([]byte, W*H)
+		seen := make([]bool, W*H)
+		soloA, _ := render.NewFrameBuffer(W, H)
+		soloB, _ := render.NewFrameBuffer(W, H)
+		for _, idx := range faces { // front to back: the first to cover a pixel keeps it
+			// A face covers a pixel when it writes it over two different
+			// backgrounds (a texel may equal any one clear value).
+			for p := range soloA.Pixels {
+				soloA.Pixels[p], soloB.Pixels[p] = 0, 1
+			}
+			w.DrawFaces(soloA, cm, []int{idx})
+			w.DrawFaces(soloB, cm, []int{idx})
+			for p, c := range soloA.Pixels {
+				if soloB.Pixels[p] != c {
+					continue
+				}
+				if !seen[p] {
+					seen[p], want[p] = true, c
+				} else if c != want[p] {
+					overlaps++
+				}
+			}
+		}
+		got, _ := render.NewFrameBuffer(W, H)
+		if err := w.DrawSoftware(got, cm, v); err != nil {
+			t.Fatal(err)
+		}
+		bad := 0
+		for p := range want {
+			if seen[p] && got.Pixels[p] != want[p] {
+				bad++
+			}
+		}
+		if bad > 0 {
+			t.Errorf("view %d: %d pixels show a farther face than the first one of the walk covering them", k, bad)
+		}
+		wrong += bad
+	}
+	if overlaps == 0 {
+		t.Fatal("no pixel of the 16 views is covered by two faces with different values: the test pins nothing")
+	}
+	t.Logf("%d (pixel, face) overlaps with a different value; %d pixels show the wrong face", overlaps, wrong)
+}

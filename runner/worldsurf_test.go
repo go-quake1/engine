@@ -98,8 +98,8 @@ func countDiff(a, b []byte) int {
 
 // TestWorldSurfacesMatchReference draws the 16 fixed e1m1 views with the
 // runner's surface-cache world and with worldview.DrawSoftware and counts the
-// pixels that differ. With the same draw order and the resting light styles the
-// two are the same code path on the same inputs: 0 pixels differ.
+// pixels that differ. With the same draw order (back to front) and the resting
+// light styles the two are the same code path on the same inputs: 0 pixels differ.
 func TestWorldSurfacesMatchReference(t *testing.T) {
 	w, cm := loadE1M1(t)
 	ws, err := newWorldSurfaces(w.File)
@@ -115,17 +115,20 @@ func TestWorldSurfacesMatchReference(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, _ := render.NewFrameBuffer(320, 200)
-		drawRunnerWorld(t, ws, w, cm, v, got, false, rest)
+		drawRunnerWorld(t, ws, w, cm, v, got, true, rest) // the runner's own order, with its backface cull
 		if d := countDiff(ref.Pixels, got.Pixels); d != 0 {
 			t.Errorf("view %d: %d pixels differ from worldview.DrawSoftware", k, d)
 			total += d
 		}
-		rev, _ := render.NewFrameBuffer(320, 200)
-		drawRunnerWorld(t, ws, w, cm, v, rev, true, rest)
-		totalRev += countDiff(ref.Pixels, rev.Pixels)
+		fwd, _ := render.NewFrameBuffer(320, 200)
+		drawRunnerWorld(t, ws, w, cm, v, fwd, false, rest) // the walk's order: far over near
+		totalRev += countDiff(ref.Pixels, fwd.Pixels)
 	}
-	t.Logf("%d views, 320x200: %d pixels differ in the reference's order; %d in reverse (painter's) order; cache builds %d hits %d thrash frames %d",
+	t.Logf("%d views, 320x200: %d pixels differ in the runner's own order; %d in the walk's order (the old reference order, shown to differ); cache builds %d hits %d thrash frames %d",
 		len(views), total, totalRev, ws.Builds, ws.Hits, ws.ThrashFrames)
+	if totalRev == 0 {
+		t.Error("the walk's order gives the same frame as the back-to-front one: the comparison pins nothing")
+	}
 }
 
 // TestWorldSurfacesLightStyleAndAnimation: a light style that changes rebuilds

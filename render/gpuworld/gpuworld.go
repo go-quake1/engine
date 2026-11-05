@@ -21,8 +21,9 @@
 // rebuilds the reference's 8-pixel sub-span, takes the surface coordinate
 // relative to the face's texturemins, divides it by the level's size and reads
 // the surface texel. The result is a palette index written to an r8uint
-// target. Faces are drawn in the BSP walk's order, with no depth test, as the
-// software renderer does.
+// target. Faces are drawn back to front (the BSP walk's order reversed), with
+// no depth test, as the software renderer does: the walk's first face is the
+// one Quake's edge sorter keeps at a pixel (r_edge.c, lowest surf->key wins).
 package gpuworld
 
 import (
@@ -282,7 +283,7 @@ type FaceDraw struct {
 }
 
 // Draws is the frame's draw list: the faces the PVS and the BSP walk
-// select for v, in the walk's order, minus those the software renderer
+// select for v, in the walk's order reversed (back to front), minus those the software renderer
 // also refuses (every vertex behind the near plane), each with its mip level
 // for this frame.
 func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []FaceDraw, pol MipPolicy) ([]FaceDraw, error) {
@@ -294,7 +295,11 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 	mv := worldview.NewMipView(width, height, w.FOV)
 	var ptsBuf [render.MaxPolyVerts][3]float32
 	out = out[:0]
-	for _, idx := range faces {
+	// Back to front: the walk's list is front to back and Quake's edge sorter
+	// shows, at every pixel, the face with the smallest key (the first the walk
+	// emitted); with no depth test the same result is the list drawn in reverse.
+	for n := len(faces) - 1; n >= 0; n-- {
+		idx := faces[n]
 		if g.Count[idx] == 0 {
 			continue
 		}

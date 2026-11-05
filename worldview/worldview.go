@@ -347,7 +347,11 @@ func (w *World) ResetSurfaceCache() {
 }
 
 // DrawSoftware is the reference: it clears fb to [ClearIndex] and draws the
-// visible faces in the walk's order, as the engine does, from Quake's surface
+// visible faces back to front (the walk's list, which is front to back, in
+// reverse: Quake's edge sorter keeps at each pixel the face with the smallest
+// surf->key, the first the walk emitted, r_edge.c R_LeadingEdge and r_draw.c
+// R_RenderFace; with no span buffer, the first-touch face is the last drawn),
+// as the engine does, from Quake's surface
 // cache with mip levels (render.SurfaceCache; d_edge.c D_DrawSurface): each
 // face's mip level comes from its distance ([MipView.Level]), its lit surface
 // from D_CacheSurface, and the span drawer reads that surface with the face's
@@ -370,6 +374,19 @@ func (w *World) drawCached(fb *render.FrameBuffer, cm *render.ColorMap, v View, 
 	if err != nil {
 		return err
 	}
+	w.drawFaces(fb, cm, faces, forceMip)
+	return nil
+}
+
+// DrawFaces draws the given faces (indices as [World.Visible] returns them,
+// front to back) back to front over what fb holds, from the view of the last
+// [World.Visible] call: the reference for a subset of the frame (a face alone,
+// to tell which pixels it covers).
+func (w *World) DrawFaces(fb *render.FrameBuffer, cm *render.ColorMap, faces []int) {
+	w.drawFaces(fb, cm, faces, -1)
+}
+
+func (w *World) drawFaces(fb *render.FrameBuffer, cm *render.ColorMap, faces []int, forceMip int) {
 	if w.cache == nil || w.cacheW != fb.Width || w.cacheH != fb.Height {
 		w.cache = render.NewSurfaceCache(render.SurfaceCacheForRes(fb.Width, fb.Height))
 		w.cacheW, w.cacheH = fb.Width, fb.Height
@@ -380,8 +397,8 @@ func (w *World) drawCached(fb *render.FrameBuffer, cm *render.ColorMap, v View, 
 	view := w.rd.SetupView()
 	mv := NewMipView(fb.Width, fb.Height, w.FOV)
 	var cv [render.MaxPolyVerts]render.CachedVertex
-	for _, idx := range faces {
-		f := w.Faces[idx]
+	for n := len(faces) - 1; n >= 0; n-- { // back to front, see DrawSoftware
+		f := w.Faces[faces[n]]
 		verts, err := bsprender.TransformFaceLightmapped(view, fb, w.FOV, f.Verts, f.Info)
 		if err != nil {
 			continue // behind the camera, or not a polygon the filler takes
@@ -415,7 +432,6 @@ func (w *World) drawCached(fb *render.FrameBuffer, cm *render.ColorMap, v View, 
 	if w.cache.Thrash {
 		w.cacheThrash++
 	}
-	return nil
 }
 
 // DrawLightmapped is the reference of the first steps: the same faces, each
@@ -432,8 +448,8 @@ func (w *World) DrawLightmapped(fb *render.FrameBuffer, cm *render.ColorMap, v V
 		return err
 	}
 	view := w.rd.SetupView()
-	for _, idx := range faces {
-		f := w.Faces[idx]
+	for n := len(faces) - 1; n >= 0; n-- { // back to front, see DrawSoftware
+		f := w.Faces[faces[n]]
 		verts, err := bsprender.TransformFaceLightmapped(view, fb, w.FOV, f.Verts, f.Info)
 		if err != nil {
 			continue // behind the camera, or not a polygon the filler takes
@@ -472,8 +488,8 @@ func (w *World) DrawEngine(fb *render.FrameBuffer, v View) error {
 		return err
 	}
 	view := w.rd.SetupView()
-	for _, idx := range faces {
-		f := w.Faces[idx]
+	for n := len(faces) - 1; n >= 0; n-- { // back to front
+		f := w.Faces[faces[n]]
 		verts, err := bsprender.TransformFace(view, fb, w.FOV, f.Verts)
 		if err != nil {
 			continue
