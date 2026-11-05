@@ -130,6 +130,9 @@ func runInBrowserIn(t *testing.T, dir string, args ...string) string {
 		t.Fatal(err)
 	}
 	t.Logf("%s: adapter on %s", ua, os.Getenv("QUAKE_REQUIRE_GPU"))
+	if os.Getenv("QUAKE_BROWSER_LOG") != "" {
+		t.Logf("browser log (tail):\n%s", tail(browserLog.String(), 4000))
+	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	return lines[len(lines)-1]
 }

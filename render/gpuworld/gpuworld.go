@@ -273,36 +273,46 @@ type MipPolicy struct {
 // Chosen is the policy that picks Quake's level.
 var Chosen = MipPolicy{Fixed: -1}
 
+// FaceDraw is a world face in a frame's draw list: its index range, the mip
+// level of this frame (passed to the shader as the draw's first instance) and
+// the face index.
+type FaceDraw struct {
+	First, Count, Mip uint32
+	Face              int
+}
+
 // Draws is the frame's draw list: the faces the PVS and the BSP walk
 // select for v, in the walk's order, minus those the software renderer
-// also refuses (every vertex behind the near plane). It also gives every drawn
-// face its mip level for this frame: mips[ordinal] for each face in the list
-// (mips has Geometry.Faces entries).
-func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []Draw, mips []uint32, pol MipPolicy) ([]Draw, error) {
+// also refuses (every vertex behind the near plane), each with its mip level
+// for this frame.
+func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []FaceDraw, pol MipPolicy) ([]FaceDraw, error) {
 	faces, err := w.Visible(v, width, height)
 	if err != nil {
 		return nil, err
 	}
 	view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
 	mv := worldview.NewMipView(width, height, w.FOV)
+	var ptsBuf [render.MaxPolyVerts][3]float32
 	out = out[:0]
 	for _, idx := range faces {
 		if g.Count[idx] == 0 {
 			continue
 		}
 		f := w.Faces[idx]
-		fv := f.Verts
-		front := false
-		for i := 0; i < fv.NumVerts && !front; i++ {
-			front = render.TransformAffine(view, fv.Vert(i))[2] >= render.ParticleNearClip
+		// A face whose bounding sphere is inside the frustum is in front of
+		// the near plane and needs no clipping: its level from the z of its
+		// vertices alone. Otherwise one transform of the polygon serves the
+		// near-plane test and the clipped mip choice.
+		level, front := mv.FastLevel(view, f)
+		if !front {
+			level, front = mv.LevelFront(view, f, &ptsBuf)
 		}
 		if front {
 			mip := pol.Fixed
 			if mip < 0 {
-				mip = max(0, min(render.SurfMips-1, mv.Level(view, f)+pol.Bias))
+				mip = max(0, min(render.SurfMips-1, level+pol.Bias))
 			}
-			mips[g.Ord[idx]] = uint32(mip)
-			out = append(out, Draw{g.First[idx], g.Count[idx]})
+			out = append(out, FaceDraw{First: g.First[idx], Count: g.Count[idx], Mip: uint32(mip), Face: idx})
 		}
 	}
 	return out, nil
@@ -357,15 +367,16 @@ struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f, o: vec4f };
 @group(0) @binding(4) var<storage, read> faceTab: array<vec4f>;
 @group(0) @binding(5) var<storage, read> faceVerts: array<vec4f>;
 @group(0) @binding(6) var<storage, read> surfTab: array<vec4u>;
-@group(0) @binding(7) var<storage, read> mips: array<u32>;
 
 struct VIn {
   @location(0) pos: vec3f,
   @location(1) fi: u32,
+  @builtin(instance_index) mip: u32, // the draw's first instance: the face's mip level
 };
 struct VOut {
   @builtin(position) p: vec4f,
   @location(4) @interpolate(flat) fi: u32,
+  @location(5) @interpolate(flat) mip: u32,
 };
 
 @vertex fn vs(v: VIn) -> VOut {
@@ -379,7 +390,7 @@ struct VOut {
   // moved half a pixel right (u.p.w is 1 / width) so that the GPU takes the
   // same pixels; the fragment then works from its own pixel index.
   o.p = vec4f(vp.x / u.p.x + u.p.w * d, vp.y * u.p.z, 0.5 * d, d);
-  o.fi = v.fi;
+  o.fi = v.fi; o.mip = v.mip;
   return o;
 }
 
@@ -463,7 +474,7 @@ fn runAt(xc: f32, xl: f32, wl: vec3f, wr: vec3f, span: f32, minST: vec2f) -> vec
   // on the CPU): the surface is Extents >> mip texels, read with the
   // coordinate scaled by 1 / 2^mip and clamped to the surface (D_DrawSpans8's
   // bbextents clamp).
-  let mip = mips[v.fi];
+  let mip = v.mip;
   let r = surfTab[v.fi * 4u + mip];
   let sc = 1.0 / f32(1u << mip);
   let su = clamp(i32(floor(c.x * sc)), 0, i32(r.z) - 1);

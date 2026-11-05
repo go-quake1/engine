@@ -118,15 +118,18 @@ func TestBuildE1M1(t *testing.T) {
 	}
 
 	// The frame's mip levels are worldview's.
-	var draws []Draw
-	mips := make([]uint32, g.Faces)
+	var draws []FaceDraw
+	mips := make([]uint32, len(w.Faces))
 	var hist [render.SurfMips]int
 	for i, v := range w.Views() {
-		if draws, err = g.Draws(w, v, 320, 200, draws, mips, Chosen); err != nil {
+		if draws, err = g.Draws(w, v, 320, 200, draws, Chosen); err != nil {
 			t.Fatal(err)
 		}
 		if len(draws) == 0 {
 			t.Errorf("view %d draws nothing", i)
+		}
+		for _, d := range draws {
+			mips[d.Face] = d.Mip
 		}
 		view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
 		mv := worldview.NewMipView(320, 200, w.FOV)
@@ -135,7 +138,7 @@ func TestBuildE1M1(t *testing.T) {
 			if g.Ord[idx] < 0 {
 				continue
 			}
-			if want := uint32(mv.Level(view, w.Faces[idx])); mips[g.Ord[idx]] != want && g.Count[idx] > 0 {
+			if want := uint32(mv.Level(view, w.Faces[idx])); mips[idx] != want && g.Count[idx] > 0 {
 				// faces wholly behind the near plane are not in the list
 				fv := w.Faces[idx].Verts
 				front := false
@@ -143,10 +146,10 @@ func TestBuildE1M1(t *testing.T) {
 					front = render.TransformAffine(view, fv.Vert(k))[2] >= render.ParticleNearClip
 				}
 				if front {
-					t.Fatalf("view %d face %d: mip %d, worldview says %d", i, idx, mips[g.Ord[idx]], want)
+					t.Fatalf("view %d face %d: mip %d, worldview says %d", i, idx, mips[idx], want)
 				}
 			}
-			hist[mips[g.Ord[idx]]]++
+			hist[mips[idx]]++
 		}
 	}
 	t.Logf("mip levels of the faces drawn over the views: %v", hist)
@@ -180,10 +183,9 @@ func BenchmarkDraws(b *testing.B) {
 	views := w.Views()
 	for name, pol := range map[string]MipPolicy{"chosen": Chosen, "level0": {Fixed: 0}} {
 		b.Run(name, func(b *testing.B) {
-			mips := make([]uint32, g.Faces)
-			var draws []Draw
+			var draws []FaceDraw
 			for i := 0; i < b.N; i++ {
-				draws, _ = g.Draws(w, views[i%len(views)], 1280, 800, draws, mips, pol)
+				draws, _ = g.Draws(w, views[i%len(views)], 1280, 800, draws, pol)
 			}
 		})
 	}
