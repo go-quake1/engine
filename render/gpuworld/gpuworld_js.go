@@ -7,7 +7,6 @@ package gpuworld
 
 import (
 	"context"
-	"encoding/binary"
 
 	"github.com/go-gfx/webgpu"
 
@@ -30,15 +29,12 @@ type Renderer struct {
 	rec      *webgpu.Recorder
 	attach   *webgpu.RenderPassColorAttachment
 	passDesc webgpu.RenderPassDescriptor
-	draws    []Draw
+	draws    []FaceDraw
 	clear    float64
 	cmView   *webgpu.TextureView
 	alias    *aliasGPU
 	sky      *specialGPU
 	cur      worldview.View
-	mb       *webgpu.Buffer // the frame's mip level per face
-	mips     []uint32
-	mipBytes []byte
 
 	// Mip is how a frame picks the mip level of a face; the zero value of the
 	// field in a Renderer made by [New] is Quake's ([Chosen]).
@@ -68,9 +64,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	if err != nil {
 		return nil, err
 	}
-	r := &Renderer{dev: dev, w: w, geo: geo, width: width, height: height, clear: worldview.ClearIndex, Mip: Chosen,
-		mips: make([]uint32, max(geo.Faces, 1))}
-	r.mipBytes = make([]byte, 4*len(r.mips))
+	r := &Renderer{dev: dev, w: w, geo: geo, width: width, height: height, clear: worldview.ClearIndex, Mip: Chosen}
 	tex2d := func(label string, tw, th int, usage webgpu.TextureUsage) (*webgpu.Texture, error) {
 		return dev.CreateTexture(webgpu.TextureDescriptor{Label: label, Size: webgpu.Extent3D{Width: uint32(tw), Height: uint32(th)},
 			Format: webgpu.TextureFormatR8Uint, Usage: usage})
@@ -129,7 +123,6 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		{Binding: 4, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 		{Binding: 5, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 		{Binding: 6, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
-		{Binding: 7, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 	}})
 	if err != nil {
 		return nil, err
@@ -167,12 +160,9 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	if err != nil {
 		return nil, err
 	}
-	if r.mb, err = dev.CreateBuffer(webgpu.BufferDescriptor{Label: "world mips", Size: uint64(4 * len(r.mips)), Usage: webgpu.BufferUsageStorage | webgpu.BufferUsageCopyDst}); err != nil {
-		return nil, err
-	}
 	if r.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
 		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: views[0]},
-		{Binding: 4, Buffer: faceTab}, {Binding: 5, Buffer: faceVerts}, {Binding: 6, Buffer: surfTab}, {Binding: 7, Buffer: r.mb},
+		{Binding: 4, Buffer: faceTab}, {Binding: 5, Buffer: faceVerts}, {Binding: 6, Buffer: surfTab},
 	}}); err != nil {
 		return nil, err
 	}
@@ -218,14 +208,10 @@ func (r *Renderer) Draw(v worldview.View) error { return r.DrawEntities(v, nil) 
 func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) error {
 	var err error
 	r.cur = v
-	if r.draws, err = r.geo.Draws(r.w, v, r.width, r.height, r.draws, r.mips, r.Mip); err != nil {
+	if r.draws, err = r.geo.Draws(r.w, v, r.width, r.height, r.draws, r.Mip); err != nil {
 		return err
 	}
 	r.rec.Reset()
-	for i, m := range r.mips {
-		binary.LittleEndian.PutUint32(r.mipBytes[4*i:], m)
-	}
-	r.rec.WriteBuffer(r.mb, 0, r.mipBytes)
 	r.rec.WriteBuffer(r.ub, 0, UniformAt(v, r.w.FOV, r.width, r.height, r.Time))
 	if err := r.prepareAlias(ents); err != nil {
 		return err
@@ -237,7 +223,7 @@ func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) err
 	p.SetIndexBuffer(r.ib, webgpu.IndexFormatUint32, 0, 0)
 	if !r.SkipWorld {
 		for _, d := range r.draws {
-			p.DrawIndexed(d.Count, 1, d.First, 0, 0)
+			p.DrawIndexed(d.Count, 1, d.First, 0, d.Mip)
 		}
 	}
 	r.recordSpecial(p)
