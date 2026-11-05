@@ -283,7 +283,9 @@ levels into one atlas and takes the level the CPU chooses per face and frame:
 0.0006 % of the world's pixels unexplained on the 16 views (the v0.6.1 reference
 moved by 23.9 %; the GPU without the mip choice fails at 13.7 %, one level too
 far at 28.2 %); [docs/webgpu-world/2026-11-04-surfcache.md](docs/webgpu-world/2026-11-04-surfcache.md).
-The engine's own world loop (`runner`) still bakes one full-size surface per face.
+The engine's own world loop (`runner`) still bakes one full-size surface per face
+([#72](https://github.com/go-quake1/engine/issues/72)). Since v0.7.1 the GPU's CPU
+time for the mip choice is 0.205 ms against 0.280 ms (v0.6.1: 0.180 ms).
 
 Not ported: the clipping of triangles that cross the near plane
 (`r_aclip.c`: they are dropped), and dynamic lights.

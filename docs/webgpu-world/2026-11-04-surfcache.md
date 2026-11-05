@@ -176,6 +176,32 @@ all inside the frustum (they already are, in one pass). The atlas costs memory
 and start-up, not frame time: 34.9 MB of `r8uint` against 1.1 MB before (the
 2048 x 320 and 2048 x 207 atlases), built in under 0.1 s natively.
 
+## Update, v0.7.1: the CPU cost of the mip choice
+
+The open defect above is mostly closed. Three changes, none touching fidelity
+(the same 16 views: 58 pixels differ, 6 unexplained, 0.0006 %; the planted
+negatives still fail at 28.20 %, 13.68 % and 76.55 %):
+
+- `Geometry.Draws` transforms a face's polygon once for the near-plane test and
+  the mip choice (it transformed it twice), with no clipping buffer zeroed per
+  face (3 KB each before);
+- a face whose precomputed bounding sphere lies inside the frustum is answered
+  from the z of its vertices alone (`MipView.FastLevel`; 1440 of the 3909
+  visible faces of the 16 views), and the test shows it gives the clipped
+  path's level for every one of them;
+- the level rides on the draw's first instance (`DrawIndexed(..., firstInstance)`,
+  read as `@builtin(instance_index)`): the 20 KB per-frame buffer upload and its
+  5149-entry loop are gone.
+
+Interleaved against a clean clone of v0.7.0, 5 rounds, load 5.6 to 6.2: GPU
+world CPU time **0.280 ms (0.260-0.300) to 0.205 ms (0.200-0.210)**; wall
+1.450 to 1.420 ms; the software world is the same code (39.9 and 39.9 ms in the
+browser, 4.52 and 4.55 ms natively). v0.6.1 was 0.180 ms, so 0.025 ms of the
+0.100 ms remains, the sphere test and the transform of the faces that do not
+pass it. Moving the engine's own world loop (`runner`) onto the surface cache is
+not small (its per-frame face walk, animated textures and light styles are its
+own) and is filed as an issue.
+
 ## What remains
 
 `runner/render.go`'s world loop on `render.SurfaceCache`; dynamic lights
