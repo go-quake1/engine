@@ -226,18 +226,52 @@ at 320 x 200, the runner's pass against `worldview.DrawSoftware` with the restin
 light styles and the same face order: **0 of 1,024,000 pixels differ**; cache
 builds 2174, hits 3988, no thrash frame.
 
-**A finding about the reference, open.** The runner draws the walk's list in
-reverse (back to front, its painter's order); `worldview.DrawSoftware` and the GPU
-draw it forward with no depth test, so in an overlap the **far** face wins (the
+**A finding about the reference (fixed in v0.9.0, #74).** The runner drew the
+walk's list in reverse (back to front); `worldview.DrawSoftware` and the GPU
+drew it forward with no depth test, so in an overlap the **far** face won (the
 list is front to back: in view 0 the first face is at z = -62, the last at
-z = 1046). Drawing the same lit faces in the runner's order differs from the
-reference in 195,866 of the 1,024,000 pixels (19.1 %). The reference and the GPU
-agree with each other (that is what the step measured), not with the engine's
-frame. This step did not change the reference; it is filed as an issue.
+z = 1046). The same lit faces in the runner's order differed from the reference
+in 195,866 of the 1,024,000 pixels (19.1 %); the reference and the GPU agreed
+with each other (what the step 6 checks measure), not with the engine's frame.
+All numbers quoted in this document and in the 2026-11-02 to 2026-11-04 pages
+(the 23.86 %, 0.006 %, the ablation rows) were measured in that forward order.
 
 Cost: not measured here (the machine's 1-minute load was 16 to 20, above the
 limit of 8); the before and after of the runner's frame against a clean clone of
 v0.7.1 is left to a quiet machine.
+
+## Update, v0.9.0: the world is drawn in Quake's order
+
+What the sources say (`reference/common`, opened): `R_RenderFace` (`r_draw.c:480`)
+gives each surface `key = r_currentkey++` in the order `R_RecursiveWorldNode`
+emits faces (near child first); the edge sorter keeps the active surfaces ordered
+by key and `R_LeadingEdge` (`r_edge.c:437`) makes a new surface the top only when
+`surf->key < top->key`. At each pixel the surface drawn is the **first one the
+walk emitted**. With no span buffer that is the walk's list drawn in reverse.
+`DrawSoftware`, `DrawSoftwareMip`, `DrawLightmapped`, `DrawEngine` and
+`gpuworld.Geometry.Draws` now draw back to front (the GPU has no depth
+attachment, `gpuworld_js.go:188-190`; it issues the draws in list order,
+`gpuworld_js.go:225-227`, so reversing the list is the same rule).
+
+Not reproduced: back faces are not culled in the reference (the runner culls and
+still matches to 0 pixels on the 16 views); sky and water are drawn after all lit
+faces, not in key order; the fill rules at shared polygon edges are the polygon
+filler's, not the span sorter's.
+
+`TestNearestFaceWins`: each visible face is drawn alone (over two backgrounds, to
+find the pixels it writes) and the frame must show, at every pixel, the first walk
+face that covers it. On the v0.8.0 order 195,866 of the 1,024,000 pixels of the
+16 views fail (499,433 face overlaps with a different value); now 0. The runner's
+frame equals the reference's in 0 of 1,024,000 pixels in its own order; the walk's
+order differs from it in 195,866.
+
+World check in the new order (`cmd/quake-worldcheck`, Chrome 156 headless on the
+Apple GPU, the 16 views, tolerance 2.5 %): `TestGPUWorldMatchesTheSoftwareWorld`
+**45 of 1,024,000 pixels differ, 3 unexplained** by a one-pixel shift (0.0003 %);
+the damaged-colormap, wrong-mip and no-mip controls still fail (77.4 %, 30.2 %,
+11.3 % unexplained). Sky, water and alias checks unchanged in kind (0.02 %,
+0.10 %, 0.69 % unexplained). The ablation rows and timings of the earlier pages
+were not re-run: the 1-minute load was above 8.
 
 ## What remains
 

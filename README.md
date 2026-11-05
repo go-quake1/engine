@@ -218,9 +218,10 @@ palette indices, the same indices the software renderer writes, so the
 presenter above can display it unchanged. `worldview` is the software
 reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 `cmd/quake-worldcheck` compares the two on 16 fixed e1m1 views on a real GPU
-(tolerance 2.5 % of pixels not explained by a one-pixel shift; 0.006 %
-measured since the shader reproduces the reference's 8-pixel sub-spans and
-left-edge coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
+(tolerance 2.5 % of pixels not explained by a one-pixel shift; 0.0003 %
+measured in v0.9.0's back-to-front order, 0.006 % in the earlier forward order
+once the shader reproduced the reference's 8-pixel sub-spans and left-edge
+coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
 repository: point `QUAKE_PAK` at it. Dynamic lights and
 animated lightstyles are later steps. Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
@@ -287,7 +288,11 @@ The engine's own world loop (`runner`, `runner/worldsurf.go`) draws from the sam
 cache since v0.8.0 ([#72](https://github.com/go-quake1/engine/issues/72)), with the
 real light styles (`d_lightstylevalue`) and animated `+` textures as a changed
 texture: on the 16 views its lit-face pass is pixel-identical to
-`worldview.DrawSoftware` (0 of 1,024,000 pixels differ). Since v0.7.1 the GPU's CPU
+`worldview.DrawSoftware` (0 of 1,024,000 pixels differ). Since v0.9.0 the software
+reference and the GPU world draw the walk's list back to front, as the runner does
+and as Quake's edge sorter shows it (the first face the walk emits wins a pixel,
+`r_edge.c`); before, far faces won overlaps
+([#74](https://github.com/go-quake1/engine/issues/74)). Since v0.7.1 the GPU's CPU
 time for the mip choice is 0.205 ms against 0.280 ms (v0.6.1: 0.180 ms).
 
 Not ported: the clipping of triangles that cross the near plane
