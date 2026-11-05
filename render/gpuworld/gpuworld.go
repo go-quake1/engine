@@ -285,21 +285,25 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 	}
 	view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
 	mv := worldview.NewMipView(width, height, w.FOV)
+	var ptsBuf [render.MaxPolyVerts][3]float32
 	out = out[:0]
 	for _, idx := range faces {
 		if g.Count[idx] == 0 {
 			continue
 		}
 		f := w.Faces[idx]
-		fv := f.Verts
-		front := false
-		for i := 0; i < fv.NumVerts && !front; i++ {
-			front = render.TransformAffine(view, fv.Vert(i))[2] >= render.ParticleNearClip
+		// A face whose bounding sphere is inside the frustum is in front of
+		// the near plane and needs no clipping: its level from the z of its
+		// vertices alone. Otherwise one transform of the polygon serves the
+		// near-plane test and the clipped mip choice.
+		level, front := mv.FastLevel(view, f)
+		if !front {
+			level, front = mv.LevelFront(view, f, &ptsBuf)
 		}
 		if front {
 			mip := pol.Fixed
 			if mip < 0 {
-				mip = max(0, min(render.SurfMips-1, mv.Level(view, f)+pol.Bias))
+				mip = max(0, min(render.SurfMips-1, level+pol.Bias))
 			}
 			mips[g.Ord[idx]] = uint32(mip)
 			out = append(out, Draw{g.First[idx], g.Count[idx]})

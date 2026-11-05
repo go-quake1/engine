@@ -131,6 +131,32 @@ func TestSurfaceCacheMovesTheReference(t *testing.T) {
 	}
 }
 
+// TestFastLevelIsLevel: where the bounding-sphere shortcut applies it gives
+// the level of the clipping path, for every visible face of the 16 views.
+func TestFastLevelIsLevel(t *testing.T) {
+	w, _ := load(t)
+	mv := worldview.NewMipView(320, 200, w.FOV)
+	fast, all := 0, 0
+	for _, v := range w.Views() {
+		faces, _ := w.Visible(v, 320, 200)
+		view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
+		for _, idx := range faces {
+			f := w.Faces[idx]
+			all++
+			if l, ok := mv.FastLevel(view, f); ok {
+				fast++
+				if want := mv.Level(view, f); l != want {
+					t.Fatalf("face %d: fast level %d, clipped level %d", idx, l, want)
+				}
+			}
+		}
+	}
+	t.Logf("the shortcut applies to %d of %d visible faces", fast, all)
+	if fast == 0 {
+		t.Error("the shortcut never applies")
+	}
+}
+
 func TestLoadMapMissing(t *testing.T) {
 	fsys, _, _ := bench.OpenPak("")
 	if _, err := worldview.LoadMap(fsys, "e1m1"); err == nil {

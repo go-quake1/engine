@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"strings"
 
 	"github.com/go-quake1/engine/bspfile"
@@ -57,6 +58,12 @@ type Face struct {
 	// texturemins, the styles' lightmaps (Samples, nil when the face has none),
 	// the texture with its four mip levels, and the cachespots.
 	Surf render.SurfaceFace
+	// Pts is the face's polygon in world space (Verts.Vert, read once).
+	Pts [][3]float32
+	// Centre and Radius bound the polygon (the mean of its vertices and the
+	// largest distance to it).
+	Centre [3]float32
+	Radius float32
 	// MipAdjust is texinfo->mipadjust.
 	MipAdjust float32
 }
@@ -219,7 +226,23 @@ func New(bsp []byte) (*World, error) {
 		} else {
 			info.Width, info.Height = 1, 1
 		}
-		w.Faces[i] = &Face{Idx: i, Tex: pics[mi], Verts: fv, Info: info, Light: plane,
+		pts := make([][3]float32, fv.NumVerts)
+		for k := range pts {
+			pts[k] = fv.Vert(k)
+		}
+		var ctr [3]float32
+		for _, p := range pts {
+			for a := range ctr {
+				ctr[a] += p[a] / float32(len(pts))
+			}
+		}
+		var rad float32
+		for _, p := range pts {
+			dx, dy, dz := p[0]-ctr[0], p[1]-ctr[1], p[2]-ctr[2]
+			rad = max(rad, float32(math.Sqrt(float64(dx*dx+dy*dy+dz*dz))))
+		}
+		rad *= 1.0001 // rounding: the sphere must hold every vertex
+		w.Faces[i] = &Face{Idx: i, Tex: pics[mi], Verts: fv, Info: info, Light: plane, Pts: pts, Centre: ctr, Radius: rad,
 			Surf: render.SurfaceFace{Desc: desc}, MipAdjust: render.MipAdjust(fv.UVAxisS, fv.UVAxisT)}
 	}
 	w.HaveLightData = len(light) > 0
