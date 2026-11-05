@@ -166,13 +166,7 @@ func New(bsp []byte) (*World, error) {
 		}
 		pics[i] = &render.Pic{Width: int(mt.Width), Height: int(mt.Height), Pixels: append([]byte(nil), px...)}
 		names[i] = mt.Name
-		st := &render.SurfaceTexture{Width: int(mt.Width), Height: int(mt.Height)}
-		for k := 0; k < render.SurfMips; k++ {
-			if mp, err := mt.Pixels(k); err == nil {
-				st.Mips[k] = append([]byte(nil), mp...)
-			}
-		}
-		surfTex[i] = st
+		surfTex[i], _ = NewSurfaceTexture(mt)
 	}
 	light := file.Lighting()
 	special := make([]*SpecialFace, len(nf))
@@ -206,26 +200,7 @@ func New(bsp []byte) (*World, error) {
 		if err != nil {
 			continue
 		}
-		plane := []byte{255}
-		desc := render.SurfaceDesc{
-			Extents:     [2]int{(info.Width - 1) * 16, (info.Height - 1) * 16},
-			TextureMins: [2]int{info.MinS, info.MinT},
-			Styles:      info.Styles,
-			Texture:     surfTex[mi],
-		}
-		n := info.Width * info.Height
-		if info.LightOfs >= 0 && int(info.LightOfs)+n <= len(light) {
-			plane = append([]byte(nil), light[info.LightOfs:int(info.LightOfs)+n]...)
-			styles := 0
-			for styles < 4 && info.Styles[styles] != 255 {
-				styles++
-			}
-			if int(info.LightOfs)+styles*n <= len(light) {
-				desc.Samples = append([]byte(nil), light[info.LightOfs:int(info.LightOfs)+styles*n]...)
-			}
-		} else {
-			info.Width, info.Height = 1, 1
-		}
+		desc, info, plane := NewSurfaceDesc(info, light, surfTex[mi])
 		pts := make([][3]float32, fv.NumVerts)
 		for k := range pts {
 			pts[k] = fv.Vert(k)

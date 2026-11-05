@@ -67,8 +67,9 @@ Where Quake's would differ: a face partly hidden by a nearer one (Quake still
 counts the hidden edges, as the polygon does), and the 3-pixel shrink of the
 clip planes (`xscaleshrink`, not used). Dynamic lights
 (`R_AddDynamicLights`) are not ported. The engine's own world loop
-(`runner/render.go`) still bakes one full-size surface per face with
-`render.BakeSurface`; moving it onto `render.SurfaceCache` is the next step.
+(`runner/render.go`) baked one full-size surface per face with
+`render.BakeSurface` in v0.7.x; v0.8.0 moves it onto `render.SurfaceCache` (see
+the update below).
 
 ## Tests pinned on the source
 
@@ -202,9 +203,45 @@ pass it. Moving the engine's own world loop (`runner`) onto the surface cache is
 not small (its per-frame face walk, animated textures and light styles are its
 own) and is filed as an issue.
 
+## Update, v0.8.0: the engine's own world loop on the cache
+
+`runner/render.go` no longer bakes one full-size surface per face
+(`render.BakeSurface`, lightmap bilinear, no mip, no eviction, faces with a
+non-resting light style or a `+` texture on the per-pixel fill). Its lit faces go
+through `runner/worldsurf.go` (`worldSurfaces`), the same sequence as
+`worldview.DrawSoftware`: the mip level from the face's clipped nearest `1 / z`
+(`worldview.MipView.Level`, which uses `NearZIOf`), one `render.SurfaceCache` of
+`SurfaceCacheForRes` bytes (remade when the frame size changes, `SetupFrame` each
+frame), a `render.SurfaceDesc` per face (`worldview.NewSurfaceDesc`, shared with
+the reference), `D_CacheSurface`, and `FillPerspectiveCachedPolygon` at
+`CU = LmS * 16 / 2^mip`. What the runner adds to the fixed views: the light styles
+are `d_lightstylevalue` at `cl.time` (`lightStyleBrightness`, so a flickering
+style rebuilds its surface in place), and an animated `+` texture
+(`R_TextureAnimation`, 5 Hz) is a changed texture for `D_CacheSurface`, which
+rebuilds the block in place. A face whose miptex did not decode (the checker
+texture) or that the cache cannot hold keeps the per-pixel lightmapped fill.
+
+Equality (`TestWorldSurfacesMatchReference`, needs `QUAKE_PAK`): the 16 e1m1 views
+at 320 x 200, the runner's pass against `worldview.DrawSoftware` with the resting
+light styles and the same face order: **0 of 1,024,000 pixels differ**; cache
+builds 2174, hits 3988, no thrash frame.
+
+**A finding about the reference, open.** The runner draws the walk's list in
+reverse (back to front, its painter's order); `worldview.DrawSoftware` and the GPU
+draw it forward with no depth test, so in an overlap the **far** face wins (the
+list is front to back: in view 0 the first face is at z = -62, the last at
+z = 1046). Drawing the same lit faces in the runner's order differs from the
+reference in 195,866 of the 1,024,000 pixels (19.1 %). The reference and the GPU
+agree with each other (that is what the step measured), not with the engine's
+frame. This step did not change the reference; it is filed as an issue.
+
+Cost: not measured here (the machine's 1-minute load was 16 to 20, above the
+limit of 8); the before and after of the runner's frame against a clean clone of
+v0.7.1 is left to a quiet machine.
+
 ## What remains
 
-`runner/render.go`'s world loop on `render.SurfaceCache`; dynamic lights
+Dynamic lights
 (`R_AddDynamicLights`); light styles animating at their real values in the fixed
 views (a face whose style changes re-bakes on the CPU and would need a
 sub-rectangle upload on the GPU); the GPU atlas is 33 MB where Quake's cache
