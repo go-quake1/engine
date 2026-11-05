@@ -11,20 +11,25 @@
 // and lightmap rectangles), the per-frame draw list, and the shader. The
 // device side is in gpuworld_js.go.
 //
-// Per fragment the shader does what render.FillPerspectiveLightmappedPolygon
-// does per pixel: it wraps the texture coordinate into the face's texture
-// (a rectangle of the texture atlas), samples the face's lightmap plane (a
-// rectangle of the lightmap atlas) bilinearly, turns the sample into a
-// colormap row ((255 - sample) >> 2), and looks the texel index up in that
-// row of the colormap texture. The result is a palette index written to an
-// r8uint target. Faces are drawn in the BSP walk's order, with no depth
-// test, as the software renderer does.
+// The world is drawn from Quake's surface cache with mip levels
+// (render.SurfaceCache, reference/common d_surf.c and r_surf.c): per face and
+// per mip level the lit surface (render.DrawSurface: the texture's mip level
+// lit by the interpolated light grid through the colormap) is built once on the
+// CPU, by the code the software path uses, and packed into one r8uint atlas.
+// Per frame the CPU gives every visible face its mip level (worldview.MipView,
+// D_MipLevelForScale of the face's nearest 1/z); per fragment the shader
+// rebuilds the reference's 8-pixel sub-span, takes the surface coordinate
+// relative to the face's texturemins, divides it by the level's size and reads
+// the surface texel. The result is a palette index written to an r8uint
+// target. Faces are drawn in the BSP walk's order, with no depth test, as the
+// software renderer does.
 package gpuworld
 
 import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"sort"
 
 	"github.com/go-gfx/webgpu/atlas"
 
@@ -33,13 +38,17 @@ import (
 	"github.com/go-quake1/engine/worldview"
 )
 
-// VertexStride is the size of one vertex in bytes: position (3 floats),
-// texture uv (2), lightmap uv (2), texture rect (4 uint32: x y w h) and
-// lightmap rect (4 uint32), padded to 64.
-const VertexStride = 64
+// VertexStride is the size of one vertex in bytes: position (3 floats) and the
+// face's index in the face tables (a uint32).
+const VertexStride = 16
 
-// AtlasWidth is the width of the texture and lightmap atlases.
+// AtlasWidth is the width of the sky and water texture atlases.
 const AtlasWidth = 2048
+
+// SurfAtlasWidth is the width of the surface atlas: e1m1's surfaces are
+// 33 MB at the four mip levels (25 MB at level 0), more than a 4096 x 8192
+// texture holds.
+const SurfAtlasWidth = 8192
 
 // MaxAtlasHeight bounds an atlas: the WebGPU default limit of a 2D texture.
 const MaxAtlasHeight = 8192
@@ -66,8 +75,10 @@ type packer struct {
 	pending []func()
 }
 
-func newShelf(maxH int) *packer {
-	return &packer{sh: atlas.NewShelf(AtlasWidth, maxH), a: &Atlas{Width: AtlasWidth}, placed: map[any]Rect{}}
+func newShelf(maxH int) *packer { return newShelfW(AtlasWidth, maxH) }
+
+func newShelfW(width, maxH int) *packer {
+	return &packer{sh: atlas.NewShelf(width, maxH), a: &Atlas{Width: width}, placed: map[any]Rect{}}
 }
 
 func (p *packer) place(key any, w, h int, blit func(a *Atlas, r Rect)) (Rect, error) {
@@ -104,8 +115,14 @@ type Geometry struct {
 	Indices  []uint32 // triangle lists, one range per drawn face
 	First    []uint32 // by face index: first index; Count 0 = not drawn
 	Count    []uint32
-	Tex, Lm  *Atlas
-	Faces    int // drawn faces
+	// Surf holds the lit surfaces: every drawn face at each of the four mip
+	// levels (render.DrawSurface), as final palette indices.
+	Surf  *Atlas
+	Faces int // drawn faces
+
+	// Ord is by face index the face's ordinal among the drawn faces (the
+	// index into the face tables and into a frame's mips), -1 if not drawn.
+	Ord []int32
 
 	// FaceTab is 64 bytes per drawn face (in drawing order of Build): the
 	// plane (normal, dist), the texture axes with offsets, texturemins, and
@@ -113,50 +130,105 @@ type Geometry struct {
 	// vertex). The fragment shader rebuilds the 8-pixel sub-spans of the
 	// reference from them.
 	FaceTab, FaceVerts []byte
+	// SurfTab is 64 bytes per drawn face: the surface's rectangle in Surf
+	// (x, y, width, height as uint32) for each of the four mip levels.
+	SurfTab []byte
+	// SurfBytes is the sum of the surfaces' sizes, the atlas content.
+	SurfBytes [render.SurfMips]int
 }
 
-// Build packs the world's textures and lightmaps and the faces' triangle
-// fans. A face is a convex polygon, fanned from its first vertex.
-func Build(w *worldview.World) (*Geometry, error) {
-	g := &Geometry{First: make([]uint32, len(w.Faces)), Count: make([]uint32, len(w.Faces))}
-	tex, lm := newShelf(MaxAtlasHeight), newShelf(MaxAtlasHeight)
+// surfAtlasSurfaces bakes the four mip levels of face f with the software
+// path's code (render.DrawSurface), refusing the faces the software path does
+// not draw (an empty surface, a texture without its mip levels).
+func bakeSurfaces(f *worldview.Face, env *render.SurfaceEnv) (s [render.SurfMips][]byte, ok bool) {
+	adj := worldview.StyleAdj(f.Surf.Desc.Styles)
+	for mip := range s {
+		sw, sh := f.Surf.Desc.Extents[0]>>mip, f.Surf.Desc.Extents[1]>>mip
+		if sw <= 0 || sh <= 0 {
+			return s, false
+		}
+		s[mip] = make([]byte, sw*sh)
+		if err := render.DrawSurface(s[mip], &f.Surf.Desc, adj, mip, env); err != nil {
+			return s, false
+		}
+	}
+	return s, true
+}
+
+// Build bakes and packs the world's lit surfaces (every face at four mip
+// levels, through cm) and builds the faces' triangle fans. A face is a convex
+// polygon, fanned from its first vertex.
+func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
+	g := &Geometry{First: make([]uint32, len(w.Faces)), Count: make([]uint32, len(w.Faces)), Ord: make([]int32, len(w.Faces))}
+	for i := range g.Ord {
+		g.Ord[i] = -1
+	}
+	surf := newShelfW(SurfAtlasWidth, MaxAtlasHeight)
+	env := &render.SurfaceEnv{Colormap: cm, HaveLightData: w.HaveLightData}
+
+	// Bake every surface first, then pack them tallest first: the shelf
+	// packer's rows are as high as their tallest surface.
+	type item struct {
+		face   int
+		mip    int
+		px     []byte
+		width  int
+		height int
+	}
+	var items []item
 	for _, f := range w.Faces {
 		if f == nil {
 			continue
 		}
-		tr, err := tex.place(f.Tex, f.Tex.Width, f.Tex.Height, func(a *Atlas, r Rect) { blitRows(a, r, f.Tex.Pixels, f.Tex.Width) })
+		baked, ok := bakeSurfaces(f, env)
+		if !ok {
+			continue
+		}
+		for mip, px := range baked {
+			sw := f.Surf.Desc.Extents[0] >> mip
+			items = append(items, item{f.Idx, mip, px, sw, len(px) / sw})
+			g.SurfBytes[mip] += len(px)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].height != items[j].height {
+			return items[i].height > items[j].height
+		}
+		return items[i].width > items[j].width
+	})
+	placed := map[[2]int]Rect{}
+	for _, it := range items {
+		r, err := surf.place(&it.px[0], it.width, it.height, func(a *Atlas, r Rect) { blitRows(a, r, it.px, it.width) })
 		if err != nil {
 			return nil, err
 		}
-		lr, err := lm.place(&f.Light[0], f.Info.Width, f.Info.Height, func(a *Atlas, r Rect) { blitRows(a, r, f.Light, f.Info.Width) })
-		if err != nil {
-			return nil, err
+		placed[[2]int{it.face, it.mip}] = r
+	}
+
+	for _, f := range w.Faces {
+		if f == nil {
+			continue
+		}
+		if _, ok := placed[[2]int{f.Idx, 0}]; !ok {
+			continue
+		}
+		for mip := 0; mip < render.SurfMips; mip++ {
+			r := placed[[2]int{f.Idx, mip}]
+			for _, x := range [4]uint32{r.X, r.Y, r.W, r.H} {
+				g.SurfTab = binary.LittleEndian.AppendUint32(g.SurfTab, x)
+			}
 		}
 		n := f.Verts.NumVerts
 		base := uint32(len(g.Vertices) / VertexStride)
+		g.Ord[f.Idx] = int32(g.Faces)
 		for i := 0; i < n; i++ {
 			p := f.Verts.Vert(i)
-			u := p[0]*f.Verts.UVAxisS[0] + p[1]*f.Verts.UVAxisS[1] + p[2]*f.Verts.UVAxisS[2] + f.Verts.UVOffS
-			v := p[0]*f.Verts.UVAxisT[0] + p[1]*f.Verts.UVAxisT[1] + p[2]*f.Verts.UVAxisT[2] + f.Verts.UVOffT
 			var vb [VertexStride]byte
 			put := func(o int, x float32) { binary.LittleEndian.PutUint32(vb[o:], math.Float32bits(x)) }
-			putu := func(o int, x uint32) { binary.LittleEndian.PutUint32(vb[o:], x) }
 			put(0, p[0])
 			put(4, p[1])
 			put(8, p[2])
-			put(12, u)
-			put(16, v)
-			put(20, (u-float32(f.Info.MinS))/16)
-			put(24, (v-float32(f.Info.MinT))/16)
-			putu(28, tr.X)
-			putu(32, tr.Y)
-			putu(36, tr.W)
-			putu(40, tr.H)
-			putu(44, lr.X)
-			putu(48, lr.Y)
-			putu(52, lr.W)
-			putu(56, lr.H)
-			putu(60, uint32(g.Faces)) // index in FaceTab
+			binary.LittleEndian.PutUint32(vb[12:], uint32(g.Faces)) // index in FaceTab
 			g.Vertices = append(g.Vertices, vb[:]...)
 		}
 		pl := bsprender.SurfacePlaneOf(f.Verts, f.Info)
@@ -181,33 +253,55 @@ func Build(w *worldview.World) (*Geometry, error) {
 		g.Count[f.Idx] = uint32(len(g.Indices)) - g.First[f.Idx]
 		g.Faces++
 	}
-	g.Tex, g.Lm = tex.finish(), lm.finish()
+	g.Surf = surf.finish()
 	return g, nil
 }
 
 // Draw is one face's index range in a frame's draw list.
 type Draw struct{ First, Count uint32 }
 
+// MipPolicy says how a frame picks the mip level of a face: the zero value is
+// Quake's (the face's nearest 1/z); the others are ablations and the planted
+// negative of the check.
+type MipPolicy struct {
+	// Fixed >= 0 draws every face at that level.
+	Fixed int
+	// Bias is added to the chosen level (clamped to 0..3).
+	Bias int
+}
+
+// Chosen is the policy that picks Quake's level.
+var Chosen = MipPolicy{Fixed: -1}
+
 // Draws is the frame's draw list: the faces the PVS and the BSP walk
 // select for v, in the walk's order, minus those the software renderer
-// also refuses (every vertex behind the near plane).
-func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []Draw) ([]Draw, error) {
+// also refuses (every vertex behind the near plane). It also gives every drawn
+// face its mip level for this frame: mips[ordinal] for each face in the list
+// (mips has Geometry.Faces entries).
+func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []Draw, mips []uint32, pol MipPolicy) ([]Draw, error) {
 	faces, err := w.Visible(v, width, height)
 	if err != nil {
 		return nil, err
 	}
 	view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
+	mv := worldview.NewMipView(width, height, w.FOV)
 	out = out[:0]
 	for _, idx := range faces {
 		if g.Count[idx] == 0 {
 			continue
 		}
-		fv := w.Faces[idx].Verts
+		f := w.Faces[idx]
+		fv := f.Verts
 		front := false
 		for i := 0; i < fv.NumVerts && !front; i++ {
 			front = render.TransformAffine(view, fv.Vert(i))[2] >= render.ParticleNearClip
 		}
 		if front {
+			mip := pol.Fixed
+			if mip < 0 {
+				mip = max(0, min(render.SurfMips-1, mv.Level(view, f)+pol.Bias))
+			}
+			mips[g.Ord[idx]] = uint32(mip)
 			out = append(out, Draw{g.First[idx], g.Count[idx]})
 		}
 	}
@@ -259,19 +353,18 @@ func UniformAt(v worldview.View, fov float32, width, height int, t float32) []by
 const ShaderWGSL = `
 struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f, o: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var tex: texture_2d<u32>;
-@group(0) @binding(2) var lm: texture_2d<u32>;
-@group(0) @binding(3) var cmap: texture_2d<u32>;
+@group(0) @binding(1) var surf: texture_2d<u32>;
 @group(0) @binding(4) var<storage, read> faceTab: array<vec4f>;
 @group(0) @binding(5) var<storage, read> faceVerts: array<vec4f>;
+@group(0) @binding(6) var<storage, read> surfTab: array<vec4u>;
+@group(0) @binding(7) var<storage, read> mips: array<u32>;
 
 struct VIn {
   @location(0) pos: vec3f,
-  @location(3) tr: vec4u, @location(4) lr: vec4u, @location(5) fi: u32,
+  @location(1) fi: u32,
 };
 struct VOut {
   @builtin(position) p: vec4f,
-  @location(2) @interpolate(flat) tr: vec4u, @location(3) @interpolate(flat) lr: vec4u,
   @location(4) @interpolate(flat) fi: u32,
 };
 
@@ -286,11 +379,9 @@ struct VOut {
   // moved half a pixel right (u.p.w is 1 / width) so that the GPU takes the
   // same pixels; the fragment then works from its own pixel index.
   o.p = vec4f(vp.x / u.p.x + u.p.w * d, vp.y * u.p.z, 0.5 * d, d);
-  o.tr = v.tr; o.lr = v.lr; o.fi = v.fi;
+  o.fi = v.fi;
   return o;
 }
-
-fn wrap(i: i32, n: i32) -> i32 { return ((i % n) + n) % n; }
 
 // The screen position of a world vertex as bsprender.TransformFaceLightmapped
 // gives it: depth clamped to the near plane.
@@ -320,15 +411,15 @@ fn polyVertex(p: vec3f, f1: vec4f, f2: vec4f) -> PV {
             vec3f(inv, (dot(f1.xyz, p) + f1.w) * inv, (dot(f2.xyz, p) + f2.w) * inv));
 }
 
-// (u, v, lightmap s, lightmap t) at screen x xc on the run from xl to xr
-// whose ends carry wl and wr: linear in (1/z, u/z, v/z), then divided.
-fn runAt(xc: f32, xl: f32, wl: vec3f, wr: vec3f, span: f32, minST: vec2f) -> vec4f {
+// (s, t) at screen x xc on the run from xl to xr whose ends carry wl and wr:
+// linear in (1/z, u/z, v/z), then divided; relative to the face's texturemins
+// (the surface coordinate at mip 0).
+fn runAt(xc: f32, xl: f32, wl: vec3f, wr: vec3f, span: f32, minST: vec2f) -> vec2f {
   var dW = vec3f(0.0);
   if (span > 0.0) { dW = (wr - wl) / span; }
   let w = wl + (xc - xl) * dW;
   let z = 1.0 / w.x;
-  let uu = w.y * z; let vv = w.z * z;
-  return vec4f(uu, vv, (uu - minST.x) / 16.0, (vv - minST.y) / 16.0);
+  return vec2f(w.y * z - minST.x, w.z * z - minST.y);
 }
 
 @fragment fn fs(v: VOut) -> @location(0) vec4u {
@@ -368,24 +459,15 @@ fn runAt(xc: f32, xl: f32, wl: vec3f, wr: vec3f, span: f32, minST: vec2f) -> vec
   let B = runAt(f32(xe) + 0.5, xl, wl, wr, span, f3.xy);
   let c = A + f32(px - xa) * (B - A) * inv;
 
-  let tw = i32(v.tr.z); let th = i32(v.tr.w);
-  let tx = wrap(i32(floor(c.x)), tw);
-  let ty = wrap(i32(floor(c.y)), th);
-  let texel = textureLoad(tex, vec2u(v.tr.x + u32(tx), v.tr.y + u32(ty)), 0).r;
-
-  let lw = f32(v.lr.z - 1u); let lh = f32(v.lr.w - 1u);
-  let ls = clamp(c.z, 0.0, lw); let lt = clamp(c.w, 0.0, lh);
-  let s0 = u32(floor(ls)); let t0 = u32(floor(lt));
-  let s1 = min(s0 + 1u, v.lr.z - 1u); let t1 = min(t0 + 1u, v.lr.w - 1u);
-  let fs_ = ls - f32(s0); let ft = lt - f32(t0);
-  let l00 = f32(textureLoad(lm, vec2u(v.lr.x + s0, v.lr.y + t0), 0).r);
-  let l10 = f32(textureLoad(lm, vec2u(v.lr.x + s1, v.lr.y + t0), 0).r);
-  let l01 = f32(textureLoad(lm, vec2u(v.lr.x + s0, v.lr.y + t1), 0).r);
-  let l11 = f32(textureLoad(lm, vec2u(v.lr.x + s1, v.lr.y + t1), 0).r);
-  let l0 = l00 + fs_ * (l10 - l00);
-  let l1 = l01 + fs_ * (l11 - l01);
-  let sample = l0 + ft * (l1 - l0);
-  let row = clamp((255 - i32(sample)) >> 2u, 0, 63);
-  return vec4u(textureLoad(cmap, vec2u(texel, u32(row)), 0).r, 0u, 0u, 0u);
+  // The face's surface at this frame's mip level (D_MipLevelForScale, chosen
+  // on the CPU): the surface is Extents >> mip texels, read with the
+  // coordinate scaled by 1 / 2^mip and clamped to the surface (D_DrawSpans8's
+  // bbextents clamp).
+  let mip = mips[v.fi];
+  let r = surfTab[v.fi * 4u + mip];
+  let sc = 1.0 / f32(1u << mip);
+  let su = clamp(i32(floor(c.x * sc)), 0, i32(r.z) - 1);
+  let sv = clamp(i32(floor(c.y * sc)), 0, i32(r.w) - 1);
+  return vec4u(textureLoad(surf, vec2u(r.x + u32(su), r.y + u32(sv)), 0).r, 0u, 0u, 0u);
 }
 `

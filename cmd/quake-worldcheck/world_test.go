@@ -79,6 +79,14 @@ func runInBrowser(t *testing.T, args ...string) verdict {
 // runInBrowserRaw returns the program's last output line.
 func runInBrowserRaw(t *testing.T, args ...string) string {
 	t.Helper()
+	return runInBrowserIn(t, ".", args...)
+}
+
+// runInBrowserIn is runInBrowserRaw for the program built from dir (a
+// quake-worldcheck directory: this one, or the same one of a clean clone of an
+// earlier tag).
+func runInBrowserIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
 	pakPath, chrome, profile := os.Getenv("QUAKE_PAK"), os.Getenv("QUAKE_CHROMIUM"), os.Getenv("QUAKE_PROFILE")
 	if pakPath == "" || chrome == "" || profile == "" {
 		t.Skip("QUAKE_PAK, QUAKE_CHROMIUM and QUAKE_PROFILE not all set: no pak or no browser")
@@ -88,6 +96,7 @@ func runInBrowserRaw(t *testing.T, args ...string) string {
 	}
 	wasm := filepath.Join(t.TempDir(), "check.wasm")
 	build := exec.Command("go", "build", "-o", wasm, ".")
+	build.Dir = dir
 	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
@@ -147,6 +156,25 @@ func TestDamagedColormapFails(t *testing.T) {
 	}
 }
 
+// TestWrongMipFails is the planted negative of the surface cache: the GPU
+// takes every face one mip level too far while the reference keeps Quake's,
+// and the comparison must fail.
+func TestWrongMipFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--mipBias")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a wrong mip level was not caught: %+v", v)
+	}
+}
+
+// TestNoMipFails: the GPU without the mip choice (every face at level 0, the
+// old full-size lookup) against the surface-cache reference must fail too.
+func TestNoMipFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--noMip")
+	if v.Check != "FAIL" {
+		t.Fatalf("the GPU without mip levels passed: %+v", v)
+	}
+}
+
 // TestGPUWorldMatchesTheSoftwareWorld compares the GPU world with the
 // software reference on the fixed e1m1 views (see the results document for
 // the measured rates and where the two differ).
@@ -161,15 +189,16 @@ func TestGPUWorldMatchesTheSoftwareWorld(t *testing.T) {
 }
 
 type benchRes struct {
-	Frames        int     `json:"frames"`
-	SoftwareMS    float64 `json:"software_ms"`
-	EngineMS      float64 `json:"engine_ms"`
-	EngineP95MS   float64 `json:"engine_p95_ms"`
-	GPUCPUMS      float64 `json:"gpu_cpu_ms"`
-	GPUWallMS     float64 `json:"gpu_wall_ms"`
-	SoftwareP95MS float64 `json:"software_p95_ms"`
-	GPUCPUP95MS   float64 `json:"gpu_cpu_p95_ms"`
-	GPUWallP95MS  float64 `json:"gpu_wall_p95_ms"`
+	Frames         int     `json:"frames"`
+	SoftwareMS     float64 `json:"software_ms"`
+	SoftwareColdMS float64 `json:"software_cold_ms"`
+	EngineMS       float64 `json:"engine_ms"`
+	EngineP95MS    float64 `json:"engine_p95_ms"`
+	GPUCPUMS       float64 `json:"gpu_cpu_ms"`
+	GPUWallMS      float64 `json:"gpu_wall_ms"`
+	SoftwareP95MS  float64 `json:"software_p95_ms"`
+	GPUCPUP95MS    float64 `json:"gpu_cpu_p95_ms"`
+	GPUWallP95MS   float64 `json:"gpu_wall_p95_ms"`
 }
 
 func load(t *testing.T) float64 {
@@ -237,6 +266,7 @@ func TestBenchWorld(t *testing.T) {
 		{"engine software world (ms)", func(r benchRes) float64 { return r.EngineMS }},
 		{"engine software world p95 (ms)", func(r benchRes) float64 { return r.EngineP95MS }},
 		{"software frame (ms)", func(r benchRes) float64 { return r.SoftwareMS }},
+		{"software frame, surface cache emptied first (ms)", func(r benchRes) float64 { return r.SoftwareColdMS }},
 		{"gpu frame, CPU time (ms)", func(r benchRes) float64 { return r.GPUCPUMS }},
 		{"gpu frame, wall to GPU idle (ms)", func(r benchRes) float64 { return r.GPUWallMS }},
 		{"software p95 (ms)", func(r benchRes) float64 { return r.SoftwareP95MS }},
@@ -249,13 +279,138 @@ func TestBenchWorld(t *testing.T) {
 	t.Logf("rounds %d, discarded %d", len(all), discarded)
 }
 
+// nativeNsPerOp runs BenchmarkDrawSoftware in dir (a clone with worldview's
+// world_bench_test.go) and returns its ns/op.
+func nativeNsPerOp(t *testing.T, dir string) float64 {
+	t.Helper()
+	c := exec.Command("go", "test", "./worldview", "-run", "^$", "-bench", "BenchmarkDrawSoftware", "-benchtime", "64x", "-count", "1")
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native bench in %s: %v\n%s", dir, err, out)
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 4 && strings.HasPrefix(f[0], "BenchmarkDrawSoftware") && f[3] == "ns/op" {
+			v, err := strconv.ParseFloat(f[2], 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+	}
+	t.Fatalf("no ns/op in %s", out)
+	return 0
+}
+
+// TestBenchAgainstBaseline alternates, round by round, a clean clone of an
+// earlier tag (QUAKE_BASELINE_DIR, the repository root) and this tree, in the
+// browser (software world and GPU world, 1280x800) and natively (the software
+// world), with the order swapped every round. A round whose 1-minute load,
+// read before or after, is above 8 is discarded. QUAKE_BENCH_ROUNDS rounds.
+func TestBenchAgainstBaseline(t *testing.T) {
+	base := os.Getenv("QUAKE_BASELINE_DIR")
+	rounds, _ := strconv.Atoi(os.Getenv("QUAKE_BENCH_ROUNDS"))
+	if base == "" || rounds == 0 {
+		t.Skip("QUAKE_BASELINE_DIR and QUAKE_BENCH_ROUNDS not set")
+	}
+	type sample struct {
+		b      benchRes
+		native float64
+	}
+	run := func(dir, root string) (sample, bool) {
+		before := load(t)
+		if before > 8 {
+			return sample{}, false
+		}
+		raw := runInBrowserIn(t, filepath.Join(dir, "cmd", "quake-worldcheck"), "--bench", "--width", "1280", "--height", "800")
+		var v struct {
+			Bench *benchRes `json:"bench"`
+		}
+		if err := json.Unmarshal([]byte(raw), &v); err != nil || v.Bench == nil {
+			t.Fatalf("no bench in %q: %v", raw, err)
+		}
+		n := nativeNsPerOp(t, root)
+		if load(t) > 8 {
+			return sample{}, false
+		}
+		return sample{*v.Bench, n}, true
+	}
+	here, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseS, newS []sample
+	discarded := 0
+	for r := 0; len(newS) < rounds; r++ {
+		order := []string{base, here}
+		if r%2 == 1 {
+			order = []string{here, base}
+		}
+		got := map[string]sample{}
+		ok := true
+		for _, d := range order {
+			s, good := run(d, d)
+			if !good {
+				ok = false
+				break
+			}
+			got[d] = s
+		}
+		if !ok {
+			if discarded++; discarded > 80 {
+				t.Fatalf("the load stayed above 8 (%d discards)", discarded)
+			}
+			time.Sleep(30 * time.Second)
+			continue
+		}
+		baseS, newS = append(baseS, got[base]), append(newS, got[here])
+		t.Logf("round %d: base software %.3f gpu wall %.3f native %.1f ms | new software %.3f (cold %.3f) gpu wall %.3f native %.1f ms",
+			len(newS), got[base].b.SoftwareMS, got[base].b.GPUWallMS, got[base].native/1e6,
+			got[here].b.SoftwareMS, got[here].b.SoftwareColdMS, got[here].b.GPUWallMS, got[here].native/1e6)
+	}
+	med := func(ss []sample, f func(sample) float64) (m, lo, hi float64) {
+		var xs []float64
+		for _, s := range ss {
+			xs = append(xs, f(s))
+		}
+		sort.Float64s(xs)
+		return xs[len(xs)/2], xs[0], xs[len(xs)-1]
+	}
+	for _, c := range []struct {
+		name string
+		f    func(sample) float64
+		both bool
+	}{
+		{"software world in the browser (ms)", func(s sample) float64 { return s.b.SoftwareMS }, true},
+		{"software world in the browser, cache emptied first (ms)", func(s sample) float64 { return s.b.SoftwareColdMS }, false},
+		{"software world, native (ms)", func(s sample) float64 { return s.native / 1e6 }, true},
+		{"GPU world, CPU time (ms)", func(s sample) float64 { return s.b.GPUCPUMS }, true},
+		{"GPU world, wall to GPU idle (ms)", func(s sample) float64 { return s.b.GPUWallMS }, true},
+		{"engine's affine world path (ms)", func(s sample) float64 { return s.b.EngineMS }, true},
+	} {
+		bm, blo, bhi := med(baseS, c.f)
+		nm, nlo, nhi := med(newS, c.f)
+		if c.both {
+			t.Logf("| %s | %.3f (%.3f-%.3f) | %.3f (%.3f-%.3f) |", c.name, bm, blo, bhi, nm, nlo, nhi)
+		} else {
+			t.Logf("| %s | | %.3f (%.3f-%.3f) |", c.name, nm, nlo, nhi)
+		}
+	}
+	t.Logf("rounds %d, discarded %d", len(newS), discarded)
+}
+
 // TestAttribution reruns the comparison with one ingredient removed on both
 // sides, to see which one the unexplained pixels come from (QUAKE_ATTRIBUTION=1).
 func TestAttribution(t *testing.T) {
 	if os.Getenv("QUAKE_ATTRIBUTION") == "" {
 		t.Skip("QUAKE_ATTRIBUTION not set")
 	}
-	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}, {"--exactSpans"}, {"--exactSpans", "--nolight"}} {
+	for _, c := range [][]string{{"--nolight"}, {"--flatTex"}, {"--nolight", "--flatTex"}, {"--exactSpans"}, {"--exactSpans", "--nolight"},
+		// the surface cache's ingredients: no mip choice on the GPU, the
+		// reference at level 0 against the GPU's choice, both at level 0, and
+		// the reference of v0.6.1 (what the GPU matched before the cache)
+		{"--noMip"}, {"--refMip0"}, {"--noMip", "--refMip0"}, {"--oldRef"}, {"--mipBias"}} {
 		t.Logf("probe %v", c)
 		runInBrowser(t, append([]string{"--tolerance", "1"}, c...)...)
 	}

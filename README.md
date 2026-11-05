@@ -252,7 +252,7 @@ table entries and worked values from the source. The GPU is compared with
 those: water 0.13 %, sky 0.30 %, alias 0.10 % unexplained, world 0.006 %.
 The results are in the dated files of [docs/webgpu-world/](docs/webgpu-world/).
 
-**Step 6** ports three of the four pieces step 5 left, each with tests pinned
+**Step 6** ports the four pieces step 5 left, each with tests pinned
 on values worked from the source, the GPU re-compared on the same 16 views and
 the same 3 % tolerance, and a planted defect that must fail:
 
@@ -273,8 +273,19 @@ the same 3 % tolerance, and a planted defect that must fail:
   time, both open defects;
   [docs/webgpu-world/2026-11-04-polyse.md](docs/webgpu-world/2026-11-04-polyse.md).
 
-Not ported: the surface cache and its mip levels (`D_CacheSurface`,
-`R_DrawSurface`), the clipping of triangles that cross the near plane
+The fourth piece, **the surface cache with mip levels** (v0.7.0), is the world
+itself: `render.SurfaceCache` and `render.DrawSurface` port `D_SCAlloc`,
+`D_CacheSurface`, `R_BuildLightMap`, `R_DrawSurface` and its four block drawers,
+and `D_MipLevelForScale`; each face is drawn from a lit surface at the mip level
+its distance selects (`worldview.MipView`, with the face's polygon clipped to the
+frustum standing in for `nearzi`). The GPU bakes the same surfaces at four
+levels into one atlas and takes the level the CPU chooses per face and frame:
+0.0006 % of the world's pixels unexplained on the 16 views (the v0.6.1 reference
+moved by 23.9 %; the GPU without the mip choice fails at 13.7 %, one level too
+far at 28.2 %); [docs/webgpu-world/2026-11-04-surfcache.md](docs/webgpu-world/2026-11-04-surfcache.md).
+The engine's own world loop (`runner`) still bakes one full-size surface per face.
+
+Not ported: the clipping of triangles that cross the near plane
 (`r_aclip.c`: they are dropped), and dynamic lights.
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
