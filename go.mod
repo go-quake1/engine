@@ -3,7 +3,7 @@ module github.com/go-quake1/engine
 go 1.27.2
 
 require (
-	github.com/go-gfx/webgpu v0.8.0
+	github.com/go-gfx/webgpu v0.15.0
 	github.com/go-virtio/common v0.3.0
 	github.com/go-virtio/gpu v0.10.0
 	github.com/go-virtio/input v0.1.0
