@@ -101,11 +101,13 @@ For each tyrquake C module:
 
 ## Data: shareware `pak0.pak`
 
-`pak0.pak` for the shareware Episode 1 (Dimension of the Doomed) is
-freely redistributable per id Software's grant and lands in-tree under
-`embedpak/`. Operators can override at boot with their own pak0+pak1
-via a probe env. CI gates always exercise the committed shareware pak
-so the reference oracle is reproducible.
+`pak0.pak` for the shareware Episode 1 (Dimension of the Doomed) is not
+freely redistributable: id Software's shareware licence (SLICNSE.TXT, section 6)
+allows free distribution of the whole archive only, with the licence
+accompanying it. It is not committed here. For redistributable data with the
+same paths, see [go-quake1/freepak](https://github.com/go-quake1/freepak), built
+from LibreQuake. Operators can override at boot with their own pak0+pak1
+via a probe env.
 
 ## Play in a browser (wasm)
 

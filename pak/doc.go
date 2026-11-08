@@ -27,9 +27,15 @@
 //	payloads
 //	  stored uncompressed at filepos, contiguous, in arbitrary order.
 //
-// The shareware Episode 1 `pak0.pak` ID Software released into the
-// public-redistributable category contains 339 entries totalling
-// ~18 MiB.
+// The shareware Episode 1 `pak0.pak` contains 339 entries totalling
+// ~18 MiB. It is not freely redistributable: id's shareware licence
+// (SLICNSE.TXT, section 6) lets providers distribute "the Software" only
+// electronically, in a compressed format and with the licence agreement
+// accompanying it at all times, and lets an end user distribute the Software
+// only "as a whole", free of charge. Do not ship, embed or republish the
+// archive or any entry of it separately. For data that can be redistributed
+// under free licences, with the same 339 paths, use
+// github.com/go-quake1/freepak (built from LibreQuake).
 //
 // fs.FS contract notes:
 //   - Open succeeds with fs.ErrNotExist for missing names.
