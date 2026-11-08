@@ -108,8 +108,16 @@ type SetupOpts struct {
 	FBWidth  int
 	FBHeight int
 
-	// MapSlug is the bare map name SpawnServer loads. Default "start".
+	// MapSlug is the bare map name SpawnServer loads. Default "start",
+	// or "e1m1" when SkipMenu is set.
 	MapSlug string
+
+	// SkipMenu boots straight into the game: the menu is dismissed,
+	// the attract demo is not wired, and the host runs from the first
+	// tic. Escape still opens the menu. A guest with no pointer to
+	// click through the title screen (the playground's quake image)
+	// sets it. Default false.
+	SkipMenu bool
 
 	// Logf is the engine's bring-up log sink. nil = fmt.Printf with a
 	// "QUAKE: " prefix.
@@ -191,8 +199,13 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		}
 	}
 	mapSlug := opts.MapSlug
+	renderSlug := opts.MapSlug // "" keeps the renderer's own default for "start"
 	if mapSlug == "" {
 		mapSlug = "start"
+		if opts.SkipMenu {
+			mapSlug = "e1m1"
+			renderSlug = mapSlug
+		}
 	}
 	rendererKind, err := render.ParseKind(string(opts.Renderer))
 	if err != nil {
@@ -462,7 +475,7 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		boltSkins:       boltSkins,
 		state:           state,
 		logf:            logf,
-		mapFile:         renderMapFile(opts.MapSlug),
+		mapFile:         renderMapFile(renderSlug),
 	}); err != nil {
 		return nil, fmt.Errorf("setupRenderer: %w", err)
 	}
@@ -478,7 +491,7 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		runner.Menu.State, runner.Menu.CursorIndex)
 
 	// 12d. Attract demo (opt-out: the demo stream desyncs this SvcReader).
-	if opts.DisableAttractDemo {
+	if opts.DisableAttractDemo || opts.SkipMenu {
 		logf("attract-loop demo disabled (DisableAttractDemo)")
 	} else if d := loadAttractDemo(pakFS, "demo1.dem"); d != nil {
 		d.PlayerOpts = demo.PlayerOpts{
@@ -495,6 +508,11 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		logf("attract-loop demo wired -- source=%q", "demo1.dem")
 	} else {
 		logf("attract-loop demo skipped -- demo1.dem not in pak")
+	}
+
+	if opts.SkipMenu {
+		runner.SkipMenu()
+		logf("menu skipped (SkipMenu) -- map %q runs from the first tic", mapSlug)
 	}
 
 	logf("entering RunUntilQuit (realHost=%v)", realHost != nil)
