@@ -4,7 +4,9 @@
 // Command quake-worldref draws the fixed e1m1 views of the world-only
 // software reference (package worldview) and writes each as a PNG, with
 // the SHA-256 of its 8-bit index frame: the figures the GPU world is
-// compared with.
+// compared with. The views are worldview's AcceptanceViews: generic
+// ones (four yaws per origin), then the player-start view (the eye at
+// info_player_start), the last number.
 //
 //	quake-worldref --pak pak0.pak --out <dir outside any repository>
 //
@@ -98,7 +100,11 @@ func RootCmd() *cobra.Command {
 			if err := os.MkdirAll(out, 0o755); err != nil {
 				return err
 			}
-			for i, vw := range wv.Views() {
+			views, err := wv.AcceptanceViews()
+			if err != nil {
+				return err
+			}
+			for i, vw := range views {
 				fb, err := render.NewFrameBuffer(w, h)
 				if err != nil {
 					return err
