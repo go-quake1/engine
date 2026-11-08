@@ -119,7 +119,11 @@ func TestPollInputNilStreamsAndErrors(t *testing.T) {
 	boom := errors.New("boom")
 	b = New(320, 200, &fakeKeys{err: boom}, nil)
 	if _, err := b.PollInput(); !errors.Is(err, boom) {
-		t.Errorf("err = %v, want boom", err)
+		t.Errorf("key-down err = %v, want boom", err)
+	}
+	b = New(320, 200, nil, &fakeKeys{err: boom})
+	if _, err := b.PollInput(); !errors.Is(err, boom) {
+		t.Errorf("key-up err = %v, want boom", err)
 	}
 }
 
