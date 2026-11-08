@@ -1,14 +1,15 @@
 module github.com/go-quake1/engine
 
-go 1.27.2
+go 1.27.3
 
 require (
-	github.com/go-gfx/webgpu v0.8.0
+	github.com/go-gfx/webgpu v0.15.0
 	github.com/go-virtio/common v0.3.0
 	github.com/go-virtio/gpu v0.10.0
 	github.com/go-virtio/input v0.1.0
 	github.com/go-virtio/sound v0.1.0
 	github.com/go-virtio/validate/guest v0.1.0
+	github.com/go-wasmcontainers/gpu v0.12.5
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/spf13/cobra v1.10.2
 	github.com/usbarmory/tamago v1.27.3
@@ -18,5 +19,5 @@ require (
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 )
