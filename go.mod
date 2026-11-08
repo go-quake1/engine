@@ -17,6 +17,7 @@ require (
 )
 
 require (
+	github.com/go-gfx/wgsl v0.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
