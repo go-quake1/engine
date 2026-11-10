@@ -1,8 +1,8 @@
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
-github.com/go-gfx/webgpu v0.15.0 h1:YqEOflkk9ej8KFYJvO4gMTpw9c9FtqmKLLP5joRDG2Y=
-github.com/go-gfx/webgpu v0.15.0/go.mod h1:doIaanN3TQ5QUSTUXDvSOrUYIdyAAfNmqCSDio2JTuo=
-github.com/go-gfx/wgsl v0.3.0 h1:wUly8XiZWeewrBSQ1f71YGvPHsM2L+7aBvOU9owtMdM=
-github.com/go-gfx/wgsl v0.3.0/go.mod h1:Fzzw0jXvB+zxCqmTDwvcu3B7PkIVJBcygl2dyDyDAgQ=
+github.com/go-gfx/webgpu v0.18.0 h1:ssy+m7sW/GTrCEPZ1BSmGUdfyy7PzjSBpGaYqMm8s5M=
+github.com/go-gfx/webgpu v0.18.0/go.mod h1:tU9/yMt35RGyu9T/TdnIEANPs4Z1PCRJymZ1Jt94Ego=
+github.com/go-gfx/wgsl v0.4.0 h1:SJOaSkvTcPvK9wdp3vM8ruXFvtxeFLvYEBLV3ZPm4zA=
+github.com/go-gfx/wgsl v0.4.0/go.mod h1:Fzzw0jXvB+zxCqmTDwvcu3B7PkIVJBcygl2dyDyDAgQ=
 github.com/go-virtio/common v0.3.0 h1:Us7yk7AIRQ1uPvgGkiF8imuHz9QqDbadNk6RwEeg2wk=
 github.com/go-virtio/common v0.3.0/go.mod h1:+ziROra3KodlWCF1wcQ5aNcnAiAchgxHcGw1MDJAw1c=
 github.com/go-virtio/gpu v0.10.0 h1:OQNYudPxHr8KB4e/eVRuCDGfC4+c5F/ljpUDD3A+Bg4=

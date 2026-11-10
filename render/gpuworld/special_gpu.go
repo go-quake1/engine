@@ -1,7 +1,7 @@
 // Copyright (c) 2026 the go-quake1/engine authors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//go:build js && wasm
+//go:build (js && wasm) || wasip1
 
 package gpuworld
 
@@ -41,7 +41,7 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 		if err != nil {
 			return nil, err
 		}
-		return b, dev.Queue().WriteBuffer(b, 0, data)
+		return b, writeBuffer(dev, b, data)
 	}
 	vdata, idata := geo.Vertices, make([]byte, 4*len(geo.Indices))
 	for i, v := range geo.Indices {

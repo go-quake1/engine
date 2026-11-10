@@ -3,7 +3,7 @@ module github.com/go-quake1/engine
 go 1.27.3
 
 require (
-	github.com/go-gfx/webgpu v0.15.0
+	github.com/go-gfx/webgpu v0.18.0
 	github.com/go-virtio/common v0.3.0
 	github.com/go-virtio/gpu v0.10.0
 	github.com/go-virtio/input v0.1.0
@@ -17,7 +17,7 @@ require (
 )
 
 require (
-	github.com/go-gfx/wgsl v0.3.0 // indirect
+	github.com/go-gfx/wgsl v0.4.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect

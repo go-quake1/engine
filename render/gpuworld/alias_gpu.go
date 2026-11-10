@@ -1,7 +1,7 @@
 // Copyright (c) 2026 the go-quake1/engine authors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//go:build js && wasm
+//go:build (js && wasm) || wasip1
 
 package gpuworld
 
@@ -47,7 +47,7 @@ func (r *Renderer) EnableAlias(set *AliasSet) error {
 		if err != nil {
 			return nil, err
 		}
-		return b, dev.Queue().WriteBuffer(b, 0, data)
+		return b, writeBuffer(dev, b, data)
 	}
 	pb := make([]byte, 4*len(set.Poses))
 	for i, v := range set.Poses {

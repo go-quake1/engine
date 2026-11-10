@@ -1,7 +1,7 @@
 // Copyright (c) 2026 the go-quake1/engine authors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//go:build js && wasm
+//go:build (js && wasm) || wasip1
 
 package gpuworld
 
@@ -53,8 +53,7 @@ type Renderer struct {
 }
 
 func (r *Renderer) upload(tex *webgpu.Texture, a *Atlas) error {
-	return r.dev.Queue().WriteTexture(webgpu.TexelCopyTextureInfo{Texture: tex}, a.Pixels,
-		webgpu.TexelCopyBufferLayout{BytesPerRow: uint32(a.Width)}, webgpu.Extent3D{Width: uint32(a.Width), Height: uint32(a.Height)})
+	return uploadTexture(r.dev, tex, a.Pixels, a.Width, a.Height)
 }
 
 // New builds the GPU content of w (atlases, colormap, geometry) on dev
@@ -88,8 +87,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	for row := range cm {
 		copy(cmb[row*render.ColorMapCols:], cm[row][:])
 	}
-	if err := dev.Queue().WriteTexture(webgpu.TexelCopyTextureInfo{Texture: cmT}, cmb[:],
-		webgpu.TexelCopyBufferLayout{BytesPerRow: render.ColorMapCols}, webgpu.Extent3D{Width: render.ColorMapCols, Height: render.ColorMapRows}); err != nil {
+	if err := uploadTexture(dev, cmT, cmb[:], render.ColorMapCols, render.ColorMapRows); err != nil {
 		return nil, err
 	}
 
@@ -105,14 +103,14 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	if r.ib, err = buf("world indices", 4*len(geo.Indices), webgpu.BufferUsageIndex); err != nil {
 		return nil, err
 	}
-	if err := dev.Queue().WriteBuffer(r.vb, 0, geo.Vertices); err != nil {
+	if err := writeBuffer(dev, r.vb, geo.Vertices); err != nil {
 		return nil, err
 	}
 	ib := make([]byte, 4*len(geo.Indices))
 	for i, v := range geo.Indices {
 		ib[4*i], ib[4*i+1], ib[4*i+2], ib[4*i+3] = byte(v), byte(v>>8), byte(v>>16), byte(v>>24)
 	}
-	if err := dev.Queue().WriteBuffer(r.ib, 0, ib); err != nil {
+	if err := writeBuffer(dev, r.ib, ib); err != nil {
 		return nil, err
 	}
 
@@ -146,7 +144,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		if err != nil {
 			return nil, err
 		}
-		return b, dev.Queue().WriteBuffer(b, 0, data)
+		return b, writeBuffer(dev, b, data)
 	}
 	faceTab, err := storage("world faces", geo.FaceTab)
 	if err != nil {
@@ -238,9 +236,4 @@ func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) err
 // Wait blocks until the GPU has finished every frame submitted.
 func (r *Renderer) Wait(ctx context.Context) error {
 	return r.dev.WaitSubmitted(ctx, r.dev.Submitted())
-}
-
-// Readback returns the target's width*height indices (for tests).
-func (r *Renderer) Readback(ctx context.Context) ([]byte, error) {
-	return r.dev.ReadTexture(ctx, webgpu.TexelCopyTextureInfo{Texture: r.target}, r.width, r.height, 1)
 }
