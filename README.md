@@ -268,6 +268,14 @@ back with `Recorder.CopyTextureToBuffer` (rows padded to 256 bytes, de-padded on
 the CPU, bands that fit the 1 MiB read window). Needs go-gfx/webgpu v0.17.0 or
 later. See [docs/webgpu-world/2026-11-10-wasip1.md](docs/webgpu-world/2026-11-10-wasip1.md).
 
+The batch host runs a render module only if every loop in it is a
+constant-bound leaf loop of at most 64 iterations (go-gfx/webgpu
+`batch.MaxRenderLoop`). The world shader's polygon-edge loop and the sky and
+water shaders' `runOf` therefore run to `render.MaxPolyVerts` (64) and break at the
+face's vertex count, and `Build` refuses a face with more vertices instead of
+drawing it with missing edges. The frame is the same: see
+[docs/webgpu-world/2026-11-10-bounded-loops.md](docs/webgpu-world/2026-11-10-bounded-loops.md).
+
 Alias models (monsters, items, the view weapon) are drawn on the GPU too,
 after the world, with `Renderer.EnableAlias` and `DrawEntities`: the engine's
 `DrawAliasInterpLit` is the reference (`quake-worldcheck --part alias`, 16
