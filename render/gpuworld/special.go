@@ -243,7 +243,8 @@ fn runOf(first: u32, n: u32, py: i32) -> vec2i {
   let yf = f32(py) + 0.5;
   var xl = 1.0e30; var xr = -1.0e30;
   var prev = proj(faceVerts[first + n - 1u].xyz);
-  for (var i = 0u; i < n; i++) {
+  for (var i = 0u; i < 64u; i++) { // render.MaxPolyVerts, broken at n (see ShaderWGSL)
+    if (i >= n) { break; }
     let cur = proj(faceVerts[first + i].xyz);
     if ((prev.y <= yf && cur.y > yf) || (cur.y <= yf && prev.y > yf)) {
       let x = prev.x + (yf - prev.y) / (cur.y - prev.y) * (cur.x - prev.x);

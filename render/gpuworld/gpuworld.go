@@ -9,7 +9,7 @@
 // This file is the platform-neutral part: the geometry and the atlases
 // built once per map (every visible-face triangle fan with its texture
 // and lightmap rectangles), the per-frame draw list, and the shader. The
-// device side is in gpuworld_js.go.
+// device side is in renderer.go.
 //
 // The world is drawn from Quake's surface cache with mip levels
 // (render.SurfaceCache, reference/common d_surf.c and r_surf.c): per face and
@@ -29,6 +29,7 @@ package gpuworld
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 
@@ -180,6 +181,9 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 	for _, f := range w.Faces {
 		if f == nil {
 			continue
+		}
+		if f.Verts.NumVerts > render.MaxPolyVerts {
+			return nil, fmt.Errorf("gpuworld: face %d has %d vertices, above the %d the shader's edge loop is bounded to", f.Idx, f.Verts.NumVerts, render.MaxPolyVerts)
 		}
 		baked, ok := bakeSurfaces(f, env)
 		if !ok {
@@ -449,7 +453,11 @@ fn runAt(xc: f32, xl: f32, wl: vec3f, wr: vec3f, span: f32, minST: vec2f) -> vec
   var wl = vec3f(1.0, 0.0, 0.0); var wr = vec3f(1.0, 0.0, 0.0);
   let n = u32(f3.w); let first = u32(f3.z);
   var prev = polyVertex(faceVerts[first + n - 1u].xyz, f1, f2);
-  for (var i = 0u; i < n; i++) {
+  // A constant bound (render.MaxPolyVerts) with a break at the face's count:
+  // a host that cannot truncate a fragment stage accepts only loops it can
+  // bound (go-gfx/webgpu batch.MaxRenderLoop); Build refuses a larger face.
+  for (var i = 0u; i < 64u; i++) {
+    if (i >= n) { break; }
     let cur = polyVertex(faceVerts[first + i].xyz, f1, f2);
     if ((prev.s.y <= yf && cur.s.y > yf) || (cur.s.y <= yf && prev.s.y > yf)) {
       let t = (yf - prev.s.y) / (cur.s.y - prev.s.y);
