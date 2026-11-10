@@ -259,6 +259,15 @@ repository: point `QUAKE_PAK` at it. Dynamic lights and
 animated lightstyles are later steps. Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
+`render/gpuworld` also builds for `GOOS=wasip1` (quake level 2), on a remote
+device of go-gfx/webgpu (the wasmcontainers batch sink). The atlases go up with
+`Recorder.WriteTexture` in bands of at most `MaxBandBytes` (8 MiB) of whole rows,
+because the 33 MB surface atlas is above the host's 32 MiB frame and
+`Queue.WriteTexture` is refused on a remote device; `ReadTexture` reads a frame
+back with `Recorder.CopyTextureToBuffer` (rows padded to 256 bytes, de-padded on
+the CPU, bands that fit the 1 MiB read window). Needs go-gfx/webgpu v0.17.0 or
+later. See [docs/webgpu-world/2026-11-10-wasip1.md](docs/webgpu-world/2026-11-10-wasip1.md).
+
 Alias models (monsters, items, the view weapon) are drawn on the GPU too,
 after the world, with `Renderer.EnableAlias` and `DrawEntities`: the engine's
 `DrawAliasInterpLit` is the reference (`quake-worldcheck --part alias`, 16
