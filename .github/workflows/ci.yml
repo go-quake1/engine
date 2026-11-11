@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           check-latest: true
 
       - run: go version
@@ -135,7 +135,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           check-latest: true
 
       - run: go version
@@ -172,7 +172,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           check-latest: true
 
       - run: go version
@@ -204,7 +204,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           check-latest: true
 
       - run: go version
@@ -273,7 +273,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           check-latest: true
       - run: go version
       - uses: browser-actions/setup-chrome@v2
