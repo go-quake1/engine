@@ -1,6 +1,8 @@
 // Copyright (c) 2026 the go-quake1/engine authors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+//go:build !js
+
 package gpuworld
 
 import (

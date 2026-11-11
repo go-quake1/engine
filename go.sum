@@ -13,8 +13,8 @@ github.com/go-virtio/sound v0.1.0 h1:oCcSYSX1XShY3rwK93M6gy9Sv/q13Kl/b/3hP93NXKU
 github.com/go-virtio/sound v0.1.0/go.mod h1:IqNWYa4XQQzJcxvQYrnkhEGulqlrlRcFCOEFFBOQaH4=
 github.com/go-virtio/validate/guest v0.1.0 h1:onZ/DLf/37r0rR8baJ35fxQkey5VHBf3LZD3784OBNc=
 github.com/go-virtio/validate/guest v0.1.0/go.mod h1:ciQgKAo5BMo4Aw0qTy+gWh6fs1ZpbAyh71K6yah5hPY=
-github.com/go-wasmcontainers/gpu v0.12.5 h1:+mdoyVBbPQdmESFldfxNO5W0hyISvgQlk2SVLFn+GL8=
-github.com/go-wasmcontainers/gpu v0.12.5/go.mod h1:NQ+WS23EC+5acYFNu6W/WYeDRGM/IHXk5fUyexPxUF4=
+github.com/go-wasmcontainers/gpu v0.13.0 h1:Wy3ulLyjeqPB5BokeXvH2h0x0CBkWhU6MCcFSlbsjgY=
+github.com/go-wasmcontainers/gpu v0.13.0/go.mod h1:OBnfYRTTYv1Ls/axPNT3c4uQyhjSxaTTaQP+CVmVNPo=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/jfreymuth/oggvorbis v1.0.5 h1:u+Ck+R0eLSRhgq8WTmffYnrVtSztJcYrl588DM4e3kQ=

@@ -7,6 +7,7 @@ package gpuworld
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-gfx/webgpu"
 
@@ -35,6 +36,7 @@ type Renderer struct {
 	alias    *aliasGPU
 	sky      *specialGPU
 	cur      worldview.View
+	readBuf  *webgpu.Buffer // DrawRead's MAP_READ buffer
 
 	// Mip is how a frame picks the mip level of a face; the zero value of the
 	// field in a Renderer made by [New] is Quake's ([Chosen]).
@@ -204,6 +206,16 @@ func (r *Renderer) Draw(v worldview.View) error { return r.DrawEntities(v, nil) 
 // DrawEntities is Draw followed, in the same pass, by the alias entities
 // ents (see [Renderer.EnableAlias]); with no entities it is Draw.
 func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) error {
+	if err := r.record(v, ents); err != nil {
+		return err
+	}
+	_, err := r.rec.Submit()
+	return err
+}
+
+// record fills the Recorder with one frame (the uniform write and the pass)
+// without submitting it.
+func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 	var err error
 	r.cur = v
 	if r.draws, err = r.geo.Draws(r.w, v, r.width, r.height, r.draws, r.Mip); err != nil {
@@ -226,11 +238,41 @@ func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) err
 	}
 	r.recordSpecial(p)
 	r.recordAlias(p)
-	if err := p.End(); err != nil {
-		return err
+	return p.End()
+}
+
+// DrawRead draws one frame of the world from v and reads the index frame back
+// in the same submit: the pass, the texture-to-buffer copy (rows padded to
+// 256 bytes) and the read, one host crossing. The frame must fit the host's read
+// window ([ReadWindow]: 640x480 does). It returns the width*height indices.
+func (r *Renderer) DrawRead(v worldview.View) ([]byte, error) {
+	pitch := Pitch(r.width)
+	if pitch*r.height > ReadWindow {
+		return nil, fmt.Errorf("gpuworld: a %dx%d frame (%d padded bytes) does not fit the %d-byte read window of one submit", r.width, r.height, pitch*r.height, ReadWindow)
 	}
-	_, err = r.rec.Submit()
-	return err
+	if r.readBuf == nil {
+		b, err := r.dev.CreateBuffer(webgpu.BufferDescriptor{Label: "world readback", Size: uint64(pitch * r.height),
+			Usage: webgpu.BufferUsageMapRead | webgpu.BufferUsageCopyDst})
+		if err != nil {
+			return nil, err
+		}
+		r.readBuf = b
+	}
+	if err := r.record(v, nil); err != nil {
+		return nil, err
+	}
+	r.rec.CopyTextureToBuffer(webgpu.TexelCopyTextureInfo{Texture: r.target}, r.readBuf,
+		webgpu.TexelCopyBufferLayout{BytesPerRow: uint32(pitch), RowsPerImage: uint32(r.height)},
+		webgpu.Extent3D{Width: uint32(r.width), Height: uint32(r.height)})
+	rb := r.rec.ReadBuffer(r.readBuf, 0, uint64(pitch*r.height))
+	if _, err := r.rec.Submit(); err != nil {
+		return nil, err
+	}
+	b, err := rb.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	return Depad(make([]byte, 0, r.width*r.height), b, r.width, pitch, r.height), nil
 }
 
 // Wait blocks until the GPU has finished every frame submitted.

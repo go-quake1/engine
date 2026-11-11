@@ -40,6 +40,7 @@ import (
 	"github.com/go-quake1/engine/backend/wasisurface"
 	"github.com/go-quake1/engine/pak"
 	"github.com/go-quake1/engine/render"
+	"github.com/go-quake1/engine/render/gpuworld"
 	"github.com/go-quake1/engine/render/webgpupresent"
 	"github.com/go-quake1/engine/runloop"
 	"github.com/go-quake1/engine/runner"
@@ -74,6 +75,22 @@ type gpuSurface struct {
 	Close     func()
 }
 
+// ErrNoGPUWorld is returned by --gpuworld when this build has no batch device
+// (only GOOS=wasip1 does).
+var ErrNoGPUWorld = errors.New("quake-wctr: no GPU world in this build (build with GOOS=wasip1 and run with wctr --gpu)")
+
+// gpuDrawer draws the world on the GPU: one frame of view v, the index frame
+// read back (width*height bytes).
+type gpuDrawer interface {
+	Draw(v worldview.View) ([]byte, error)
+	Close()
+}
+
+// openGPUWorld builds the GPU content of wv for a w x h frame on the batch
+// device. gpuworld_wasip1.go sets it; it is nil in any other build, and tests
+// set it to a fake.
+var openGPUWorld func(wv *worldview.World, cm *render.ColorMap, w, h int) (gpuDrawer, error)
+
 // openSurface opens a w x h surface. surface_wasip1.go sets it; it is nil
 // in any other build, and tests set it to a fake.
 var openSurface func(w, h int) (*gpuSurface, error)
@@ -82,6 +99,7 @@ var openSurface func(w, h int) (*gpuSurface, error)
 func RootCmd() *cobra.Command {
 	var pakPath, mapSlug string
 	var w, h, worldref, frames int
+	var gpuWorld bool
 	c := &cobra.Command{
 		Use:           "quake-wctr",
 		Short:         "Quake in a wasmcontainers playground container: e1m1 on a wasi-gfx surface",
@@ -101,8 +119,11 @@ func RootCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("quake-wctr: %s: %w", pakPath, err)
 			}
+			if gpuWorld && !cmd.Flags().Changed("worldref") {
+				return errors.New("quake-wctr: --gpuworld needs --worldref N (the game loop still draws its world on the CPU)")
+			}
 			if cmd.Flags().Changed("worldref") {
-				return runWorldref(cmd.OutOrStdout(), p, mapSlug, worldref, w, h)
+				return runWorldref(cmd.OutOrStdout(), p, mapSlug, worldref, w, h, gpuWorld)
 			}
 			return runGame(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames)
 		},
@@ -113,13 +134,14 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&w, "width", 640, "frame width (the surface has the same size)")
 	fl.IntVar(&h, "height", 400, "frame height")
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
+	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped)")
 	return c
 }
 
 // runWorldref draws view n of the map with the world-only software
 // reference and prints the two hashes the playground's e2e compares.
-func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int) error {
+func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int, gpuWorld bool) error {
 	wv, err := worldview.LoadMap(fsys, slug)
 	if err != nil {
 		return err
@@ -156,6 +178,14 @@ func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int) error {
 	rgbaSum := sha256.Sum256(rgba)
 	fmt.Fprintf(out, "view %d %dx%d sha256(indices) %s\n", n, w, h, hex.EncodeToString(idxSum[:]))
 	fmt.Fprintf(out, "view %d %dx%d sha256(rgba) %s\n", n, w, h, hex.EncodeToString(rgbaSum[:]))
+	pixels, pitch := fb.Pixels, fb.Pitch
+	if gpuWorld {
+		frame, err := gpuWorldFrame(out, wv, cm, views[n], n, w, h, fb)
+		if err != nil {
+			return err
+		}
+		pixels, pitch = frame, w
+	}
 	if openSurface == nil {
 		return nil // native: the hashes are the result
 	}
@@ -165,11 +195,46 @@ func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int) error {
 	}
 	defer gs.Close()
 	for i := 0; i < worldrefPresents; i++ {
-		if err := gs.Presenter.Present(fb.Pixels, fb.Width, fb.Height, fb.Pitch, pal); err != nil {
+		if err := gs.Presenter.Present(pixels, fb.Width, fb.Height, pitch, pal); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// gpuWorldFrame draws view v on the GPU, reads the index frame back in the same
+// submit and compares it with the software frame ref: a GPU frame is not
+// hash-equal to the CPU's (cmd/quake-worldcheck: tens of pixels of a million
+// differ by one pixel of shift), so the verdict is worldcheck's, the share of
+// pixels a one-pixel shift does not explain against gpuworld.Tolerance. Over it,
+// it is an error. The two hashes it prints are information, not a check.
+func gpuWorldFrame(out io.Writer, wv *worldview.World, cm *render.ColorMap, v worldview.View, n, w, h int, ref *render.FrameBuffer) ([]byte, error) {
+	if openGPUWorld == nil {
+		return nil, ErrNoGPUWorld
+	}
+	gd, err := openGPUWorld(wv, cm, w, h)
+	if err != nil {
+		return nil, err
+	}
+	defer gd.Close()
+	frame, err := gd.Draw(v)
+	if err != nil {
+		return nil, err
+	}
+	if len(frame) != w*h {
+		return nil, fmt.Errorf("quake-wctr: the GPU frame has %d bytes, want %dx%d", len(frame), w, h)
+	}
+	differ, unexplained := gpuworld.Compare(ref.Pixels, ref.Pitch, frame, w, h)
+	rate := float64(unexplained) / float64(w*h)
+	sum := sha256.Sum256(frame)
+	fmt.Fprintf(out, "view %d %dx%d gpuworld sha256(indices) %s\n", n, w, h, hex.EncodeToString(sum[:]))
+	fmt.Fprintf(out, "view %d %dx%d gpuworld %d of %d pixels differ, %d unexplained (%.4f, tolerance %.3f)\n",
+		n, w, h, differ, w*h, unexplained, rate, gpuworld.Tolerance)
+	if rate > gpuworld.Tolerance {
+		return nil, fmt.Errorf("quake-wctr: the GPU frame differs from the software frame by %.4f unexplained, above the tolerance %.3f", rate, gpuworld.Tolerance)
+	}
+	fmt.Fprintf(out, "view %d %dx%d gpuworld PASS\n", n, w, h)
+	return frame, nil
 }
 
 // runGame plays the map on the surface until it is dropped, or for frames
