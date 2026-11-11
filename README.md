@@ -168,7 +168,18 @@ figure the guest computed on the CPU. 150 frames reach the page, 140 of them
 distinct. One CI run measured 58 ms per frame on that runner. That is one run,
 not a benchmark; a local measurement is deferred until the machine is quiet.
 
-Level 2, the world drawn on the GPU, is not done yet.
+Level 2, the world drawn on the GPU: `--worldref N --gpuworld` also draws the
+view with `render/gpuworld` on the container's batch device (`wasi_webgpu_batch`,
+`wctr run --gpu`; go-wasmcontainers/gpu v0.13.0), reads the index frame back in
+the same submit (`Renderer.DrawRead`: pass, `CopyTextureToBuffer`, read, one host
+crossing) and presents that frame through `wasipresent`. A GPU frame is not
+hash-equal to the CPU's (a few pixels differ by one pixel of shift), so it is
+compared with `cmd/quake-worldcheck`'s measure, the share of pixels a one-pixel
+shift does not explain, against 2.5 % (`gpuworld.Compare`), and the run fails
+above it. The `--worldref` hashes above, which the playground's `TestQuake`
+compares, are still the software frame's and are printed first, unchanged. The
+game loop (HUD, entities, menus) still draws its world on the CPU: moving it is
+not done. Frame time against level 1 is not measured here (load above 8).
 
 ## Streaming assets from an OCI registry
 
