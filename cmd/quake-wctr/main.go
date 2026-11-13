@@ -123,7 +123,7 @@ func RootCmd() *cobra.Command {
 				return errors.New("quake-wctr: --gpuworld needs --worldref N (the game loop still draws its world on the CPU)")
 			}
 			if cmd.Flags().Changed("worldref") {
-				return runWorldref(cmd.OutOrStdout(), p, mapSlug, worldref, w, h, gpuWorld)
+				return runWorldref(cmd.OutOrStdout(), p, mapSlug, worldref, w, h, gpuWorld, frames)
 			}
 			return runGame(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames)
 		},
@@ -135,13 +135,13 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&h, "height", 400, "frame height")
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
-	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped)")
+	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
 	return c
 }
 
 // runWorldref draws view n of the map with the world-only software
 // reference and prints the two hashes the playground's e2e compares.
-func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int, gpuWorld bool) error {
+func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int, gpuWorld bool, frames int) error {
 	wv, err := worldview.LoadMap(fsys, slug)
 	if err != nil {
 		return err
@@ -185,6 +185,19 @@ func runWorldref(out io.Writer, fsys fs.FS, slug string, n, w, h int, gpuWorld b
 			return err
 		}
 		pixels, pitch = frame, w
+	}
+	if frames > 0 {
+		// Timed redraws of the same view, present excluded: the software frame,
+		// or with --gpuworld the GPU frame (one submit with its read-back).
+		var err error
+		if gpuWorld {
+			err = timeGPU(out, wv, cm, views[n], n, w, h, frames)
+		} else {
+			err = timeSoftware(out, wv, cm, views[n], n, w, h, frames, fb)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if openSurface == nil {
 		return nil // native: the hashes are the result
