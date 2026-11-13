@@ -119,6 +119,17 @@ type SetupOpts struct {
 	// sets it. Default false.
 	SkipMenu bool
 
+	// WorldDraw, if set, draws the lit world faces of every frame (a GPU
+	// renderer, see [WorldDrawer]); the software pass draws the rest over them.
+	// Default nil: everything on the CPU.
+	WorldDraw WorldDrawer
+
+	// WorldCheck, if set together with WorldDraw, is called every frame with
+	// the frame the CPU alone draws and the frame drawn with WorldDraw (sky and
+	// water included, no entities): for a test that compares them. The frame
+	// shown is the WorldDraw one.
+	WorldCheck func(cpu *render.FrameBuffer, gpu []byte)
+
 	// Logf is the engine's bring-up log sink. nil = fmt.Printf with a
 	// "QUAKE: " prefix.
 	Logf func(format string, args ...any)
@@ -476,6 +487,8 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		state:           state,
 		logf:            logf,
 		mapFile:         renderMapFile(renderSlug),
+		worldDraw:       opts.WorldDraw,
+		worldCheck:      opts.WorldCheck,
 	}); err != nil {
 		return nil, fmt.Errorf("setupRenderer: %w", err)
 	}

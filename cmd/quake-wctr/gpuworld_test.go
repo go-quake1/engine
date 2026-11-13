@@ -129,8 +129,13 @@ func TestGPUWorldFrameErrors(t *testing.T) {
 	}
 }
 
-func TestGPUWorldNeedsWorldref(t *testing.T) {
-	if _, _, err := run(t, "--pak", emptyPak(t), "--gpuworld"); err == nil || !strings.Contains(err.Error(), "--worldref") {
+// TestGPUWorldInTheGameNeedsASurface: --gpuworld alone is the game loop on the
+// GPU, which needs a surface like any game.
+func TestGPUWorldInTheGameNeedsASurface(t *testing.T) {
+	old := openSurface
+	openSurface = nil
+	t.Cleanup(func() { openSurface = old })
+	if _, _, err := run(t, "--pak", emptyPak(t), "--gpuworld"); !errors.Is(err, ErrNoSurface) {
 		t.Errorf("--gpuworld alone: %v", err)
 	}
 }

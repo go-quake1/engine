@@ -99,7 +99,7 @@ var openSurface func(w, h int) (*gpuSurface, error)
 func RootCmd() *cobra.Command {
 	var pakPath, mapSlug string
 	var w, h, worldref, frames int
-	var gpuWorld bool
+	var gpuWorld, gpuCheck bool
 	c := &cobra.Command{
 		Use:           "quake-wctr",
 		Short:         "Quake in a wasmcontainers playground container: e1m1 on a wasi-gfx surface",
@@ -119,13 +119,16 @@ func RootCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("quake-wctr: %s: %w", pakPath, err)
 			}
-			if gpuWorld && !cmd.Flags().Changed("worldref") {
-				return errors.New("quake-wctr: --gpuworld needs --worldref N (the game loop still draws its world on the CPU)")
+			if gpuCheck && !gpuWorld {
+				return errors.New("quake-wctr: --gpuworld-check needs --gpuworld")
+			}
+			if gpuCheck && cmd.Flags().Changed("worldref") {
+				return errors.New("quake-wctr: --gpuworld-check is for the game loop, not --worldref (which always compares)")
 			}
 			if cmd.Flags().Changed("worldref") {
 				return runWorldref(cmd.OutOrStdout(), p, mapSlug, worldref, w, h, gpuWorld, frames)
 			}
-			return runGame(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames)
+			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck})
 		},
 	}
 	fl := c.Flags()
@@ -135,6 +138,7 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&h, "height", 400, "frame height")
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
+	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
 	return c
 }
@@ -253,6 +257,16 @@ func gpuWorldFrame(out io.Writer, wv *worldview.World, cm *render.ColorMap, v wo
 // runGame plays the map on the surface until it is dropped, or for frames
 // frames when frames > 0.
 func runGame(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames int) error {
+	return runGameWith(out, errOut, fsys, slug, w, h, frames, gameOpts{})
+}
+
+// runGameWith is runGame with the GPU options: with gpuWorld the map is built
+// on the batch device once, before the first frame, and every frame draws its
+// lit world faces there (one submit with the read-back); the software pass draws
+// the sky and water, the entities, the particles, the view model, the HUD and
+// the menu over them, in its own order. With check every frame is also drawn
+// whole on the CPU and compared at worldcheck's measure.
+func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames int, g gameOpts) error {
 	if openSurface == nil {
 		return ErrNoSurface
 	}
@@ -261,16 +275,36 @@ func runGame(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames int) e
 		return err
 	}
 	defer gs.Close()
-	be := wasisurface.New(w, h, gs.Down, gs.Up)
-	r, err := runner.Setup(runner.SetupOpts{
-		Backend:  be,
+	so := runner.SetupOpts{
+		Backend:  nil,
 		PakFS:    fsys,
 		FBWidth:  w,
 		FBHeight: h,
 		MapSlug:  slug,
 		SkipMenu: true,
 		Logf:     func(format string, args ...any) { fmt.Fprintf(errOut, "QUAKE: "+format+"\n", args...) },
-	})
+	}
+	var stats *checkStats
+	if g.gpuWorld {
+		gw, err := openGameWorld(fsys, slug, w, h)
+		switch {
+		case errors.Is(err, gpuworld.ErrAtlasFull):
+			// The map's surfaces do not fit the GPU atlas: play it on the CPU.
+			fmt.Fprintf(errOut, "QUAKE: GPU world unavailable for %s (%v): the CPU draws its world\n", slug, err)
+		case err != nil:
+			return err
+		default:
+			defer gw.Close()
+			so.WorldDraw = gw
+			if g.check {
+				stats = &checkStats{}
+				so.WorldCheck = stats.add
+			}
+		}
+	}
+	be := wasisurface.New(w, h, gs.Down, gs.Up)
+	so.Backend = be
+	r, err := runner.Setup(so)
 	if err != nil {
 		return err
 	}
@@ -279,7 +313,13 @@ func runGame(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames int) e
 		return err
 	}
 	r.Renderer = rend
-	return loop(out, r, be, frames)
+	if err := loop(out, r, be, frames); err != nil {
+		return err
+	}
+	if stats != nil {
+		return stats.report(out)
+	}
+	return nil
 }
 
 // quitObserver reports whether a poll carried QuitRequested.

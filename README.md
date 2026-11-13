@@ -178,8 +178,20 @@ compared with `cmd/quake-worldcheck`'s measure, the share of pixels a one-pixel
 shift does not explain, against 2.5 % (`gpuworld.Compare`), and the run fails
 above it. The `--worldref` hashes above, which the playground's `TestQuake`
 compares, are still the software frame's and are printed first, unchanged. The
-game loop (HUD, entities, menus) still draws its world on the CPU: moving it is
-not done. `--worldref N [--gpuworld] --frames K` redraws the view K more times
+game loop draws its lit world faces on the GPU too when `--gpuworld` is given
+without `--worldref` (the CPU is the default): the map is built and the atlases
+uploaded once, before the first frame, and each frame is one submit with its
+read-back. The software pass draws over the GPU's index frame, in its own order,
+the sky and water faces (the GPU sky is not Quake's dome), the entities, the
+particles, the view model, the HUD and the menu; the lit faces keep the resting
+light styles and the first frame of animated `+` textures (the GPU atlas is baked
+once), where the CPU animates them. A map whose surfaces do not fit the 8192 x 8192
+atlas (freepak e1m2, e1m3 and e1m6) plays on the CPU, with a log line.
+`--gpuworld-check --frames N` also draws every frame whole on the CPU and fails if
+one differs by more than 2.5 % unexplained pixels. The batch host's draw quota
+(1 Mi per draw, 16 Mi per stream) holds with room: the largest index buffer of the
+freepak e1 maps is 38,571 indices, the largest face 27
+(`TestDrawQuotaHoldsForEveryMap`). `--worldref N [--gpuworld] --frames K` redraws the view K more times
 and prints the first frame apart (on the GPU side the device, the map build and
 the atlas upload), then the mean, median, min and max wall-clock time per frame
 of the others, present excluded: the software frame, or the GPU frame with its
