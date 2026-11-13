@@ -21,6 +21,15 @@ The issue's premise, "the playground's TestQuake hash is unchanged" and "the GPU
 frame hash equals the CPU reference", holds for the first only: TestQuake's
 goldens stay the software frame's.
 
+## Frame time
+
+`--worldref N --frames K` (software) and `--worldref N --gpuworld --frames K` redraw
+view N K+1 times. The first frame is printed apart as the warm-up (for the GPU, a
+device of its own: open, map build, atlas upload); the other K give the mean, median,
+min and max, in milliseconds of wall-clock time per frame, present excluded. The GPU
+frame is timed from the start of the draw to the index frame in memory (one submit
+with the read-back).
+
 ## Not done
 
 The game loop. The runner's world pass is interleaved with entities, light and HUD

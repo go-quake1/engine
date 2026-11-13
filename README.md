@@ -179,7 +179,11 @@ shift does not explain, against 2.5 % (`gpuworld.Compare`), and the run fails
 above it. The `--worldref` hashes above, which the playground's `TestQuake`
 compares, are still the software frame's and are printed first, unchanged. The
 game loop (HUD, entities, menus) still draws its world on the CPU: moving it is
-not done. Frame time against level 1 is not measured here (load above 8).
+not done. `--worldref N [--gpuworld] --frames K` redraws the view K more times
+and prints the first frame apart (on the GPU side the device, the map build and
+the atlas upload), then the mean, median, min and max wall-clock time per frame
+of the others, present excluded: the software frame, or the GPU frame with its
+read-back (pass, copy and read in one submit).
 
 ## Streaming assets from an OCI registry
 
