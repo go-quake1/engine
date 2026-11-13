@@ -30,9 +30,31 @@ min and max, in milliseconds of wall-clock time per frame, present excluded. The
 frame is timed from the start of the draw to the index frame in memory (one submit
 with the read-back).
 
-## Not done
+## The game loop on the GPU (engine v0.15.0)
 
-The game loop. The runner's world pass is interleaved with entities, light and HUD
-on the CPU and does not use `worldview.World`; moving it onto `gpuworld` is a
-separate piece. Frame time against level 1 was not measured: the 1-minute load was
-above 8.
+`quake-wctr --gpuworld` (without `--worldref`) plays with the lit world faces drawn by
+`gpuworld`. `runner.SetupOpts.WorldDraw` is a `WorldDrawer`: the runner calls it once a
+frame, before the rest of its pass, and it fills the frame buffer with the GPU's index
+frame (one submit, read-back in it). What is composited where:
+
+- GPU: the lit world faces (`gpuworld`, base textures and lightmaps through the colormap).
+- CPU, over it, in the software pass's own order: sky and water faces (the GPU renderer
+  draws the engine's polygon sky, not Quake's dome, so they stay on the CPU), the entities
+  (alias models, beams, sprites), the particles, the view model, the status bar, the menu.
+- Not reproduced on the GPU: light styles other than their resting value and the animation
+  of `+` textures (the atlas is baked once); the CPU path animates both.
+
+The device is opened and the atlases uploaded once, before the first frame. The map is
+fixed for a run of `quake-wctr`, so there is no level change to rebuild for. A map whose
+surfaces do not fit the 8192 x 8192 surface atlas (`ErrAtlasFull`: freepak e1m2, e1m3,
+e1m6) plays on the CPU, with a log line.
+
+Draw quota of the host (1 Mi vertices per draw, 16 Mi per stream): a frame draws each face
+at most once, so the whole index buffer bounds the stream. Freepak, `TestDrawQuotaHoldsForEveryMap`:
+e1m1 25,671 indices, e1m4 30,102, e1m5 30,093, e1m7 24,882, e1m8 38,571; largest draw 27.
+
+`--gpuworld-check --frames N` draws each frame whole on the CPU as well and compares the two
+worlds (sky and water included, no entities) at worldcheck's measure. In the playground's
+`TestQuake` on the Apple GPU, 30 frames: 18,045 of 7,680,000 pixels differ, 17,616
+unexplained, worst frame 0.49 % (tolerance 2.5 %). Planted fault (the pitch off by 20
+degrees): worst frame 70.97 %, the test fails.

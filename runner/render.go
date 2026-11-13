@@ -63,6 +63,22 @@ type setupRendererOpts struct {
 	// "maps/lq_e0m1.bsp") -- MUST match the host's spawned map. Empty ->
 	// loadBSP falls back to maps/start.bsp.
 	mapFile string
+	// worldDraw, if set, draws the lit world faces of each frame (see
+	// [WorldDrawer]); worldCheck, if also set, is called each frame with the
+	// all-CPU world frame and the GPU-mode frame.
+	worldDraw  WorldDrawer
+	worldCheck func(cpu *render.FrameBuffer, gpu []byte)
+}
+
+// WorldDrawer draws the lit world faces of a frame into fb.Pixels, on a GPU,
+// before the rest of the frame: the CPU then draws what it does not (sky and
+// water, which the GPU renderer does not reproduce exactly, the entities, the
+// particles, the view model, the HUD, the menu), in Quake's order, over it. origin
+// and angles are the camera (the same the software pass uses), fov the horizontal
+// field of view in degrees, t the time in seconds. An error leaves fb for the
+// CPU, which then draws the lit faces too.
+type WorldDrawer interface {
+	DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error
 }
 
 // setupRenderer loads the BSP, builds the mark/walk contexts + synthetic
@@ -202,6 +218,7 @@ func setupRenderer(opts setupRendererOpts) error {
 	}
 	var skyCache render.SkyCache
 	frameCount := 0
+	var gpuFrame []byte // the GPU-mode frame kept by the check (opts.worldCheck)
 	prevEntityOrigin := make(map[int][3]float32)
 	loggedWireSpawn := false
 	// Last view origin that resolved to a real (in-map) BSP leaf. When a
@@ -556,96 +573,128 @@ func setupRenderer(opts setupRendererOpts) error {
 		// iterate in REVERSE to flip the order to BACK-to-FRONT, so
 		// the near surface is the LAST writer and wins. BSP guarantees
 		// this is correct for opaque world surfaces.
-		for i := surfaces.Len() - 1; i >= 0; i-- {
-			ref := surfaces.Refs[i]
-			// Backface cull: world faces are one-sided, so skip any whose
-			// plane the camera is behind (never visible). tyrquake:
-			// R_RecursiveWorldNode's SURF_PLANEBACK side test.
-			if ref.FaceIdx >= 0 && ref.FaceIdx < len(faces) {
-				f := faces[ref.FaceIdx]
-				if pn := int(f.PlaneNum); pn >= 0 && pn < len(planes) &&
-					!faceFrontFacing(planes[pn].Normal, planes[pn].Dist, f.Side, origin) {
-					continue
+		// drawFaces is the walk's painter's pass. With skipLit the lit world
+		// faces are left out (a GPU already drew them, see WorldDrawer): the sky
+		// and water faces, which the GPU renderer does not match, stay on the CPU.
+		drawFaces := func(skipLit bool) {
+			for i := surfaces.Len() - 1; i >= 0; i-- {
+				ref := surfaces.Refs[i]
+				// Backface cull: world faces are one-sided, so skip any whose
+				// plane the camera is behind (never visible). tyrquake:
+				// R_RecursiveWorldNode's SURF_PLANEBACK side test.
+				if ref.FaceIdx >= 0 && ref.FaceIdx < len(faces) {
+					f := faces[ref.FaceIdx]
+					if pn := int(f.PlaneNum); pn >= 0 && pn < len(planes) &&
+						!faceFrontFacing(planes[pn].Normal, planes[pn].Dist, f.Side, origin) {
+						continue
+					}
 				}
-			}
-			fv, err := bsprender.NewBrushFaceVerts(bm, ref.FaceIdx)
-			if err != nil {
-				continue
-			}
-			tex := fallbackTex
-			var name string
-			mtIdx, effIdx := -1, -1
-			if mi, ok, _ := bm.FaceMipTexIdx(ref.FaceIdx); ok && mi >= 0 && mi < len(miptexPics) {
-				mtIdx = mi
-				// Resolve animated chains via cl.time at 5 Hz
-				// (tyrquake R_TextureAnimation). Non-animated
-				// slots resolve to themselves.
-				effIdx = miptexChains.Pic(mtIdx, turbTimeSec)
-				if effIdx < 0 || effIdx >= len(miptexPics) {
-					effIdx = mtIdx
-				}
-				if p := miptexPics[effIdx]; p != nil {
-					tex = p
-					name = miptexNames[effIdx]
-				} else if p := miptexPics[mtIdx]; p != nil {
-					tex = p
-					name = miptexNames[mtIdx]
-				}
-			}
-			switch {
-			case strings.HasPrefix(name, "sky"):
-				verts, err := bsprender.TransformFace(view, fb, fovX, fv)
+				fv, err := bsprender.NewBrushFaceVerts(bm, ref.FaceIdx)
 				if err != nil {
 					continue
 				}
-				// Quake's dome sky (render.FillSkyQuake); a texture that is
-				// not 256 x 128 keeps the old fill.
-				if tab := skyCache.Table(tex, float64(skyTimeSec)); tab != nil {
-					_ = render.FillSkyQuake(fb, tab, view, render.SkyFrameTime(float64(skyTimeSec)), verts)
-				} else {
-					_ = render.FillSkyPolygon(fb, tex, verts, skyTimeSec)
+				tex := fallbackTex
+				var name string
+				mtIdx, effIdx := -1, -1
+				if mi, ok, _ := bm.FaceMipTexIdx(ref.FaceIdx); ok && mi >= 0 && mi < len(miptexPics) {
+					mtIdx = mi
+					// Resolve animated chains via cl.time at 5 Hz
+					// (tyrquake R_TextureAnimation). Non-animated
+					// slots resolve to themselves.
+					effIdx = miptexChains.Pic(mtIdx, turbTimeSec)
+					if effIdx < 0 || effIdx >= len(miptexPics) {
+						effIdx = mtIdx
+					}
+					if p := miptexPics[effIdx]; p != nil {
+						tex = p
+						name = miptexNames[effIdx]
+					} else if p := miptexPics[mtIdx]; p != nil {
+						tex = p
+						name = miptexNames[mtIdx]
+					}
 				}
-			case strings.HasPrefix(name, "*"):
-				verts, err := bsprender.TransformFace(view, fb, fovX, fv)
-				if err != nil {
-					continue
+				switch {
+				case strings.HasPrefix(name, "sky"):
+					verts, err := bsprender.TransformFace(view, fb, fovX, fv)
+					if err != nil {
+						continue
+					}
+					// Quake's dome sky (render.FillSkyQuake); a texture that is
+					// not 256 x 128 keeps the old fill.
+					if tab := skyCache.Table(tex, float64(skyTimeSec)); tab != nil {
+						_ = render.FillSkyQuake(fb, tab, view, render.SkyFrameTime(float64(skyTimeSec)), verts)
+					} else {
+						_ = render.FillSkyPolygon(fb, tex, verts, skyTimeSec)
+					}
+				case strings.HasPrefix(name, "*"):
+					verts, err := bsprender.TransformFace(view, fb, fovX, fv)
+					if err != nil {
+						continue
+					}
+					// Quake's Turbulent8 (render.FillTurbulentQuake): the raw
+					// texture, unlit, on the face's own gradients.
+					wInfo, wErr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx)
+					if wErr != nil {
+						continue
+					}
+					g, ok := render.NewSurfaceGradients(view, fovX, fb.Width, fb.Height, bsprender.SurfacePlaneOf(fv, wInfo))
+					if !ok {
+						continue
+					}
+					_ = render.FillTurbulentQuake(fb, tex, &g, float64(turbTimeSec), verts)
+				default:
+					if skipLit {
+						continue
+					}
+					// World surface: per-face lightmap + perspective-correct
+					// UV (tyrquake R_DrawSurface). Lightmap data lives in
+					// the BSP's Lighting() lump, indexed by Face.LightOfs;
+					// up to 4 lightstyle layers stacked W*H bytes each.
+					lmInfo, lmErr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx)
+					if lmErr != nil {
+						continue
+					}
+					// Quake's surface cache with mip levels (worldSurfaces):
+					// the mip from the face's nearest 1/z, the lit surface from
+					// D_CacheSurface with the real light styles, an animated
+					// '+' texture as a changed texture.
+					if mtIdx >= 0 && worldSurf.draw(fb, &cm, view, fovX, lmInfo, fv, ref.FaceIdx, mtIdx, effIdx, styleAt) {
+						continue
+					}
+					// A face the cache cannot draw (a miptex that did not decode
+					// takes the checker texture) keeps the per-pixel lightmapped fill.
+					lverts, err := bsprender.TransformFaceLightmapped(view, fb, fovX, fv, lmInfo)
+					if err != nil {
+						continue
+					}
+					plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
+					_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
 				}
-				// Quake's Turbulent8 (render.FillTurbulentQuake): the raw
-				// texture, unlit, on the face's own gradients.
-				wInfo, wErr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx)
-				if wErr != nil {
-					continue
-				}
-				g, ok := render.NewSurfaceGradients(view, fovX, fb.Width, fb.Height, bsprender.SurfacePlaneOf(fv, wInfo))
-				if !ok {
-					continue
-				}
-				_ = render.FillTurbulentQuake(fb, tex, &g, float64(turbTimeSec), verts)
-			default:
-				// World surface: per-face lightmap + perspective-correct
-				// UV (tyrquake R_DrawSurface). Lightmap data lives in
-				// the BSP's Lighting() lump, indexed by Face.LightOfs;
-				// up to 4 lightstyle layers stacked W*H bytes each.
-				lmInfo, lmErr := bsprender.FaceLightmapInfo(bm, ref.FaceIdx)
-				if lmErr != nil {
-					continue
-				}
-				// Quake's surface cache with mip levels (worldSurfaces):
-				// the mip from the face's nearest 1/z, the lit surface from
-				// D_CacheSurface with the real light styles, an animated
-				// '+' texture as a changed texture.
-				if mtIdx >= 0 && worldSurf.draw(fb, &cm, view, fovX, lmInfo, fv, ref.FaceIdx, mtIdx, effIdx, styleAt) {
-					continue
-				}
-				// A face the cache cannot draw (a miptex that did not decode
-				// takes the checker texture) keeps the per-pixel lightmapped fill.
-				lverts, err := bsprender.TransformFaceLightmapped(view, fb, fovX, fv, lmInfo)
-				if err != nil {
-					continue
-				}
-				plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
-				_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
 			}
+		}
+
+		gpuLit := false
+		if wd := opts.worldDraw; wd != nil {
+			if err := wd.DrawWorld(fb, origin, viewAngles, fovX, turbTimeSec); err != nil {
+				logf("GPU world: %v (this frame's lit faces fall back to the CPU)", err)
+			} else {
+				gpuLit = true
+			}
+		}
+		if gpuLit && opts.worldCheck != nil {
+			// Check mode: finish the GPU-mode frame (sky and water on the CPU),
+			// keep it, draw the whole world on the CPU into a cleared frame, hand
+			// both to the check, and put the GPU-mode frame back.
+			drawFaces(true)
+			gpuFrame = append(gpuFrame[:0], fb.Pixels...)
+			for i := range fb.Pixels {
+				fb.Pixels[i] = 0x10
+			}
+			drawFaces(false)
+			opts.worldCheck(fb, gpuFrame)
+			copy(fb.Pixels, gpuFrame)
+		} else {
+			drawFaces(gpuLit)
 		}
 
 		worldSurf.endFrame()
