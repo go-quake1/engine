@@ -12,7 +12,7 @@ require (
 	github.com/go-wasmcontainers/gpu v0.13.0
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/spf13/cobra v1.10.2
-	github.com/usbarmory/tamago v1.27.3
+	github.com/usbarmory/tamago v1.27.4
 	github.com/wasmdesk/wasmbox/audioring v0.1.0
 )
 
