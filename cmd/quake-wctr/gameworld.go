@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/go-quake1/engine/assets"
 	"github.com/go-quake1/engine/render"
@@ -29,6 +30,8 @@ type gameWorld struct {
 	wv *worldview.World
 	gd gpuDrawer
 	w  int
+
+	times gpuTimes // per frame, for the --frames phase line
 }
 
 // openGameWorld loads the map's GPU content for a w x h frame.
@@ -58,16 +61,19 @@ func (g *gameWorld) Close() { g.gd.Close() }
 // DrawWorld implements runner.WorldDrawer.
 func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error {
 	g.wv.FOV = fov
+	t0 := time.Now()
 	frame, err := g.gd.Draw(worldview.View{Origin: origin, Angles: angles})
 	if err != nil {
 		return err
 	}
+	t1 := time.Now()
 	if len(frame) != g.w*fb.Height || fb.Width != g.w {
 		return fmt.Errorf("the GPU frame has %d bytes for a %dx%d frame buffer", len(frame), fb.Width, fb.Height)
 	}
 	for y := 0; y < fb.Height; y++ {
 		copy(fb.Pixels[y*fb.Pitch:y*fb.Pitch+g.w], frame[y*g.w:(y+1)*g.w])
 	}
+	g.times.add(t1.Sub(t0), time.Since(t1))
 	return nil
 }
 

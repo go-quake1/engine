@@ -127,4 +127,7 @@ func TestRunGameGPUWorld(t *testing.T) {
 	if opened != 1 || gclose != 1 || gframes < 3 || p.frames != 3 {
 		t.Errorf("opened %d, closed %d, GPU frames %d, presented %d", opened, gclose, gframes, p.frames)
 	}
+	if !strings.Contains(out.String(), "phases over 2 frames: sim-ms=") || !strings.Contains(out.String(), " wait-ms=") {
+		t.Errorf("no phase line in:\n%s", out.String())
+	}
 }
