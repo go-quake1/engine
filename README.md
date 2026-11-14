@@ -196,6 +196,13 @@ and prints the first frame apart (on the GPU side the device, the map build and
 the atlas upload), then the mean, median, min and max wall-clock time per frame
 of the others, present excluded: the software frame, or the GPU frame with its
 read-back (pass, copy and read in one submit).
+The game loop's `--frames K` (with or without `--gpuworld`) prints the mean frame
+time, then a `phases over K-1 frames:` line with where it goes, in ms per frame
+(the first frame left out): `sim-ms` (server and client ticks), `world-ms` (the
+software world pass), `gpu-ms` and `copy-ms` (the GPU submit with its read-back, and
+the copy into the frame buffer), `models-ms`, `composite-ms` (the 2D layers),
+`present-ms`, `wait-ms` (between the end of one frame and the start of the next)
+and `frame-ms` (frame to frame).
 
 ## Streaming assets from an OCI registry
 

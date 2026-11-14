@@ -313,7 +313,11 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		return err
 	}
 	r.Renderer = rend
-	if err := loop(out, r, be, frames); err != nil {
+	var gt *gpuTimes
+	if gw, ok := so.WorldDraw.(*gameWorld); ok {
+		gt = &gw.times
+	}
+	if err := loop(out, r, be, frames, gt); err != nil {
 		return err
 	}
 	if stats != nil {
@@ -338,10 +342,14 @@ func (q *quitObserver) PollInput() (backend.InputSnapshot, error) {
 
 // loop drives the runner frame by frame, as runloop.RunUntilQuit does, so
 // it can stop after a number of frames and time them.
-func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int) error {
+func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *gpuTimes) error {
 	obs := &quitObserver{Backend: be}
 	r.Backend = obs
 	start := time.Now()
+	if frames > 0 {
+		// Time the frame's stages (the --frames run prints them below).
+		r.Timer, _ = render.NewFrameTimer(func() float64 { return time.Since(start).Seconds() }, frames)
+	}
 	last := be.Now()
 	dt := runloop.MinFrameTime
 	for n := 0; frames == 0 || n < frames; n++ {
@@ -357,5 +365,6 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int) erro
 	}
 	el := time.Since(start)
 	fmt.Fprintf(out, "%d frames in %v: %.2f ms per frame\n", frames, el.Round(time.Millisecond), el.Seconds()*1000/float64(frames))
+	writePhases(out, r.Timer.Samples(), gt)
 	return nil
 }
