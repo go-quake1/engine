@@ -109,6 +109,13 @@ same paths, see [go-quake1/freepak](https://github.com/go-quake1/freepak), built
 from LibreQuake. Operators can override at boot with their own pak0+pak1
 via a probe env.
 
+A pak is untrusted input, so every parser that reads one is fuzzed (since
+v0.17.0): `pak`, `wad`, `spr`, `bspfile`, `mdl`, `progs`, the `lmp` pictures,
+the entity lump and demos. Each target asserts no panic and an allocation bound
+(`internal/fuzzcheck`), and a malformed header is refused with an error instead
+of sizing an allocation from it. CI fuzzes each target for 20 s on every pull
+request, and for 10 minutes weekly and on dispatch (`.github/workflows/fuzz.yml`).
+
 ## Play in a browser (wasm)
 
 The engine ships a `GOOS=js GOARCH=wasm` build alongside the bare-metal
@@ -189,7 +196,11 @@ once), where the CPU animates them. The surfaces are in two
 atlases of at most 8192 x 8192: level 0, and levels 1 to 3 (in one atlas the freepak's
 e1m2, e1m3 and e1m6 did not fit, and played on the CPU); every freepak e1 map builds
 (level 0 is at most 8048 rows, e1m2). A map whose level 0 alone does not fit the
-atlas still plays on the CPU, with a log line.
+atlas still plays on the CPU, with a log line. The world pass alone
+(`--worldref 4 --frames 60`, v0.16.0, Chromium on the Apple GPU, 7 interleaved
+rounds at a 1-minute load at most 8) takes, per frame, 7.89 ms in software against
+1.18 ms on the GPU on e1m1, 15.28 ms against 1.43 ms on e1m2 and 9.71 ms against
+1.04 ms on e1m6 (p=0.001 each; [#101](https://github.com/go-quake1/engine/issues/101)).
 `--gpuworld-check --frames N` also draws every frame whole on the CPU and fails if
 one differs by more than 2.5 % unexplained pixels. The batch host's draw quota
 (1 Mi per draw, 16 Mi per stream) holds with room: the largest index buffer of the
@@ -299,7 +310,7 @@ animated lightstyles are later steps. Figures and where the two differ:
 `render/gpuworld` also builds for `GOOS=wasip1` (quake level 2), on a remote
 device of go-gfx/webgpu (the wasmcontainers batch sink). The atlases go up with
 `Recorder.WriteTexture` in bands of at most `MaxBandBytes` (8 MiB) of whole rows,
-because the 33 MB surface atlas is above the host's 32 MiB frame and
+because a surface atlas (up to 8192 x 8192 bytes) is above the host's 32 MiB frame and
 `Queue.WriteTexture` is refused on a remote device; `ReadTexture` reads a frame
 back with `Recorder.CopyTextureToBuffer` (rows padded to 256 bytes, de-padded on
 the CPU, bands that fit the 1 MiB read window). Needs go-gfx/webgpu v0.17.0 or
@@ -367,7 +378,7 @@ itself: `render.SurfaceCache` and `render.DrawSurface` port `D_SCAlloc`,
 and `D_MipLevelForScale`; each face is drawn from a lit surface at the mip level
 its distance selects (`worldview.MipView`, with the face's polygon clipped to the
 frustum standing in for `nearzi`). The GPU bakes the same surfaces at four
-levels into one atlas and takes the level the CPU chooses per face and frame:
+levels (level 0 in one atlas, levels 1 to 3 in a second since v0.16.0) and takes the level the CPU chooses per face and frame:
 0.0006 % of the world's pixels unexplained on the 16 views (the v0.6.1 reference
 moved by 23.9 %; the GPU without the mip choice fails at 13.7 %, one level too
 far at 28.2 %); [docs/webgpu-world/2026-11-04-surfcache.md](docs/webgpu-world/2026-11-04-surfcache.md).
