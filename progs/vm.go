@@ -173,6 +173,7 @@ var (
 	ErrNullCall         = errors.New("progs: VM: OP_CALLn target function index is 0 (null function)")
 	ErrBadBuiltin       = errors.New("progs: VM: OP_CALLn target builtin index not registered")
 	ErrNoStateHooks     = errors.New("progs: VM: OP_STATE needs SetStateHooks + SetStateFieldOffsets")
+	ErrBadFunction      = errors.New("progs: VM: function entry out of range (locals, parameters or parm_start)")
 )
 
 // NewVM returns an interpreter ready to Run functions in p. The VM
@@ -675,10 +676,20 @@ func (vm *VM) enterFunction(fn int32) error {
 	}
 	f := &vm.progs.Functions[fn]
 
+	// The function table is the file's: its locals, parm_start and parameter
+	// count size the save below and index ParmSize, so they are checked first (a
+	// negative count panicked in make, 2 G locals asked for 8 GiB per call, a
+	// parm_start past the globals panicked in leaveFunction, and NumParms above
+	// MaxParms indexed past ParmSize; found by FuzzLoad).
+	if f.Locals < 0 || f.Locals > MaxLocalstack || f.NumParms < 0 || f.NumParms > MaxParms ||
+		(f.Locals > 0 && (f.ParmStart < 0 || (int(f.ParmStart)+int(f.Locals))*globalSlotSize > len(vm.globals))) {
+		return fmt.Errorf("%w: function %d (locals %d, parm_start %d, %d parms, %d globals)", ErrBadFunction, fn, f.Locals, f.ParmStart, f.NumParms, len(vm.globals)/globalSlotSize)
+	}
+
 	// Save callee's locals so a recursive call doesn't clobber them.
 	localBytes := int(f.Locals) * globalSlotSize
 	saved := make([]byte, localBytes)
-	if int(f.ParmStart)*globalSlotSize+localBytes <= len(vm.globals) {
+	if localBytes > 0 {
 		copy(saved, vm.globals[int(f.ParmStart)*globalSlotSize:int(f.ParmStart)*globalSlotSize+localBytes])
 	}
 
