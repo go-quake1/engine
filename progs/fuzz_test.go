@@ -5,14 +5,22 @@ package progs
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-quake1/engine/internal/fuzzcheck"
 )
+
+// The crasher below is embedded because the emulated CI lanes run the test
+// binary outside the package directory.
+//
+//go:embed testdata/fuzz/FuzzLoad/crasher-empty-strings-wild-offset
+var crasherEmptyStrings string
 
 // fuzzSeeds are the committed seeds (testdata/fuzz/FuzzLoad, written by
 // TestWriteFuzzSeeds): a small valid progs.dat (two functions, one of them
@@ -210,12 +218,9 @@ func TestHostileProgsAreRefused(t *testing.T) {
 // an empty strings section at an offset outside the file passed the section
 // check and then sliced the file at that offset, a panic. Load refuses it.
 func TestEmptySectionAtAWildOffsetIsRefused(t *testing.T) {
-	raw, err := os.ReadFile("testdata/fuzz/FuzzLoad/crasher-empty-strings-wild-offset")
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := crasherEmptyStrings
 	var data []byte
-	if _, err := fmt.Sscanf(string(raw[bytes.IndexByte(raw, '\n')+1:]), "[]byte(%q)", &data); err != nil {
+	if _, err := fmt.Sscanf(raw[strings.IndexByte(raw, '\n')+1:], "[]byte(%q)", &data); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrSectionOutOfRange) {

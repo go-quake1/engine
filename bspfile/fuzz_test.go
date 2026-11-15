@@ -5,10 +5,12 @@ package bspfile_test
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-quake1/engine/bspfile"
@@ -16,6 +18,9 @@ import (
 	"github.com/go-quake1/engine/internal/fuzzcheck"
 	"github.com/go-quake1/engine/model"
 )
+
+//go:embed testdata/fuzz/FuzzOpen/crasher-node-cycle
+var crasherNodeCycle string
 
 // fuzzSeeds are the committed seeds (testdata/fuzz/FuzzOpen, written by
 // TestWriteFuzzSeeds): the synthetic maps of synthbsp, cuts of them and
@@ -150,13 +155,11 @@ func TestFuzzSeedValidParses(t *testing.T) {
 // parent walk into unbounded recursion (a fatal stack overflow, which no recover
 // stops). LoadBrush now refuses it.
 func TestCyclicNodeTableIsRefused(t *testing.T) {
-	// The crasher is a corpus file; its bytes are read through the same format.
-	raw, err := os.ReadFile("testdata/fuzz/FuzzOpen/crasher-node-cycle")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The crasher is a corpus file, embedded (the emulated CI lanes run the test
+	// binary outside the package directory); its bytes are in the corpus format.
+	raw := crasherNodeCycle
 	var data []byte
-	if _, err := fmt.Sscanf(string(raw[bytes.IndexByte(raw, '\n')+1:]), "[]byte(%q)", &data); err != nil {
+	if _, err := fmt.Sscanf(raw[strings.IndexByte(raw, '\n')+1:], "[]byte(%q)", &data); err != nil {
 		t.Fatal(err)
 	}
 	f, err := bspfile.Open(bytes.NewReader(data), int64(len(data)))
