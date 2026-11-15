@@ -85,37 +85,48 @@ func Open(src io.ReaderAt) (*FS, error) {
 		return nil, ErrShortRead
 	}
 
-	tableBytes := int(numlumps) * lumpEntrySize
-	raw := make([]byte, tableBytes)
-	if _, err := src.ReadAt(raw, int64(infotableofs)); err != nil {
-		return nil, fmt.Errorf("wad: read directory: %w", err)
-	}
-
-	lumps := make([]Lump, 0, numlumps)
-	byName := make(map[string]int, numlumps)
-	for i := int32(0); i < numlumps; i++ {
-		off := int(i) * lumpEntrySize
-		entry := raw[off : off+lumpEntrySize]
-		// NUL-terminate the name (entry slot is fixed 16 bytes).
-		nameBytes := entry[16:32]
-		end := bytes.IndexByte(nameBytes, 0)
-		if end < 0 {
-			end = nameLen
+	// The directory is read a chunk at a time: numlumps is the file's claim, and
+	// a header that says 2 G lumps must not buy 64 GiB before a byte of it is read.
+	var lumps []Lump
+	byName := map[string]int{}
+	chunk := make([]byte, dirChunkLumps*lumpEntrySize)
+	for done := int64(0); done < int64(numlumps); {
+		n := min(int64(numlumps)-done, dirChunkLumps)
+		raw := chunk[:n*lumpEntrySize]
+		if _, err := src.ReadAt(raw, int64(infotableofs)+done*lumpEntrySize); err != nil {
+			return nil, fmt.Errorf("wad: read directory: %w", err)
 		}
-		name := cleanName(string(nameBytes[:end]))
-		lumps = append(lumps, Lump{
-			FilePos:     int32(binary.LittleEndian.Uint32(entry[0:4])),
-			DiskSize:    int32(binary.LittleEndian.Uint32(entry[4:8])),
-			Size:        int32(binary.LittleEndian.Uint32(entry[8:12])),
-			Type:        entry[12],
-			Compression: entry[13],
-			Name:        name,
-		})
-		byName[name] = len(lumps) - 1
+		for i := int64(0); i < n; i++ {
+			entry := raw[i*lumpEntrySize : (i+1)*lumpEntrySize]
+			// NUL-terminate the name (entry slot is fixed 16 bytes).
+			nameBytes := entry[16:32]
+			end := bytes.IndexByte(nameBytes, 0)
+			if end < 0 {
+				end = nameLen
+			}
+			name := cleanName(string(nameBytes[:end]))
+			lumps = append(lumps, Lump{
+				FilePos:     int32(binary.LittleEndian.Uint32(entry[0:4])),
+				DiskSize:    int32(binary.LittleEndian.Uint32(entry[4:8])),
+				Size:        int32(binary.LittleEndian.Uint32(entry[8:12])),
+				Type:        entry[12],
+				Compression: entry[13],
+				Name:        name,
+			})
+			byName[name] = len(lumps) - 1
+		}
+		done += n
 	}
 
 	return &FS{src: src, lumps: lumps, byName: byName}, nil
 }
+
+// dirChunkLumps is how many directory entries Open reads at a time.
+const dirChunkLumps = 1024
+
+// ErrBadLump is returned by FS.Open for a lump whose position or size lies
+// outside the archive (a negative size, or bytes the source does not hold).
+var ErrBadLump = errors.New("wad: lump outside the archive")
 
 // cleanName lowercases an ASCII name and strips any trailing NULs.
 // Matches tyrquake W_CleanupName: only A-Z -> a-z (no locale
@@ -163,6 +174,18 @@ func (f *FS) Open(name string) (fs.File, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
 	l := f.lumps[idx]
+	// The size is the directory's claim: fs.ReadFile sizes its buffer from it, so
+	// a lump that says 2 GiB in a 1 KiB archive is refused here (one byte read at
+	// its end proves the source holds it).
+	if l.DiskSize < 0 || l.FilePos < 0 {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: ErrBadLump}
+	}
+	if l.DiskSize > 0 {
+		var last [1]byte
+		if n, _ := f.src.ReadAt(last[:], int64(l.FilePos)+int64(l.DiskSize)-1); n != 1 {
+			return nil, &fs.PathError{Op: "open", Path: name, Err: ErrBadLump}
+		}
+	}
 	return &file{
 		fs:   f,
 		name: l.Name,

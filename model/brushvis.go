@@ -4,7 +4,11 @@
 
 package model
 
-import "github.com/go-quake1/engine/bspfile"
+import (
+	"errors"
+
+	"github.com/go-quake1/engine/bspfile"
+)
 
 // Leaf is the in-memory wrapper around a [bspfile.Leaf] decoded from
 // the LumpLeafs lump. It adds the two runtime fields the renderer's
@@ -265,7 +269,9 @@ func (bm *BrushModel) PointInLeaf(point [3]float32) int {
 		return -1
 	}
 	nodeIdx := 0
-	for {
+	// A walk down a tree visits each node at most once: more steps than nodes is a
+	// cycle in a hostile node table, answered as "no leaf" rather than looping.
+	for steps := 0; steps <= len(bm.nodes); steps++ {
 		if nodeIdx < 0 || nodeIdx >= len(bm.nodes) {
 			return -1
 		}
@@ -291,6 +297,7 @@ func (bm *BrushModel) PointInLeaf(point [3]float32) int {
 		}
 		nodeIdx = int(raw)
 	}
+	return -1
 }
 
 // setParent walks the BSP tree rooted at node index nodeIdx,
@@ -308,14 +315,29 @@ func (bm *BrushModel) PointInLeaf(point [3]float32) int {
 // at the same nodes array via a different headnode; the bounds checks
 // here keep the walk panic-free under that case without making
 // LoadBrush re-validate the lump.
-func (bm *BrushModel) setParent(nodeIdx, parentIdx int) {
+//
+// It reports false when a node is reached a second time from the root: a node
+// table whose children point back up the tree (or share a subtree) is not a BSP
+// tree, and the walk used to recurse until the stack overflowed on it (a fatal
+// error, not a panic; found by FuzzOpen). LoadBrush refuses such a map.
+func (bm *BrushModel) setParent(nodeIdx, parentIdx int) bool {
+	return bm.setParentSeen(nodeIdx, parentIdx, make([]bool, len(bm.nodes)))
+}
+
+func (bm *BrushModel) setParentSeen(nodeIdx, parentIdx int, seen []bool) bool {
 	if nodeIdx < 0 || nodeIdx >= len(bm.nodes) {
-		return
+		return true
 	}
+	if seen[nodeIdx] {
+		return false
+	}
+	seen[nodeIdx] = true
 	bm.nodes[nodeIdx].ParentNode = parentIdx
 	for _, raw := range bm.nodes[nodeIdx].Children {
 		if raw >= 0 {
-			bm.setParent(int(raw), nodeIdx)
+			if !bm.setParentSeen(int(raw), nodeIdx, seen) {
+				return false
+			}
 			continue
 		}
 		leafIdx := int(^raw)
@@ -323,4 +345,9 @@ func (bm *BrushModel) setParent(nodeIdx, parentIdx int) {
 			bm.leaves[leafIdx].ParentNode = nodeIdx
 		}
 	}
+	return true
 }
+
+// ErrNodeCycle is returned by LoadBrush for a node table that is not a tree: a
+// node reachable twice from the root.
+var ErrNodeCycle = errors.New("model: node table is not a tree (a node is reached twice)")

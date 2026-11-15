@@ -85,6 +85,10 @@ type Progs struct {
 	Globals    []byte // raw bytes; each global is a 4-byte slot; reinterpret as float/int/etc
 }
 
+// MaxEntityFields is the most 4-byte fields an entity can have in a file Load
+// accepts: field offsets are 16 bits (Def.Ofs), and a vector takes three slots.
+const MaxEntityFields = 1<<16 + 2
+
 // Sentinel errors surfaced by Load.
 var (
 	ErrBadVersion        = errors.New("progs: unsupported version (need 6)")
@@ -154,9 +158,17 @@ func parse(raw []byte) (*Progs, error) {
 	}
 	p.Strings = append([]byte(nil), raw[h.OfsStrings:h.OfsStrings+h.StringsSize]...)
 
+	// The byte count is int64 all the way: it was cut to int32 for the check, so a
+	// count of 0x40000001 slots (4 G + 4 bytes) passed as 4 bytes and then sliced
+	// the file by the full count (a panic; found by FuzzLoad).
 	globalsBytes := int64(h.NumGlobals) * globalSlotSize
-	if err := checkSection(int64(len(raw)), h.OfsGlobals, int32(globalsBytes), 1); err != nil {
-		return nil, err
+	if h.NumGlobals < 0 || globalsBytes > int64(len(raw)) || int64(h.OfsGlobals) < 0 || int64(h.OfsGlobals)+globalsBytes > int64(len(raw)) {
+		return nil, ErrSectionOutOfRange
+	}
+	// EntityFields sizes every edict (NewEdictArena makes EntityFields*4 bytes per
+	// slot): a def's offset is 16 bits, so no field lies past 65535 + a vector.
+	if h.EntityFields < 0 || h.EntityFields > MaxEntityFields {
+		return nil, fmt.Errorf("%w: %d entity fields", ErrSectionOutOfRange, h.EntityFields)
 	}
 	p.Globals = append([]byte(nil), raw[h.OfsGlobals:int64(h.OfsGlobals)+globalsBytes]...)
 
@@ -216,6 +228,12 @@ func readFunctions(raw []byte, ofs, n int32) ([]Function, error) {
 // [0, fileSize). count == 0 is always valid (empty section).
 func checkSection(fileSize int64, ofs, count int32, unitSize int) error {
 	if count == 0 {
+		// An empty section is valid, but its offset still slices the file (the
+		// strings section does): one outside [0, fileSize] is refused (it
+		// panicked there; found by FuzzLoad).
+		if ofs < 0 || int64(ofs) > fileSize {
+			return ErrSectionOutOfRange
+		}
 		return nil
 	}
 	if ofs < 0 || count < 0 {
