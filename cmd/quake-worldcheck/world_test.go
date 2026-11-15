@@ -210,6 +210,9 @@ func TestGPUWorldMatchesOnEveryMap(t *testing.T) {
 			built++
 		})
 	}
+	if built == 0 && !t.Failed() {
+		t.Skip("no map was checked: QUAKE_PAK, QUAKE_CHROMIUM and QUAKE_PROFILE not all set")
+	}
 	if built != 8 {
 		t.Errorf("%d of 8 maps were a GPU build that passed", built)
 	}
