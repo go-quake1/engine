@@ -66,31 +66,44 @@ func Open(src io.ReaderAt) (*FS, error) {
 		return nil, ErrBadDirectory
 	}
 
-	dir := make([]byte, dirlen)
-	if _, err := src.ReadAt(dir, dirofs); err != nil {
-		return nil, fmt.Errorf("pak: read directory: %w", err)
-	}
-
-	count := int(dirlen / entrySize)
-	entries := make([]entry, 0, count)
-	byName := make(map[string]int, count)
-	for i := 0; i < count; i++ {
-		off := i * entrySize
-		raw := dir[off : off+entrySize]
-		// NUL-terminate the name (entry slot is fixed 56 bytes).
-		end := bytes.IndexByte(raw[:nameLen], 0)
-		if end < 0 {
-			end = nameLen
+	// The directory is read a chunk at a time: dirlen is the file's claim, and
+	// a header that says 2 GiB must not buy 2 GiB before a byte of it is read
+	// (the allocation follows what the source holds).
+	var entries []entry
+	byName := map[string]int{}
+	count := dirlen / entrySize
+	chunk := make([]byte, dirChunkEntries*entrySize)
+	for done := int64(0); done < count; {
+		n := min(count-done, dirChunkEntries)
+		buf := chunk[:n*entrySize]
+		if _, err := src.ReadAt(buf, dirofs+done*entrySize); err != nil {
+			return nil, fmt.Errorf("pak: read directory: %w", err)
 		}
-		name := string(raw[:end])
-		pos := int64(int32(binary.LittleEndian.Uint32(raw[56:60])))
-		size := int64(int32(binary.LittleEndian.Uint32(raw[60:64])))
-		entries = append(entries, entry{name: name, offset: pos, size: size})
-		byName[name] = len(entries) - 1
+		for i := int64(0); i < n; i++ {
+			raw := buf[i*entrySize : (i+1)*entrySize]
+			// NUL-terminate the name (entry slot is fixed 56 bytes).
+			end := bytes.IndexByte(raw[:nameLen], 0)
+			if end < 0 {
+				end = nameLen
+			}
+			name := string(raw[:end])
+			pos := int64(int32(binary.LittleEndian.Uint32(raw[56:60])))
+			size := int64(int32(binary.LittleEndian.Uint32(raw[60:64])))
+			entries = append(entries, entry{name: name, offset: pos, size: size})
+			byName[name] = len(entries) - 1
+		}
+		done += n
 	}
 
 	return &FS{src: src, entries: entries, byName: byName}, nil
 }
+
+// dirChunkEntries is how many directory entries Open reads at a time.
+const dirChunkEntries = 1024
+
+// ErrBadEntry is returned by FS.Open for an entry whose offset or size lies
+// outside the archive (a negative size, or bytes the source does not hold).
+var ErrBadEntry = errors.New("pak: entry outside the archive")
 
 // Len returns the number of files in the archive.
 func (f *FS) Len() int { return len(f.entries) }
@@ -111,6 +124,18 @@ func (f *FS) Open(name string) (fs.File, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
 	e := f.entries[idx]
+	// The size is the directory's claim: fs.ReadFile sizes its buffer from it, so
+	// an entry that says 2 GiB in a 1 KiB archive is refused here (one byte read
+	// at its end proves the source holds it).
+	if e.size < 0 || e.offset < 0 {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: ErrBadEntry}
+	}
+	if e.size > 0 {
+		var last [1]byte
+		if n, _ := f.src.ReadAt(last[:], e.offset+e.size-1); n != 1 {
+			return nil, &fs.PathError{Op: "open", Path: name, Err: ErrBadEntry}
+		}
+	}
 	return &file{
 		fs:   f,
 		name: e.name,

@@ -112,8 +112,8 @@ func LoadBrush(file *bspfile.File, submodelIdx int) (*BrushModel, error) {
 	for i := range nodes {
 		bm.nodes[i] = Node{Node: nodes[i], ParentNode: -1}
 	}
-	if len(bm.nodes) > 0 {
-		bm.setParent(0, -1)
+	if len(bm.nodes) > 0 && !bm.setParent(0, -1) {
+		return nil, ErrNodeCycle
 	}
 
 	bm.Hulls[0] = bsptrace.Hull{

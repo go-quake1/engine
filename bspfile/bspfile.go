@@ -361,9 +361,14 @@ func (f *File) decodeModels() ([]Model, error) {
 }
 
 // checkSection validates [ofs, ofs+len*unit) lies in [0, fileSize).
-// Empty sections are always valid.
+// An empty section is valid wherever its offset lies in the file: its offset is
+// still used to slice the file (LumpBytes), so one outside [0, fileSize] is
+// refused (it used to panic there: found by FuzzOpen).
 func checkSection(fileSize int64, ofs, length int32, unit int) error {
 	if length == 0 {
+		if ofs < 0 || int64(ofs) > fileSize {
+			return ErrSectionOutOfRange
+		}
 		return nil
 	}
 	if ofs < 0 || length < 0 {

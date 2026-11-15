@@ -144,6 +144,11 @@ func Load(src io.ReaderAt, size int64) (*Sprite, error) {
 		return nil, fmt.Errorf("%w: got %d", ErrBadVersion, h.Version)
 	}
 
+	if h.NumFrames < 0 {
+		// A negative count used to load as a sprite of no frames whose header said
+		// otherwise (found by FuzzLoad).
+		return nil, fmt.Errorf("%w: %d frames", ErrSectionOutOfRange, h.NumFrames)
+	}
 	sp := &Sprite{Header: h}
 	pos := int64(headerSize)
 	for i := int32(0); i < h.NumFrames; i++ {
