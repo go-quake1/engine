@@ -342,11 +342,14 @@ func decodeGroupSkin(raw []byte, pos, pixels int64) (*GroupSkin, int64, error) {
 	if num < 0 {
 		return nil, 0, ErrSectionOutOfRange
 	}
-	g := &GroupSkin{Intervals: make([]float32, num), Skins: make([]SingleSkin, 0, num)}
+	// The count is checked against the bytes the intervals need BEFORE anything is
+	// sized from it: a group of 2 G skins in a small file used to allocate 8 GiB
+	// first (found by FuzzLoad).
 	intervalsBytes := int64(num) * int64(intervalSize)
 	if pos+intervalsBytes > int64(len(raw)) {
 		return nil, 0, ErrSectionOutOfRange
 	}
+	g := &GroupSkin{Intervals: make([]float32, num), Skins: make([]SingleSkin, 0, num)}
 	for i := int32(0); i < num; i++ {
 		off := pos + int64(i)*int64(intervalSize)
 		g.Intervals[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[off : off+4]))
@@ -422,16 +425,20 @@ func decodeGroupFrame(raw []byte, pos int64, numVerts int32) (*GroupFrame, int64
 	if num < 0 {
 		return nil, 0, ErrSectionOutOfRange
 	}
-	g := &GroupFrame{
-		BBoxMin:   readTriVertx(raw[pos : pos+triVertxSize]),
-		BBoxMax:   readTriVertx(raw[pos+triVertxSize : pos+2*triVertxSize]),
-		Intervals: make([]float32, num),
-		Frames:    make([]SingleFrame, 0, num),
-	}
+	bmin := readTriVertx(raw[pos : pos+triVertxSize])
+	bmax := readTriVertx(raw[pos+triVertxSize : pos+2*triVertxSize])
 	pos += 2 * int64(triVertxSize)
+	// Checked against the bytes the intervals need BEFORE anything is sized from
+	// the count (a group of 2 G frames used to allocate first; FuzzLoad).
 	intervalsBytes := int64(num) * int64(intervalSize)
 	if pos+intervalsBytes > int64(len(raw)) {
 		return nil, 0, ErrSectionOutOfRange
+	}
+	g := &GroupFrame{
+		BBoxMin:   bmin,
+		BBoxMax:   bmax,
+		Intervals: make([]float32, num),
+		Frames:    make([]SingleFrame, 0, num),
 	}
 	for i := int32(0); i < num; i++ {
 		off := pos + int64(i)*int64(intervalSize)
