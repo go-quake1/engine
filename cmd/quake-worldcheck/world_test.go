@@ -191,6 +191,33 @@ func TestGPUWorldMatchesTheSoftwareWorld(t *testing.T) {
 	}
 }
 
+// TestGPUWorldMatchesOnEveryMap is the same comparison on the fixed views of
+// every freepak e1 map (--map): the tolerance holds on each, not only on e1m1.
+// A map counts only if its row is a GPU build (faces on the GPU, a PASS): a map
+// that falls back to the CPU, or is missing from the pak, fails the test, so an
+// absent subject cannot read as green.
+func TestGPUWorldMatchesOnEveryMap(t *testing.T) {
+	built := 0
+	for _, slug := range []string{"e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8"} {
+		t.Run(slug, func(t *testing.T) {
+			v := runInBrowser(t, "--tolerance", tolerance, "--map", slug)
+			if v.Check != "PASS" || v.Faces == 0 {
+				t.Fatalf("%s: verdict %+v", slug, v)
+			}
+			if os.Getenv("QUAKE_REQUIRE_GPU") == "1" && v.Fallback {
+				t.Fatal("a fallback adapter where a GPU is required")
+			}
+			built++
+		})
+	}
+	if built == 0 && !t.Failed() {
+		t.Skip("no map was checked: QUAKE_PAK, QUAKE_CHROMIUM and QUAKE_PROFILE not all set")
+	}
+	if built != 8 {
+		t.Errorf("%d of 8 maps were a GPU build that passed", built)
+	}
+}
+
 type benchRes struct {
 	Frames         int     `json:"frames"`
 	SoftwareMS     float64 `json:"software_ms"`

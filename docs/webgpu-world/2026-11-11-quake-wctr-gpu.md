@@ -45,9 +45,12 @@ frame (one submit, read-back in it). What is composited where:
   of `+` textures (the atlas is baked once); the CPU path animates both.
 
 The device is opened and the atlases uploaded once, before the first frame. The map is
-fixed for a run of `quake-wctr`, so there is no level change to rebuild for. A map whose
-surfaces do not fit the 8192 x 8192 surface atlas (`ErrAtlasFull`: freepak e1m2, e1m3,
-e1m6) plays on the CPU, with a log line.
+fixed for a run of `quake-wctr`, so there is no level change to rebuild for. The surfaces are in two
+atlases (level 0, and levels 1 to 3), each at most 8192 x 8192: in one atlas the freepak's
+e1m2, e1m3 and e1m6 hit `ErrAtlasFull` and played on the CPU (rows needed at four levels:
+10634, 8386 and 10048; engine#96); every freepak e1 map builds now, level 0 needing at most
+8048 rows (e1m2) and levels 1 to 3 at most 2668. A map whose level 0 alone does not fit plays
+on the CPU, with a log line.
 
 Draw quota of the host (1 Mi vertices per draw, 16 Mi per stream): a frame draws each face
 at most once, so the whole index buffer bounds the stream. Freepak, `TestDrawQuotaHoldsForEveryMap`:

@@ -119,8 +119,14 @@ type Geometry struct {
 	Count    []uint32
 	// Surf holds the lit surfaces: every drawn face at each of the four mip
 	// levels (render.DrawSurface), as final palette indices.
-	Surf  *Atlas
-	Faces int // drawn faces
+	//
+	// The levels are in two atlases: Surf holds level 0 and SurfLow levels 1
+	// to 3, each up to MaxAtlasHeight rows. In one atlas the freepak's e1m2,
+	// e1m3 and e1m6 (10634, 8386 and 10048 rows at four levels) did not fit;
+	// level 0 alone is at most 8048 rows (e1m2).
+	Surf    *Atlas
+	SurfLow *Atlas
+	Faces   int // drawn faces
 
 	// Ord is by face index the face's ordinal among the drawn faces (the
 	// index into the face tables and into a frame's mips), -1 if not drawn.
@@ -165,7 +171,8 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 	for i := range g.Ord {
 		g.Ord[i] = -1
 	}
-	surf := newShelfW(SurfAtlasWidth, MaxAtlasHeight)
+	surf := newShelfW(SurfAtlasWidth, MaxAtlasHeight)    // level 0
+	surfLow := newShelfW(SurfAtlasWidth, MaxAtlasHeight) // levels 1 to 3
 	env := &render.SurfaceEnv{Colormap: cm, HaveLightData: w.HaveLightData}
 
 	// Bake every surface first, then pack them tallest first: the shelf
@@ -203,7 +210,11 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 	})
 	placed := map[[2]int]Rect{}
 	for _, it := range items {
-		r, err := surf.place(&it.px[0], it.width, it.height, func(a *Atlas, r Rect) { blitRows(a, r, it.px, it.width) })
+		pk := surf
+		if it.mip > 0 {
+			pk = surfLow
+		}
+		r, err := pk.place(&it.px[0], it.width, it.height, func(a *Atlas, r Rect) { blitRows(a, r, it.px, it.width) })
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +269,7 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 		g.Count[f.Idx] = uint32(len(g.Indices)) - g.First[f.Idx]
 		g.Faces++
 	}
-	g.Surf = surf.finish()
+	g.Surf, g.SurfLow = surf.finish(), surfLow.finish()
 	return g, nil
 }
 
@@ -372,7 +383,8 @@ func UniformAt(v worldview.View, fov float32, width, height int, t float32) []by
 const ShaderWGSL = `
 struct U { rows: array<vec4f, 3>, p: vec4f, q: vec4f, o: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var surf: texture_2d<u32>;
+@group(0) @binding(1) var surf: texture_2d<u32>;    // the surfaces' level 0
+@group(0) @binding(2) var surfLow: texture_2d<u32>; // their levels 1 to 3
 @group(0) @binding(4) var<storage, read> faceTab: array<vec4f>;
 @group(0) @binding(5) var<storage, read> faceVerts: array<vec4f>;
 @group(0) @binding(6) var<storage, read> surfTab: array<vec4u>;
@@ -492,6 +504,8 @@ fn runAt(xc: f32, xl: f32, wl: vec3f, wr: vec3f, span: f32, minST: vec2f) -> vec
   let sc = 1.0 / f32(1u << mip);
   let su = clamp(i32(floor(c.x * sc)), 0, i32(r.z) - 1);
   let sv = clamp(i32(floor(c.y * sc)), 0, i32(r.w) - 1);
-  return vec4u(textureLoad(surf, vec2u(r.x + u32(su), r.y + u32(sv)), 0).r, 0u, 0u, 0u);
+  let at = vec2u(r.x + u32(su), r.y + u32(sv));
+  if (mip == 0u) { return vec4u(textureLoad(surf, at, 0).r, 0u, 0u, 0u); }
+  return vec4u(textureLoad(surfLow, at, 0).r, 0u, 0u, 0u);
 }
 `

@@ -185,8 +185,11 @@ read-back. The software pass draws over the GPU's index frame, in its own order,
 the sky and water faces (the GPU sky is not Quake's dome), the entities, the
 particles, the view model, the HUD and the menu; the lit faces keep the resting
 light styles and the first frame of animated `+` textures (the GPU atlas is baked
-once), where the CPU animates them. A map whose surfaces do not fit the 8192 x 8192
-atlas (freepak e1m2, e1m3 and e1m6) plays on the CPU, with a log line.
+once), where the CPU animates them. The surfaces are in two
+atlases of at most 8192 x 8192: level 0, and levels 1 to 3 (in one atlas the freepak's
+e1m2, e1m3 and e1m6 did not fit, and played on the CPU); every freepak e1 map builds
+(level 0 is at most 8048 rows, e1m2). A map whose level 0 alone does not fit the
+atlas still plays on the CPU, with a log line.
 `--gpuworld-check --frames N` also draws every frame whole on the CPU and fails if
 one differs by more than 2.5 % unexplained pixels. The batch host's draw quota
 (1 Mi per draw, 16 Mi per stream) holds with room: the largest index buffer of the

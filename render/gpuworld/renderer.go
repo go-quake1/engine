@@ -74,6 +74,10 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	if err != nil {
 		return nil, err
 	}
+	surfLowA, err := tex2d("world surfaces, levels 1 to 3", geo.SurfLow.Width, geo.SurfLow.Height, webgpu.TextureUsageTextureBinding|webgpu.TextureUsageCopyDst)
+	if err != nil {
+		return nil, err
+	}
 	cmT, err := tex2d("colormap", render.ColorMapCols, render.ColorMapRows, webgpu.TextureUsageTextureBinding|webgpu.TextureUsageCopyDst)
 	if err != nil {
 		return nil, err
@@ -83,6 +87,9 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		return nil, err
 	}
 	if err := r.upload(surfA, geo.Surf); err != nil {
+		return nil, err
+	}
+	if err := r.upload(surfLowA, geo.SurfLow); err != nil {
 		return nil, err
 	}
 	var cmb [render.ColorMapRows * render.ColorMapCols]byte
@@ -120,6 +127,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	bgl, err := dev.CreateBindGroupLayout(webgpu.BindGroupLayoutDescriptor{Entries: []webgpu.BindGroupLayoutEntry{
 		{Binding: 0, Visibility: webgpu.ShaderStageVertex | webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeUniform}},
 		{Binding: 1, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
+		{Binding: 2, Visibility: webgpu.ShaderStageFragment, Texture: uint2d},
 		{Binding: 4, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 		{Binding: 5, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
 		{Binding: 6, Visibility: webgpu.ShaderStageFragment, Buffer: &webgpu.BufferBindingLayout{Type: webgpu.BufferBindingTypeReadOnlyStorage}},
@@ -131,8 +139,8 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	if err != nil {
 		return nil, err
 	}
-	views := make([]*webgpu.TextureView, 2)
-	for i, t := range []*webgpu.Texture{surfA, cmT} {
+	views := make([]*webgpu.TextureView, 3)
+	for i, t := range []*webgpu.Texture{surfA, cmT, surfLowA} {
 		if views[i], err = t.CreateView(nil); err != nil {
 			return nil, err
 		}
@@ -161,7 +169,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		return nil, err
 	}
 	if r.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
-		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: views[0]},
+		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: views[0]}, {Binding: 2, TextureView: views[2]},
 		{Binding: 4, Buffer: faceTab}, {Binding: 5, Buffer: faceVerts}, {Binding: 6, Buffer: surfTab},
 	}}); err != nil {
 		return nil, err
