@@ -79,12 +79,12 @@ func TestBuildE1M1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Faces == 0 || len(g.Vertices)%VertexStride != 0 || len(g.Indices)%3 != 0 || g.Surf.Height > MaxAtlasHeight {
+	if g.Faces == 0 || len(g.Vertices)%VertexStride != 0 || len(g.Indices)%3 != 0 || g.Surf.Height > MaxAtlasHeight || g.SurfLow.Height > MaxAtlasHeight {
 		t.Fatalf("faces %d, vertex bytes %d, indices %d, surface atlas %dx%d",
 			g.Faces, len(g.Vertices), len(g.Indices), g.Surf.Width, g.Surf.Height)
 	}
-	t.Logf("e1m1: %d faces, %d vertices, %d triangles, surface atlas %dx%d (%d bytes of surfaces per mip level: %v)",
-		g.Faces, len(g.Vertices)/VertexStride, len(g.Indices)/3, g.Surf.Width, g.Surf.Height, g.SurfBytes[0], g.SurfBytes)
+	t.Logf("e1m1: %d faces, %d vertices, %d triangles, surface atlas %dx%d, levels 1-3 %dx%d (%d bytes of surfaces per mip level: %v)",
+		g.Faces, len(g.Vertices)/VertexStride, len(g.Indices)/3, g.Surf.Width, g.Surf.Height, g.SurfLow.Width, g.SurfLow.Height, g.SurfBytes[0], g.SurfBytes)
 
 	// The atlas holds exactly what the software path's DrawSurface builds,
 	// at the rectangle the face table gives.
@@ -107,7 +107,7 @@ func TestBuildE1M1(t *testing.T) {
 				t.Fatal(err)
 			}
 			for row := 0; row < sh; row++ {
-				if !bytes.Equal(g.Surf.Pixels[(y+row)*g.Surf.Width+x:][:sw], want[row*sw:][:sw]) {
+				if !bytes.Equal(atlasOf(g, mip).Pixels[(y+row)*SurfAtlasWidth+x:][:sw], want[row*sw:][:sw]) {
 					t.Fatalf("face %d mip %d row %d differs from DrawSurface", f.Idx, mip, row)
 				}
 			}
@@ -195,4 +195,12 @@ func TestMipPolicy(t *testing.T) {
 	if Chosen.Fixed != -1 || (MipPolicy{}).Fixed != 0 {
 		t.Fatal("Chosen must be Fixed -1; the zero MipPolicy is level 0 (the ablation)")
 	}
+}
+
+// atlasOf is the atlas holding mip level mip of the surfaces.
+func atlasOf(g *Geometry, mip int) *Atlas {
+	if mip == 0 {
+		return g.Surf
+	}
+	return g.SurfLow
 }

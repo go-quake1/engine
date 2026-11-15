@@ -102,7 +102,9 @@ func fetchBytes(url string) ([]byte, error) {
 var opts = struct {
 	part   string
 	ablate map[string]bool
-}{ablate: map[string]bool{}}
+	// mapSlug is the map checked (--map, e1m1 by default).
+	mapSlug string
+}{ablate: map[string]bool{}, mapSlug: "e1m1"}
 
 func main() {
 	width, height, tol := 320, 200, 0.025
@@ -124,6 +126,9 @@ func main() {
 		case "--part":
 			i++
 			opts.part = args[i]
+		case "--map":
+			i++
+			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
 			"--noMip", "--refMip0", "--mipBias", "--oldRef":
 			opts.ablate[args[i]] = true
@@ -155,7 +160,7 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		v.Detail = fmt.Sprintf("pak: %v", err)
 		return v
 	}
-	w, err := worldview.LoadMap(p, "e1m1")
+	w, err := worldview.LoadMap(p, opts.mapSlug)
 	if err != nil {
 		v.Detail = err.Error()
 		return v

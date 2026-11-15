@@ -39,7 +39,7 @@ func TestDrawQuotaHoldsForEveryMap(t *testing.T) {
 	// go-wasmcontainers/gpu v0.13.0 gpubatch.DefaultLimits (not imported: it
 	// would pull the whole WASI host into this module).
 	lim := struct{ MaxDrawVertices, MaxStreamVertices uint64 }{1 << 20, 1 << 24}
-	found := 0
+	found, built := 0, 0
 	for _, slug := range []string{"e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8"} {
 		w, err := worldview.LoadMap(fsys, slug)
 		if err != nil {
@@ -49,7 +49,9 @@ func TestDrawQuotaHoldsForEveryMap(t *testing.T) {
 		found++
 		g, err := Build(w, cm)
 		if errors.Is(err, ErrAtlasFull) {
-			t.Logf("%s: the surface atlas is full: no GPU world for this map (the game falls back to the CPU)", slug)
+			// Every e1 map builds (level 0 and levels 1-3 in two atlases): a map that
+			// does not is a failure, not a row to skip.
+			t.Errorf("%s: the surface atlas is full: no GPU world for this map (the game falls back to the CPU)", slug)
 			continue
 		}
 		if err != nil {
@@ -60,13 +62,17 @@ func TestDrawQuotaHoldsForEveryMap(t *testing.T) {
 			largest = max(largest, c)
 		}
 		stream := uint64(len(g.Indices))
-		t.Logf("%s: %d faces, whole index buffer %d (stream quota %d), largest draw %d (quota %d)",
-			slug, g.Faces, stream, lim.MaxStreamVertices, largest, lim.MaxDrawVertices)
+		t.Logf("%s: %d faces, surface atlases %d and %d rows (limit %d), whole index buffer %d (stream quota %d), largest draw %d (quota %d)",
+			slug, g.Faces, g.Surf.Height, g.SurfLow.Height, MaxAtlasHeight, stream, lim.MaxStreamVertices, largest, lim.MaxDrawVertices)
+		built++
 		if stream > lim.MaxStreamVertices || uint64(largest) > lim.MaxDrawVertices {
 			t.Errorf("%s: stream %d / draw %d above the host's %d / %d", slug, stream, largest, lim.MaxStreamVertices, lim.MaxDrawVertices)
 		}
 	}
 	if found == 0 {
 		t.Fatal("no e1 map in the pak")
+	}
+	if built != found {
+		t.Errorf("%d of the %d e1 maps in the pak build a GPU world", built, found)
 	}
 }
