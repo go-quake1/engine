@@ -4,6 +4,9 @@
 package worldview_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io/fs"
 	"os"
 	"testing"
 
@@ -79,6 +82,12 @@ func TestEntityLightsE1M1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bsp, err := fs.ReadFile(fsys, "maps/e1m1.bsp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(bsp)
+	bspHash := hex.EncodeToString(sum[:])
 	agree, lit := 0, 0
 	distinct := map[int]bool{}
 	for i, e := range ents {
@@ -107,12 +116,44 @@ func TestEntityLightsE1M1(t *testing.T) {
 		t.Errorf("only %d distinct lights over %d entities", len(distinct), len(ents))
 	}
 	t.Logf("%d entities: %d lit, tree and brute force agree on %d, %d distinct lights", len(ents), lit, agree, len(distinct))
-	pins := map[int]int{0: 66, 1: 21, 2: 168, 3: 9, 52: 0, 53: 112}
-	for i, want := range pins {
+	// The pins are values of one pak's e1m1: the pak is identified by the SHA-256
+	// of maps/e1m1.bsp, and one it does not know skips here, with its hash, rather
+	// than passing without having pinned anything (or indexing entities it does
+	// not have: engine#100).
+	known, ok := knownPaks[bspHash]
+	if !ok {
+		t.Skipf("%s: maps/e1m1.bsp sha256 %s is not a pak whose entity lights are pinned (%d entities); the generic checks above passed", os.Getenv(pakEnv), bspHash, len(ents))
+	}
+	if len(ents) != known.entities {
+		t.Fatalf("%s: %d entities in e1m1, want %d", known.name, len(ents), known.entities)
+	}
+	for i, want := range known.pins {
+		if i >= len(ents) {
+			t.Errorf("%s: pin for entity %d, but only %d entities", known.name, i, len(ents))
+			continue
+		}
 		if ents[i].Light != want {
-			t.Errorf("entity %d %s: light %d, want %d", i, ents[i].Class, ents[i].Light, want)
+			t.Errorf("%s: entity %d %s: light %d, want %d", known.name, i, ents[i].Class, ents[i].Light, want)
 		}
 	}
+}
+
+// knownPaks are the paks whose e1m1 entity lights are pinned, by the SHA-256 of
+// their maps/e1m1.bsp. Values of this port (regression pins), measured from each
+// pak.
+var knownPaks = map[string]struct {
+	name     string
+	entities int
+	pins     map[int]int // entity index -> light
+}{
+	"7b7061ec63c3e8ecb9c0e0a8075f18823efea6578666d57d601c191bcaf16c26": {
+		name: "go-quake1-assets pak0.pak (54 entities)", entities: 54,
+		pins: map[int]int{0: 66, 1: 21, 2: 168, 3: 9, 52: 0, 53: 112},
+	},
+	"e3869459a51fefcc7a47dcefefc69df7e78ed730dcaf5a800899915f9ea78148": {
+		name: "freepak pak0.pak (53 entities)", entities: 53,
+		pins: map[int]int{0: 59, 1: 64, 2: 68, 3: 75, 52: 38},
+	},
 }
 
 // BenchmarkLightPoint is R_LightPoint over the alias entities of e1m1.
