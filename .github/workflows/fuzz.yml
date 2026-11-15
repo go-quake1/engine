@@ -1,0 +1,75 @@
+# Fuzzing of every parser that reads bytes from a pak (a user can mount their
+# own in the playground's quake guest): the pak and wad archives, sprites,
+# alias models, maps, progs.dat, pictures, entity lumps and demos.
+#
+# Two ways in, the same matrix:
+#   - ci.yml calls this workflow on every pull request with a short -fuzztime
+#     (a smoke: the seeds and the corpus run, and a few seconds of mutation);
+#   - a weekly schedule, and workflow_dispatch, run each target for longer
+#     (default 10m; pass fuzztime to choose). Long fuzzing is never run on a
+#     developer machine.
+#
+# A target that does not exist fails its lane (go test -fuzz matches nothing).
+# On a failure the input the fuzzer wrote under testdata/fuzz is uploaded.
+name: fuzz
+
+on:
+  workflow_call:
+    inputs:
+      fuzztime:
+        type: string
+        default: 45s
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: 'go test -fuzztime for each target (for example 30m)'
+        default: 10m
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: off
+  CGO_ENABLED: 0
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.pkg }} ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: FuzzOpen, pkg: ./pak }
+          - { target: FuzzOpen, pkg: ./wad }
+          - { target: FuzzLoad, pkg: ./spr }
+          - { target: FuzzOpen, pkg: ./bspfile }
+          - { target: FuzzLoad, pkg: ./mdl }
+          - { target: FuzzLoad, pkg: ./progs }
+          - { target: FuzzParsePic, pkg: ./render }
+          - { target: FuzzParseEntities, pkg: ./entparse }
+          - { target: FuzzParseValues, pkg: ./entparse }
+          - { target: FuzzParse, pkg: ./demo }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.4'
+          check-latest: true
+      - run: go version
+      # GOMEMLIMIT bounds what a hostile input can make the process take; the
+      # targets also assert an allocation bound of their own (internal/fuzzcheck).
+      - name: fuzz
+        env:
+          GOMEMLIMIT: 1GiB
+          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime "$FUZZTIME" -parallel 2 ${{ matrix.pkg }}
+      - name: the crashing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crasher-${{ matrix.target }}
+          path: '**/testdata/fuzz/${{ matrix.target }}/*'
+          if-no-files-found: ignore

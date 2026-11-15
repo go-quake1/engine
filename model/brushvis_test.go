@@ -6,6 +6,7 @@ package model
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/go-quake1/engine/bspfile"
@@ -999,5 +1000,56 @@ func TestBrushModel_FaceMipTexIdx_TexInfosDecodeError(t *testing.T) {
 	bm := &BrushModel{File: f}
 	if _, _, err := bm.FaceMipTexIdx(0); err == nil {
 		t.Fatal("expected error from corrupt texinfo lump")
+	}
+}
+
+// --- Hostile node tables (found by bspfile's FuzzOpen) ---------------------
+
+// A node whose child points back at the root is not a tree: setParent reports it
+// (it used to recurse until the stack overflowed, a fatal error).
+func TestBrushModel_SetParentReportsACycle(t *testing.T) {
+	bm := &BrushModel{
+		nodes:  []Node{{Node: bspfile.Node{Children: [2]int16{1, ^int16(0)}}, ParentNode: -1}, {Node: bspfile.Node{Children: [2]int16{0, ^int16(0)}}, ParentNode: -1}},
+		leaves: []Leaf{{ParentNode: -1}},
+	}
+	if bm.setParent(0, -1) {
+		t.Error("a node table with a cycle was walked as a tree")
+	}
+	// Two parents for one node (a shared subtree) is the same refusal.
+	bm = &BrushModel{
+		nodes:  []Node{{Node: bspfile.Node{Children: [2]int16{1, 1}}, ParentNode: -1}, {Node: bspfile.Node{Children: [2]int16{^int16(0), ^int16(0)}}, ParentNode: -1}},
+		leaves: []Leaf{{ParentNode: -1}},
+	}
+	if bm.setParent(0, -1) {
+		t.Error("a node reached twice was walked as a tree")
+	}
+}
+
+// LoadBrush refuses a map whose node table has a cycle, and PointInLeaf answers
+// -1 for one rather than looping.
+func TestLoadBrush_RefusesACycleInTheNodeTable(t *testing.T) {
+	data, size, err := synthbsp.BuildFiveLeafPVS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := bspfile.Open(bytes.NewReader(data), size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Node 1's first child (a leaf) becomes node 0, the root: bsp29_dnode_t is 24
+	// bytes, the two int16 children at offset 4.
+	nodes := f.LumpBytes(bspfile.LumpNodes)
+	binary.LittleEndian.PutUint16(nodes[24+4:], 0)
+	if _, err := LoadBrush(f, 0); !errors.Is(err, ErrNodeCycle) {
+		t.Fatalf("LoadBrush = %v, want ErrNodeCycle", err)
+	}
+
+	// PointInLeaf on a model whose nodes loop: the fixture's root sends every
+	// point to node 1, which sends it back to the root.
+	bm := loadSynthFiveLeafPVS(t)
+	bm.nodes[0].Children = [2]int16{1, 1}
+	bm.nodes[1].Children = [2]int16{0, 0}
+	if got := bm.PointInLeaf([3]float32{1, 2, 3}); got != -1 {
+		t.Errorf("PointInLeaf in a loop = %d, want -1", got)
 	}
 }
