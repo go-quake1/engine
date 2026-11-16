@@ -432,6 +432,10 @@ same 4 MiB budget: `quake-worldcheck --dlights` (a muzzle flash, a rocket and an
 explosion around each of the 16 views) on a real GPU, 7 of 1,024,000 pixels unexplained,
 the lights changing 87 % of the reference's pixels; a GPU that ignores them fails at 81 %.
 See [docs/webgpu-world/2026-11-16-dynamic-lights.md](docs/webgpu-world/2026-11-16-dynamic-lights.md).
+`TE_EXPLOSION2` makes the same light, and the entities are lit by the lights too:
+`R_AliasSetupLighting`'s dynamic-light term (`render.AliasDLightLevels`, on the CPU
+alias path, the runner and the GPU alias pass), see
+[docs/webgpu-world/2026-11-16-alias-dlights.md](docs/webgpu-world/2026-11-16-alias-dlights.md).
 
 **Alias triangles are clipped** (v0.21.0, [#106](https://github.com/go-quake1/engine/issues/106)
 item 8): `render.AliasClipTriangle` ports `r_aclip.c` (`R_AliasClipTriangle`,

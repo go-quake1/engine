@@ -79,6 +79,34 @@ func NewAliasLighting(lightPoint int, viewModel bool, dlights []int, rot Mat3) A
 	return l
 }
 
+// AliasDLightLevels is the dynamic-light loop of R_AliasSetupLighting
+// (reference/common/r_alias.c:684): for each light that has not died (Die >=
+// now) the level (int)(radius - |origin - light origin|), kept when positive.
+// The loop is Quake's (id's R_AliasSetupLighting visits every cl_dlights slot);
+// tyrquake's copy never advances its dlight pointer and so reads slot 0 for
+// every i, which is not ported. Lights that add nothing are left out.
+func AliasDLightLevels(origin [3]float32, lights []DLight, now float32) []int {
+	var out []int
+	for i := range lights {
+		l := &lights[i]
+		if l.Die < now {
+			continue
+		}
+		if level := AliasDLightLevel(origin, l.Origin, l.Radius); level > 0 {
+			out = append(out, level)
+		}
+	}
+	return out
+}
+
+// AliasDLightLevel is one turn of that loop: (int)(radius - |origin -
+// lightOrigin|), truncated toward zero as C's conversion to int is, and not
+// clamped (a light out of reach gives a negative level).
+func AliasDLightLevel(origin, lightOrigin [3]float32, radius float32) int {
+	d := [3]float64{float64(origin[0] - lightOrigin[0]), float64(origin[1] - lightOrigin[1]), float64(origin[2] - lightOrigin[2])}
+	return int(radius - float32(math.Sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2])))
+}
+
 // ColorMapBits is VID_CBITS: the colormap has 1 << 6 rows.
 const ColorMapBits = 6
 
@@ -248,7 +276,7 @@ func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint 
 	}
 	view := rd.SetupView()
 	entRot := entityRotation(ent.AnglePitch, ent.AngleYaw, ent.AngleRoll)
-	light := NewAliasLighting(lightPoint, viewModel, nil, entRot)
+	light := NewAliasLighting(lightPoint, viewModel, ent.DLights, entRot)
 
 	if skin.Width*skin.Height != len(skin.Pixels) {
 		return ErrPicShape

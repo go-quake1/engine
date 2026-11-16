@@ -51,6 +51,12 @@ func aliasContent(fsys fs.FS, w *worldview.World) ([]worldview.AliasEnt, []world
 			if opts.ablate["--noWeapon"] && e.IsViewWeapon {
 				continue
 			}
+			if opts.ablate["--dlights"] {
+				// the dynamic lights of the view reach the entities
+				// (R_AliasSetupLighting's dlight term) on both sides
+				w.DLights, w.Now = dlightScenario(views[vi].View), 0
+				w.LightEnt(&e)
+			}
 			if opts.ablate["--standInLight"] {
 				// both sides at the constant light the engine used before
 				// R_LightPoint was ported
@@ -228,6 +234,9 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 	}
 	width, height := v.Width, v.Height
 	for i, av := range views {
+		if opts.ablate["--dlights"] {
+			w.DLights, w.Now = dlightScenario(av.View), 0
+		}
 		refW, _ := render.NewFrameBuffer(width, height)
 		if err := w.DrawSoftware(refW, cm, av.View); err != nil {
 			v.Detail = err.Error()
@@ -240,9 +249,14 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 			return v
 		}
 		gents := av.Ents
-		if swap != nil || opts.ablate["--wrongLight"] {
+		if swap != nil || opts.ablate["--wrongLight"] || opts.ablate["--noAliasDLights"] {
 			gents = make([]worldview.AliasEnt, len(av.Ents))
 			for k, e := range av.Ents {
+				if opts.ablate["--noAliasDLights"] {
+					// planted negative: the GPU lights the entities without
+					// the dynamic lights, the reference with them
+					e.DLights = nil
+				}
 				if swap != nil {
 					e.Model = swap[e.Model]
 				}

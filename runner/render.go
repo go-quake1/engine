@@ -769,6 +769,7 @@ func setupRenderer(opts setupRendererOpts) error {
 			LightDir:  [3]float32{0, 0, -1},
 		}
 		now := runner.Client.MsgTime
+		var dlScratch [client.MaxDLights]int
 		aliasRendered := 0
 		var (
 			sampleES   client.EntityState
@@ -828,6 +829,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				},
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
+				DLights:      aliasDLights(dlScratch[:0], es.Origin, &runner.Client.DLights, now),
 			}
 			light := lightSampler.LightPointOr(es.Origin, func(s byte) int { return lightStyleBrightness(s, now) }, render.AliasStandInLight)
 			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, am, skin, ent); err != nil {
@@ -962,6 +964,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				},
 				FrameIdxNext: 0,
 				Lerp:         0,
+				DLights:      aliasDLights(dlScratch[:0], seg.Origin, &runner.Client.DLights, now),
 			}
 			light := lightSampler.LightPointOr(seg.Origin, func(s byte) int { return lightStyleBrightness(s, now) }, render.AliasStandInLight)
 			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, bm, bskin, ent); err != nil {

@@ -68,12 +68,18 @@ type AliasEnt struct {
 	// Light is R_LightPoint at Origin ([World.LightEnt]); both the
 	// software and the GPU path light the entity from it.
 	Light int
+
+	// DLights are the levels the dynamic lights of the world add to the
+	// entity's ambient light (R_AliasSetupLighting, [render.AliasDLightLevels]).
+	DLights []int
 }
 
 // LightEnt sets e.Light to R_LightPoint at the entity's origin, with the
-// light styles at their resting value ([bsprender.NormalLightStyle]).
+// light styles at their resting value ([bsprender.NormalLightStyle]), and
+// e.DLights to the levels the world's dynamic lights (w.DLights at w.Now) add.
 func (w *World) LightEnt(e *AliasEnt) {
 	e.Light = w.Lights.LightPoint(e.Origin, bsprender.NormalLightStyle)
+	e.DLights = render.AliasDLightLevels(e.Origin, w.DLights[:], w.Now)
 }
 
 // classModels maps the e1m1 classes that are alias models to their model
@@ -254,7 +260,7 @@ func (w *World) DrawAliasSoftware(fb *render.FrameBuffer, cm *render.ColorMap, v
 			AliasEntity: render.AliasEntity{
 				Origin: e.Origin, AnglePitch: e.Angles[0], AngleYaw: e.Angles[1], AngleRoll: e.Angles[2], FrameIdx: e.Frame,
 			},
-			FrameIdxNext: e.Next, Lerp: e.Lerp,
+			FrameIdxNext: e.Next, Lerp: e.Lerp, DLights: e.DLights,
 		}
 		if err := render.DrawAliasInterpQuake(fb, rd, cm, e.Light, e.IsViewWeapon, e.Model.M, e.Model.Skins[e.Skin], ent); err != nil {
 			return fmt.Errorf("%s: %w", e.Model.Path, err)
