@@ -141,7 +141,8 @@ func main() {
 			i++
 			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
-			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip", "--noAliasDLights", "--noCoalesce", "--badCoalesce":
+			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip", "--noAliasDLights", "--noCoalesce", "--badCoalesce",
+			"--serverStyles", "--noServerStyles":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++
@@ -290,6 +291,10 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 	for ti, tm := range times {
 		if tm >= 0 {
 			w.Anim = w.AnimationAt(tm)
+			if opts.ablate["--serverStyles"] {
+				// the styles a server sent, on both sides
+				w.Anim.Style = serverStyles(tm)
+			}
 		}
 		for vi, view := range views {
 			i := ti*len(views) + vi
@@ -332,7 +337,15 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 				v.Detail = err.Error()
 				return v
 			}
-			if err := gr.Draw(view); err != nil {
+			served := w.Anim
+			if opts.ablate["--noServerStyles"] && tm >= 0 {
+				// planted negative: the GPU keeps the default table while the
+				// reference has the server's styles
+				w.Anim = w.AnimationAt(tm)
+			}
+			err = gr.Draw(view)
+			w.Anim = served
+			if err != nil {
 				v.Detail = fmt.Sprintf("draw view %d: %v", i, err)
 				return v
 			}

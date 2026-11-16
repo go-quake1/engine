@@ -82,6 +82,33 @@ func TestAnimatedWorldMatches(t *testing.T) {
 		v.Frames, float64(v.Moved)/float64(v.Pixels), v.Uploaded, v.UploadedBytes, v.MaxFrameBytes)
 }
 
+// TestServerLightStylesMatch: with light styles the server set with its own strings
+// (--serverStyles: client.State.LightStyleValue, R_AnimateLight, not the default
+// table) on the reference and on the GPU, the GPU still matches, and the styles
+// do move the picture.
+func TestServerLightStylesMatch(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--anim", "--serverStyles")
+	if v.Check != "PASS" || v.Faces == 0 {
+		t.Fatalf("verdict %+v", v)
+	}
+	if v.Frames < 8 || v.Uploaded == 0 {
+		t.Fatalf("%d frames, %d surfaces uploaded: the styles did not move the atlas", v.Frames, v.Uploaded)
+	}
+	if rate := float64(v.Moved) / float64(v.Pixels); rate < 0.05 {
+		t.Fatalf("the styles move only %.4f of the reference's pixels: the views do not show them", rate)
+	}
+}
+
+// TestNoServerStylesFails is the planted negative: the GPU keeps the default table
+// (--noServerStyles) while the reference has the server's styles, and the comparison
+// must fail.
+func TestNoServerStylesFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--anim", "--serverStyles", "--noServerStyles")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a GPU that ignores the server's light styles was not caught: %+v", v)
+	}
+}
+
 // TestDynamicLightsMatch: a muzzle flash, a rocket and its explosion
 // (--dlights: R_PushDlights, R_MarkLights, the dynamic light term of
 // R_BuildLightMap on the reference and on the GPU) around each of the 16 fixed

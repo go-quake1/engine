@@ -417,9 +417,13 @@ frame differ from what they were baked with, then uploads them with one
 that is 4 to 8 KB a frame on average (a frame in about eight uploads 40 to 330 KB,
 the rest nothing). `quake-worldcheck --anim` on a real GPU: 166 of 4,096,000 pixels
 (0.004 %) unexplained over 64 frames of animated views; a GPU that keeps its baked atlas
-fails at 8.07 %. The GPU follows the CPU path's animation (the 11 default styles; the server's
-`lightstyle` is not wired on either). See
-[docs/webgpu-world/2026-11-16-light-styles-textures.md](docs/webgpu-world/2026-11-16-light-styles-textures.md).
+fails at 8.07 %. The animation was first the 11 default styles; since the server's
+`lightstyle` messages are wired (QC `lightstyle()` is `PF_lightstyle`, `svc_lightstyle` is
+sent to every client when the styles change and with the signon, the client keeps them and
+`client.State.LightStyleValue` is `R_AnimateLight`) the CPU and the GPU world follow what the
+map's QC sets, switchable lights included
+([docs/webgpu-world/2026-11-16-server-light-styles.md](docs/webgpu-world/2026-11-16-server-light-styles.md)).
+See [docs/webgpu-world/2026-11-16-light-styles-textures.md](docs/webgpu-world/2026-11-16-light-styles-textures.md).
 
 **Dynamic lights** (v0.20.0, [#106](https://github.com/go-quake1/engine/issues/106) item 7)
 are ported from the reference: `R_MarkLights` and `R_PushDlights`

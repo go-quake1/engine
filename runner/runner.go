@@ -292,6 +292,10 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 	logf("svc_spawnbaseline broadcast -- emitted=%d skipped_free=%d skipped_nomodel=%d (out of %d edicts; total queued bytes=%d)",
 		blStat.Emitted, blStat.SkippedFree, blStat.SkippedNoModel,
 		realHost.Server.NumEdicts, hc.Message.Len())
+	// Host_Spawn_f: send all current light styles (sv_user.c:913-918)
+	if err := engineserver.SendLightStyles(hc, realHost.Server.LightStyles); err != nil {
+		return nil, fmt.Errorf("SendLightStyles: %w", err)
+	}
 	hc.Spawned = true
 	logf("loopback bound -- client slot %d -> edict %d (active+Spawned, wire 'spawn' will re-flip idempotently); wire signon prefix queued (%d bytes)",
 		slotIdx, playerSlot, hc.Message.Len())
@@ -581,6 +585,12 @@ func (c *changelevelHostFramer) Frame(dt float32) error {
 				mapSlug, err)
 		} else {
 			c.logf("changelevel SpawnServer(%q) ok -- now on new map", mapSlug)
+			// the new map's light styles (set while it loaded, so not broadcast)
+			for _, hc := range c.host.Static.Clients {
+				if err := engineserver.SendLightStyles(hc, c.host.Server.LightStyles); err != nil {
+					c.logf("changelevel SendLightStyles: %v", err)
+				}
+			}
 		}
 	}
 	return nil

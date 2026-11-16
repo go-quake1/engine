@@ -32,10 +32,11 @@ larger than the budget is done alone in its frame, so it is never starved.
 `cmd/quake-wctr` sets `World.Anim = World.AnimationAt(t)` in `DrawWorld`; nothing else
 changes there.
 
-What stays as the CPU has it: the CPU world path draws the 11 default styles and not the
-styles the server sends (`lightstyle` is a no-op builtin in `runner`), so a map's
-switchable lights (styles 32 and up) are at their steady value on both. The GPU matches
-the CPU, not a different animation.
+What stayed as the CPU had it in this change: the CPU world path drew the 11 default styles
+and not the styles the server sends (`lightstyle` was a no-op builtin in `runner`), so a
+map's switchable lights (styles 32 and up) were at their steady value on both. The GPU
+matched the CPU, not a different animation. Both now follow the server's styles, see
+[2026-11-16-server-light-styles.md](2026-11-16-server-light-styles.md).
 
 ## Check (a real GPU, Apple M4 Max, Chrome, `QUAKE_REQUIRE_GPU=1`)
 
