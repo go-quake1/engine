@@ -55,6 +55,7 @@ type verdict struct {
 
 	Frames        int `json:"frames"`
 	Moved         int `json:"moved_pixels"`
+	Clipped       int `json:"clipped_entities"`
 	Uploaded      int `json:"uploaded_rects"`
 	UploadedBytes int `json:"uploaded_bytes"`
 	MaxFrameBytes int `json:"max_frame_upload_bytes"`

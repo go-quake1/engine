@@ -215,8 +215,9 @@ func AliasClassify(w, h int, rd *RefDef, model *mdl.Model, ent AliasEntityInterp
 // bounding-box test of R_AliasCheckBBox, and the triangles drawn by d_polyse.c's
 // fixed-point edge walk ([PolysetDrawTriangle]) or, for a model that is far
 // enough away and whole in the view, by recursive subdivision
-// ([PolysetDrawSubdivTriangle]). Not ported: r_aclip.c's clipping of
-// triangles that cross the near plane (they are dropped).
+// ([PolysetDrawSubdivTriangle]). A model that is partly outside the view
+// (AliasClipped) has the triangles that cross the near plane or a side of the
+// frame clipped as r_aclip.c does ([AliasClipTriangle]) and drawn as a fan.
 func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint int, viewModel bool,
 	model *mdl.Model, skin *Pic, ent AliasEntityInterp) error {
 	if fb == nil {
@@ -264,19 +265,32 @@ func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint 
 	// R_AliasTransformAndProjectFinalVerts (and R_AliasPreparePoints for the
 	// clipped case): u and v are truncated to integers; a vertex nearer than
 	// ALIAS_Z_CLIP_PLANE has none.
+	// A model the box test says is partly outside the view (accept ==
+	// AliasClipped) takes R_AliasPreparePoints: each vertex gets the clip flags
+	// of the near plane and of the four sides of the alias rectangle, and the
+	// triangles that are partly clipped go through R_AliasClipTriangle. The
+	// others are drawn whole (R_AliasPrepareUnclippedPoints): none has a vertex
+	// nearer than the plane.
+	clipping := accept == AliasClipped
+	rect := AliasClipRect{Right: int32(fb.Width), Bottom: int32(fb.Height)}
 	fvs := make([]FinalVert, len(verts))
-	near := make([]bool, len(verts))
+	aux := make([][3]float32, len(verts))
 	for i, tv := range verts {
 		vp := toView([3]float32{float32(tv.V[0]), float32(tv.V[1]), float32(tv.V[2])})
 		st := model.STVerts[i]
 		fv := &fvs[i]
+		aux[i] = vp
 		fv.V[2], fv.V[3] = int32(st.S)<<16, int32(st.T)<<16
 		fv.V[4] = light.VertexLight(tv.LightNormalIndex)
 		fv.OnSeam = st.OnSeam != 0
-		if vp[2] >= AliasClipPlane {
-			near[i] = true
-			px, py := av.project(vp[0], vp[1], vp[2])
-			fv.V[0], fv.V[1] = int32(px), int32(py)
+		if vp[2] < AliasClipPlane {
+			fv.Flags = AliasZClip
+			continue
+		}
+		px, py := av.project(vp[0], vp[1], vp[2])
+		fv.V[0], fv.V[1] = int32(px), int32(py)
+		if clipping {
+			fv.Flags = AliasClipFlags(fv.V[0], fv.V[1], rect)
 		}
 	}
 	seamFixup := (int32(hdr.SkinWidth) >> 1) << 16
@@ -289,9 +303,17 @@ func DrawAliasInterpQuake(fb *FrameBuffer, rd *RefDef, cm *ColorMap, lightPoint 
 	}
 	for _, t := range model.Triangles {
 		i0, i1, i2 := int(t.VertIndex[0]), int(t.VertIndex[1]), int(t.VertIndex[2])
-		// r_aclip.c's clipping of partly visible triangles is not ported: a
-		// triangle with a vertex nearer than the clip plane is dropped
-		if !near[i0] || !near[i1] || !near[i2] {
+		if f0, f1, f2 := fvs[i0].Flags, fvs[i1].Flags, fvs[i2].Flags; f0|f1|f2 != 0 {
+			if f0&f1&f2&(AliasXYClipMask|AliasZClip) != 0 {
+				continue // completely clipped
+			}
+			// partially clipped: R_AliasClipTriangle, then the fan it leaves
+			var fan [8]FinalVert
+			k := AliasClipTriangle([3]FinalVert{fvs[i0], fvs[i1], fvs[i2]}, [3][3]float32{aux[i0], aux[i1], aux[i2]},
+				t.FacesFront != 0, seamFixup, rect, av.project, &fan)
+			for i := 1; i < k-1; i++ {
+				walk.drawTriangle(fb, skin, cm, &fan[0], &fan[i], &fan[i+1], t.FacesFront != 0, seamFixup)
+			}
 			continue
 		}
 		if accept == AliasFarSubdiv {

@@ -24,9 +24,12 @@ import (
 // blended between two frames in byte space and rounded (R_AliasBlendPoseVerts),
 // decoded with the model's scale and origin, rotated by render.EntityRotation,
 // translated and viewed, then perspective-divided and truncated to integer
-// screen coordinates (R_AliasTransformAndProjectFinalVerts); a triangle is
-// dropped when any vertex is nearer than render.AliasClipPlane or when
-// d_xdenom is not negative. Each vertex gets R_AliasTransformFinalVert's
+// screen coordinates (R_AliasTransformAndProjectFinalVerts); a triangle of an
+// entity that R_AliasCheckBBox finds partly outside the view is clipped against
+// the near plane (render.AliasClipPlane) and the four sides of the frame as
+// r_aclip.c does (render.AliasClipTriangle: the vertex shader runs the clipper
+// for each of the six fan triangles the clipped polygon can have), and a
+// triangle is dropped when d_xdenom is not negative. Each vertex gets R_AliasTransformFinalVert's
 // light from its light normal (the anorms table, written into the shader),
 // the entity's r_ambientlight, r_shadelight and light vector
 // (render.NewAliasLighting). The pixels are those of d_polyse.c's fixed-point
@@ -39,6 +42,11 @@ import (
 //
 // The pose is packed as one uint32 per vertex per frame:
 // x | y << 8 | z << 16 | light normal index << 24.
+
+// FanStride is the vertices drawn for a triangle of an entity whose triangles
+// are clipped: the clipped polygon has at most 8 vertices (r_aclip.c's fv[2][8]),
+// a fan of at most six triangles.
+const FanStride = 18
 
 // EntRecordSize is the size of one entity record in bytes.
 const EntRecordSize = 128
@@ -122,7 +130,12 @@ type AliasDraw struct{ First, Count, Instance uint32 }
 // Entities encodes the frame's entity records into out (grown as needed)
 // and returns the draw list. An entity whose model is not in the set, or
 // whose frame is out of range, is skipped.
-func (s *AliasSet) Entities(ents []worldview.AliasEnt, out []byte, draws []AliasDraw) ([]byte, []AliasDraw, error) {
+//
+// clip says, of an entity, whether R_AliasCheckBBox found it partly outside the
+// view (render.AliasClipped): its triangles then go through r_aclip.c's
+// clipping in the shader, six fan triangles for each source triangle (a stride
+// of 18 vertices, against 3); nil: none does.
+func (s *AliasSet) Entities(ents []worldview.AliasEnt, out []byte, draws []AliasDraw, clip func(worldview.AliasEnt) bool) ([]byte, []AliasDraw, error) {
 	out, draws = out[:0], draws[:0]
 	for _, e := range ents {
 		mm := s.models[e.Model]
@@ -161,7 +174,13 @@ func (s *AliasSet) Entities(ents []worldview.AliasEnt, out []byte, draws []Alias
 		u(100, sr.Y)
 		u(104, sr.W)
 		u(108, sr.H)
-		draws = append(draws, AliasDraw{First: mm.cornerBase * 1, Count: mm.ntris * 3, Instance: uint32(len(out) / EntRecordSize)})
+		stride := uint32(3)
+		if clip != nil && clip(e) {
+			stride = FanStride
+		}
+		u(88, stride)
+		u(92, mm.cornerBase)
+		draws = append(draws, AliasDraw{First: mm.cornerBase * 1, Count: mm.ntris * stride, Instance: uint32(len(out) / EntRecordSize)})
 		out = append(out, rec[:]...)
 	}
 	return out, draws, nil
@@ -259,31 +278,168 @@ fn finalVert(c: vec4u, q: vec2i) -> vec4i {
   return vec4i(q.x, q.y, i32(bitcast<f32>(c.y)) << 16u, i32(bitcast<f32>(c.z)) << 16u);
 }
 
-// A triangle is one non-indexed run of three vertices; each invocation builds
-// the whole triangle's final vertices (the model's pose lerped, transformed
-// and projected, as R_AliasTransformAndProjectFinalVerts does), drops it when
-// a vertex is nearer than ALIAS_Z_CLIP_PLANE or d_xdenom >= 0, and emits the
-// corner of a right triangle that covers the bounding box of the pixels the
-// edge walk can reach. The fragment shader decides which of them it takes.
+// r_aclip.c: R_AliasClipTriangle, for the entities the CPU says are partly
+// outside the view (the entity record's stride is 18: six fan triangles per
+// source triangle). A final vertex is u, v, s, t (16.16), light and the clip
+// flags of R_AliasPreparePoints (1 left, 2 top, 4 right, 8 bottom, 16 near).
+struct FV { u: i32, v: i32, s: i32, t: i32, l: i32, fl: u32 };
+// the polygon being clipped, two halves of 8 vertices (ping-pong), and the
+// view-space positions of the triangle's three vertices (auxvert_t)
+var<private> poly: array<FV, 16>;
+var<private> aux: array<vec3f, 3>;
+
+fn xyFlags(u_: i32, v_: i32) -> u32 {
+  var f = 0u;
+  if (u_ < 0) { f |= 1u; }
+  if (v_ < 0) { f |= 2u; }
+  if (u_ > i32(u.q.y)) { f |= 4u; }
+  if (v_ > i32(u.q.z)) { f |= 8u; }
+  return f;
+}
+
+// R_Alias_clip_z: where the edge from poly[j] to poly[i], one end nearer than
+// the clip plane, crosses it, interpolated from the end that is not.
+fn zEdge(j: i32, i: i32) -> FV {
+  var a = poly[j]; var b = poly[i]; var pa = aux[j]; var pb = aux[i];
+  if ((a.fl & 16u) != 0u) { let ta = a; a = b; b = ta; let tp = pa; pa = pb; pb = tp; }
+  let scale = (5.0 - pa.z) / (pb.z - pa.z);
+  let x = pa.x + (pb.x - pa.x) * scale;
+  let y = pa.y + (pb.y - pa.y) * scale;
+  var o: FV;
+  o.s = i32(f32(a.s) + f32(b.s - a.s) * scale);
+  o.t = i32(f32(a.t) + f32(b.t - a.t) * scale);
+  o.l = i32(f32(a.l) + f32(b.l - a.l) * scale);
+  let q = project(vec3f(x, y, 5.0));
+  o.u = q.x; o.v = q.y;
+  o.fl = xyFlags(o.u, o.v);
+  return o;
+}
+
+// R_Alias_clip_left, _right, _top and _bottom: where the edge crosses the line
+// comp (0 u, 1 v) = limit, every component interpolated and rounded.
+fn sideEdge(a0: FV, b0: FV, comp: i32, limit: i32) -> FV {
+  var a = a0; var b = b0;
+  var ac = a.u; var bc = b.u;
+  if (comp == 1) { ac = a.v; bc = b.v; }
+  if (ac < bc) { let t = a; a = b; b = t; let tc = ac; ac = bc; bc = tc; }
+  let scale = f32(limit - ac) / f32(bc - ac);
+  var o: FV;
+  o.u = i32(f32(a.u) + f32(b.u - a.u) * scale + 0.5);
+  o.v = i32(f32(a.v) + f32(b.v - a.v) * scale + 0.5);
+  o.s = i32(f32(a.s) + f32(b.s - a.s) * scale + 0.5);
+  o.t = i32(f32(a.t) + f32(b.t - a.t) * scale + 0.5);
+  o.l = i32(f32(a.l) + f32(b.l - a.l) * scale + 0.5);
+  o.fl = 0u;
+  return o;
+}
+
+// R_AliasClip against one flag: the polygon at src (count vertices) into dst.
+// z is true for the near plane (zEdge; the z stage's source is the triangle).
+fn clipStage(src: i32, dst: i32, count: i32, flag: u32, comp: i32, limit: i32, z: bool) -> i32 {
+  var k = 0; var j = count - 1;
+  for (var i = 0; i < 8; i++) {
+    if (i >= count) { break; }
+    let oldf = poly[src + j].fl & flag; let f = poly[src + i].fl & flag;
+    if (!(f != 0u && oldf != 0u)) {
+      if ((oldf != 0u) != (f != 0u) && k < 8) {
+        var o: FV;
+        if (z) { o = zEdge(j, i); } else { o = sideEdge(poly[src + j], poly[src + i], comp, limit); o.fl = xyFlags(o.u, o.v); }
+        poly[dst + k] = o; k++;
+      }
+      if (f == 0u && k < 8) { poly[dst + k] = poly[src + i]; k++; }
+    }
+    j = i;
+  }
+  return k;
+}
+
+// A triangle is one non-indexed run of 3 vertices (stride 3) or of 18 (six
+// fan triangles of the clipped polygon, stride 18); each invocation builds the
+// whole triangle's final vertices (the model's pose lerped, transformed and
+// projected, as R_AliasTransformAndProjectFinalVerts does), clips it (stride
+// 18), drops it when d_xdenom >= 0 and emits the corner of a right triangle that
+// covers the bounding box of the pixels the edge walk can reach. The fragment
+// shader decides which of them it takes.
 @vertex fn vs(@builtin(vertex_index) vidx: u32, @builtin(instance_index) inst: u32) -> VOut {
   let e = ents[inst];
-  let base = (vidx / 3u) * 3u;
+  // the draw's first vertex is the model's first corner (info.w): the run of
+  // vertices is li = vidx - first, stride of them per source triangle
+  let stride = max(e.info.z, 3u);
+  let li = vidx - e.info.w;
+  let base = e.info.w + (li / stride) * 3u;
+  let fan = i32((li % stride) / 3u);
+  let k = (li % stride) % 3u;
   let c0 = corners[base]; let c1 = corners[base + 1u]; let c2 = corners[base + 2u];
   let l0 = lerped(e, c0.x); let l1 = lerped(e, c1.x); let l2 = lerped(e, c2.x);
   let v0 = view(e, l0.xyz); let v1 = view(e, l1.xyz); let v2 = view(e, l2.xyz);
   var o: VOut;
   o.p = vec4f(0.0, 0.0, 0.0, 1.0);
   o.a = vec4i(0); o.b = vec4i(0); o.c = vec4i(0); o.l = vec4i(0); o.skin = e.skin;
-  if (v0.z < 5.0 || v1.z < 5.0 || v2.z < 5.0) { return o; }
-  let q0 = project(v0); let q1 = project(v1); let q2 = project(v2);
-  let xdenom = (q0.y - q1.y) * (q0.x - q2.x) - (q0.x - q1.x) * (q0.y - q2.y);
+  var f0: FV; var f1: FV; var f2: FV;
+  if (stride == 3u) {
+    if (v0.z < 5.0 || v1.z < 5.0 || v2.z < 5.0) { return o; }
+    let q0 = project(v0); let q1 = project(v1); let q2 = project(v2);
+    f0 = FV(q0.x, q0.y, i32(bitcast<f32>(c0.y)) << 16u, i32(bitcast<f32>(c0.z)) << 16u, i32(vlight(e, u32(l0.w))), 0u);
+    f1 = FV(q1.x, q1.y, i32(bitcast<f32>(c1.y)) << 16u, i32(bitcast<f32>(c1.z)) << 16u, i32(vlight(e, u32(l1.w))), 0u);
+    f2 = FV(q2.x, q2.y, i32(bitcast<f32>(c2.y)) << 16u, i32(bitcast<f32>(c2.z)) << 16u, i32(vlight(e, u32(l2.w))), 0u);
+  } else {
+    // R_AliasPreparePoints: each vertex is flagged near, or projected and
+    // flagged by the sides of the rectangle it is beyond
+    var vs3 = array<vec3f, 3>(v0, v1, v2);
+    var cs = array<vec4u, 3>(c0, c1, c2);
+    var ls = array<u32, 3>(u32(l0.w), u32(l1.w), u32(l2.w));
+    for (var i = 0; i < 3; i++) {
+      var fv: FV;
+      fv.s = i32(bitcast<f32>(cs[i].y)) << 16u; fv.t = i32(bitcast<f32>(cs[i].z)) << 16u;
+      fv.l = i32(vlight(e, ls[i]));
+      if (vs3[i].z < 5.0) { fv.u = 0; fv.v = 0; fv.fl = 16u; }
+      else { let q = project(vs3[i]); fv.u = q.x; fv.v = q.y; fv.fl = xyFlags(q.x, q.y); }
+      poly[i] = fv; aux[i] = vs3[i];
+    }
+    var clipflags = poly[0].fl | poly[1].fl | poly[2].fl;
+    if ((poly[0].fl & poly[1].fl & poly[2].fl & 31u) != 0u) { return o; } // completely clipped
+    var src = 0; var n = 3;
+    if ((clipflags & 31u) != 0u) {
+      if ((clipflags & 16u) != 0u) {
+        n = clipStage(0, 8, 3, 16u, 0, 0, true);
+        if (n == 0) { return o; }
+        src = 8;
+        clipflags = poly[8].fl | poly[9].fl | poly[10].fl;
+      }
+      if ((clipflags & 1u) != 0u) {
+        n = clipStage(src, 8 - src, n, 1u, 0, 0, false); src = 8 - src;
+        if (n == 0) { return o; }
+      }
+      if ((clipflags & 4u) != 0u) {
+        n = clipStage(src, 8 - src, n, 4u, 0, i32(u.q.y), false); src = 8 - src;
+        if (n == 0) { return o; }
+      }
+      if ((clipflags & 8u) != 0u) {
+        n = clipStage(src, 8 - src, n, 8u, 1, i32(u.q.z), false); src = 8 - src;
+        if (n == 0) { return o; }
+      }
+      if ((clipflags & 2u) != 0u) {
+        n = clipStage(src, 8 - src, n, 2u, 1, 0, false); src = 8 - src;
+        if (n == 0) { return o; }
+      }
+      for (var i = 0; i < 8; i++) {
+        if (i >= n) { break; }
+        poly[src + i].u = clamp(poly[src + i].u, 0, i32(u.q.y));
+        poly[src + i].v = clamp(poly[src + i].v, 0, i32(u.q.z));
+      }
+    }
+    // the fan (0, fan + 1, fan + 2) of the polygon
+    if (fan + 2 >= n) { return o; }
+    f0 = poly[src]; f1 = poly[src + fan + 1]; f2 = poly[src + fan + 2];
+  }
+  let xdenom = (f0.v - f1.v) * (f0.u - f2.u) - (f0.u - f1.u) * (f0.v - f2.v);
   if (xdenom >= 0) { return o; }
-  o.a = finalVert(c0, q0); o.b = finalVert(c1, q1); o.c = finalVert(c2, q2);
-  o.l = vec4i(i32(vlight(e, u32(l0.w))), i32(vlight(e, u32(l1.w))), i32(vlight(e, u32(l2.w))), 0);
-  let mn = min(q0, min(q1, q2)); let mx = max(q0, max(q1, q2));
+  o.a = vec4i(f0.u, f0.v, f0.s, f0.t); o.b = vec4i(f1.u, f1.v, f1.s, f1.t); o.c = vec4i(f2.u, f2.v, f2.s, f2.t);
+  o.l = vec4i(f0.l, f1.l, f2.l, 0);
+  let mn = min(vec2i(f0.u, f0.v), min(vec2i(f1.u, f1.v), vec2i(f2.u, f2.v)));
+  let mx = max(vec2i(f0.u, f0.v), max(vec2i(f1.u, f1.v), vec2i(f2.u, f2.v)));
   let w = f32(mx.x + 1 - mn.x); let h = f32(mx.y + 1 - mn.y);
   var px = f32(mn.x); var py = f32(mn.y);
-  let k = vidx - base;
   // legs of 2w and 2h cover the box: the last pixel centre, (w - 0.5, h - 0.5),
   // is inside the hypotenuse (it lies at x/2w + y/2h = 1 - 1/(4w) - 1/(4h)).
   if (k == 1u) { px += 2.0 * w; }

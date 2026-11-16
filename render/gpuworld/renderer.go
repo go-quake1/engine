@@ -45,6 +45,10 @@ type Renderer struct {
 	// IgnoreDLights draws the surfaces without the world's dynamic lights (the
 	// planted defect of the dynamic light check).
 	IgnoreDLights bool
+	// NoAliasClip draws the alias triangles without r_aclip.c's clipping: the
+	// ones that cross the near plane or a side of the frame are dropped, as
+	// before it was ported (the planted defect of the clipping check).
+	NoAliasClip bool
 	// Uploaded and UploadedBytes are the surface rectangles and bytes the
 	// last frame wrote into the atlases.
 	Uploaded, UploadedBytes int

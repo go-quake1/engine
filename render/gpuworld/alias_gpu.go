@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-gfx/webgpu"
 
+	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/worldview"
 )
 
@@ -119,7 +120,18 @@ func (r *Renderer) prepareAlias(ents []worldview.AliasEnt) error {
 		return fmt.Errorf("gpuworld: %d entities, at most %d", len(ents), MaxAliasEntities)
 	}
 	var err error
-	if a.data, a.draws, err = a.set.Entities(ents, a.data, a.draws); err != nil {
+	// R_AliasCheckBBox: the entities partly outside the view take r_aclip.c's
+	// clipping (the near plane and the four sides of the frame).
+	rd := &render.RefDef{ViewAngles: r.cur.Angles, ViewOrigin: r.cur.Origin, FovX: r.w.FOV, FovY: r.w.FOV}
+	clip := func(e worldview.AliasEnt) bool {
+		ent := render.AliasEntityInterp{
+			AliasEntity:  render.AliasEntity{Origin: e.Origin, AnglePitch: e.Angles[0], AngleYaw: e.Angles[1], AngleRoll: e.Angles[2], FrameIdx: e.Frame},
+			FrameIdxNext: e.Next, Lerp: e.Lerp,
+		}
+		draw, accept := render.AliasClassify(r.width, r.height, rd, e.Model.M, ent)
+		return draw && accept == render.AliasClipped && !r.NoAliasClip
+	}
+	if a.data, a.draws, err = a.set.Entities(ents, a.data, a.draws, clip); err != nil {
 		return err
 	}
 	r.rec.WriteBuffer(a.ents, 0, a.data)

@@ -227,9 +227,8 @@ func quakeFrontTri() *mdl.Model {
 }
 
 // A far model is drawn by recursive subdivision and vertex points
-// (D_DrawSubdiv, D_PolysetDrawFinalVerts); one across the near plane keeps
-// only the triangles whose vertices are all in front of it; one wholly behind
-// the view is not drawn.
+// (D_DrawSubdiv, D_PolysetDrawFinalVerts); one across the near plane has its
+// triangles clipped to it (r_aclip.c); one wholly behind the view is not drawn.
 func TestDrawAliasInterpQuakeFarAndClipped(t *testing.T) {
 	_, rd, skin := newAliasCtx(t)
 	cm := litColormap()
@@ -253,16 +252,62 @@ func TestDrawAliasInterpQuakeFarAndClipped(t *testing.T) {
 		t.Errorf("far model: %d pixels, want its vertices at least", n)
 	}
 	// partly in front of the near plane: bbox from z 0 to 40 (object x), one
-	// vertex beyond z 5, two before it: the triangle is dropped
+	// vertex beyond z 5, two before it: the triangle is clipped to the plane and
+	// what is left (a quadrilateral) is drawn
+	// Vertices A (0, 5, 1) and B (0, -5, 1) at the plane z = 0 and C (40, 0, -3)
+	// ahead: the edges to C cross z = 5 at scale 5 / 40 = .125 from A and B, at
+	// lateral 4.375 and up .5, which project to (19, 83) and (299, 83) (4.375 *
+	// 160 / 5 = 140 either side of 159.5, -.5 * 160 / 5 + 99.5 = 83.5), and C
+	// to (159, 111): a triangle 280 pixels wide at row 83, with its apex at 111.
+	// (A, B, C in this order is d_xdenom (83 - 83) * (19 - 159) - (19 - 299) * (83 -
+	// 111) = -7840 < 0: front-facing.)
 	part := quakeFrontTri()
+	part.Triangles[0].VertIndex = [3]int32{0, 1, 2}
 	part.Frames[0].Single.BBoxMax = mdl.TriVertx{V: [3]byte{40, 20, 20}}
-	part.Frames[0].Single.Verts[2].V[0] = 40
+	part.Frames[0].Single.Verts[0].V = [3]byte{0, 15, 11}
+	part.Frames[0].Single.Verts[1].V = [3]byte{0, 5, 11}
+	part.Frames[0].Single.Verts[2].V = [3]byte{40, 10, 7}
 	fb2, _, _ := newAliasCtx(t)
 	if err := DrawAliasInterpQuake(fb2, rd, cm, 100, false, part, skin, AliasEntityInterp{}); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(fb2); n != 0 {
-		t.Errorf("clipped model: %d pixels, want none (r_aclip.c not ported)", n)
+	n2 := count(fb2)
+	if n2 == 0 {
+		t.Errorf("clipped model: no pixel, want the part of the triangle in front of the plane (r_aclip.c)")
+	}
+	// the clipped triangle spans rows 83 to 111 and, at row 83, columns 19 to
+	// 299; every pixel is inside it: none above the top row, none beyond the
+	// widest columns
+	for y := 0; y < fb2.Height; y++ {
+		for x := 0; x < fb2.Width; x++ {
+			if fb2.Pixels[y*fb2.Pitch+x] == 0 {
+				continue
+			}
+			if y < 83 || y > 111 || x < 19 || x > 299 {
+				t.Fatalf("pixel at (%d, %d) is outside the clipped triangle (83..111, 19..299)", x, y)
+			}
+		}
+	}
+	// and the area is that of the triangle, base 280, height 28: about 3920
+	// pixels (the edge walk rounds its edges)
+	if n2 < 3500 || n2 > 4300 {
+		t.Errorf("clipped model: %d pixels, want about 3920 (a triangle of base 280 and height 28)", n2)
+	}
+	// a second triangle with all three vertices behind the plane (z 0 to 2) is
+	// completely clipped (r_alias.c: all flags in common) and adds nothing
+	two := quakeFrontTri()
+	*two = *part
+	two.Frames = []mdl.Frame{part.Frames[0]}
+	two.Frames[0].Single.Verts = append(append([]mdl.TriVertx(nil), part.Frames[0].Single.Verts...),
+		mdl.TriVertx{V: [3]byte{0, 15, 11}}, mdl.TriVertx{V: [3]byte{1, 5, 11}}, mdl.TriVertx{V: [3]byte{2, 10, 7}})
+	two.STVerts = append(append([]mdl.STVert(nil), part.STVerts...), part.STVerts...)
+	two.Triangles = append(append([]mdl.Triangle(nil), part.Triangles...), mdl.Triangle{FacesFront: 1, VertIndex: [3]int32{3, 4, 5}})
+	fb4, _, _ := newAliasCtx(t)
+	if err := DrawAliasInterpQuake(fb4, rd, cm, 100, false, two, skin, AliasEntityInterp{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(fb4); n != n2 {
+		t.Errorf("a completely clipped triangle changed the picture: %d pixels, want %d", n, n2)
 	}
 	// wholly behind the view
 	fb3, _, _ := newAliasCtx(t)

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -160,6 +161,25 @@ func checkAlias(ctx context.Context, v verdict, fsys fs.FS, w *worldview.World, 
 	if len(views) == 0 {
 		v.Detail = "no alias views"
 		return v
+	}
+	if opts.ablate["--nearplane"] {
+		views = nearPlaneViews(w, views)
+		if len(views) == 0 {
+			v.Detail = "no near-plane views"
+			return v
+		}
+	}
+	gr.NoAliasClip = opts.ablate["--noAliasClip"]
+	// how many entities cross the near plane or a side of the frame (the ones
+	// r_aclip.c's clipping is for)
+	for _, av := range views {
+		rd := &render.RefDef{VRect: render.VRect{Width: v.Width, Height: v.Height}, ViewAngles: av.Angles, ViewOrigin: av.Origin, FovX: w.FOV, FovY: w.FOV}
+		for _, e := range av.Ents {
+			ent := render.AliasEntityInterp{AliasEntity: render.AliasEntity{Origin: e.Origin, AnglePitch: e.Angles[0], AngleYaw: e.Angles[1], AngleRoll: e.Angles[2], FrameIdx: e.Frame}, FrameIdxNext: e.Next, Lerp: e.Lerp}
+			if d, accept := render.AliasClassify(v.Width, v.Height, rd, e.Model.M, ent); d && accept == render.AliasClipped {
+				v.Clipped++
+			}
+		}
 	}
 	if opts.ablate["--noFar"] {
 		// Quake draws a far model by recursive subdivision (render.PolysetDrawSubdivTriangle),
@@ -342,4 +362,50 @@ type partBench struct {
 	GPUWorldWallP95MS float64 `json:"gpu_world_wall_p95_ms"`
 	GPUFrameWallMS    float64 `json:"gpu_frame_wall_ms"`
 	GPUFrameWallP95MS float64 `json:"gpu_frame_wall_p95_ms"`
+}
+
+// nearPlaneViews moves each alias view's camera to a few units from its
+// target, so that the model crosses the near plane (ALIAS_Z_CLIP_PLANE, 5) and
+// r_aclip.c's clipping is what the picture shows: 10, 16, 22 and 28 units back
+// from the entity's origin along the view's bearing, at the old eye height. A
+// view whose new eye is not in the map is left out. The entities are those of
+// the view: the target (the one nearest the camera) and what else it sees.
+func nearPlaneViews(w *worldview.World, views []worldview.AliasView) []worldview.AliasView {
+	dists := []float32{10, 16, 22, 28}
+	var out []worldview.AliasView
+	for i, av := range views {
+		best, bestD := -1, float32(1e30)
+		for k, e := range av.Ents {
+			if e.IsViewWeapon {
+				continue
+			}
+			dx, dy, dz := e.Origin[0]-av.Origin[0], e.Origin[1]-av.Origin[1], e.Origin[2]-av.Origin[2]
+			if d := dx*dx + dy*dy + dz*dz; d < bestD {
+				best, bestD = k, d
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		t := av.Ents[best]
+		yaw := float64(av.Angles[1]) * math.Pi / 180
+		d := dists[i%len(dists)]
+		eye := [3]float32{t.Origin[0] - d*float32(math.Cos(yaw)), t.Origin[1] - d*float32(math.Sin(yaw)), av.Origin[2]}
+		if w.BM.PointInLeaf(eye) <= 0 {
+			continue
+		}
+		nv := av
+		nv.View = worldview.View{Origin: eye, Angles: av.Angles}
+		// the view weapon follows the camera
+		ents := append([]worldview.AliasEnt(nil), av.Ents...)
+		for k := range ents {
+			if ents[k].IsViewWeapon {
+				ents[k].Origin, ents[k].Angles = eye, av.Angles
+				w.LightEnt(&ents[k])
+			}
+		}
+		nv.Ents = ents
+		out = append(out, nv)
+	}
+	return out
 }
