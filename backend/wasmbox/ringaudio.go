@@ -15,9 +15,11 @@ import (
 )
 
 // ringCapacityFrames is the relay ring size in frames at the engine mixer
-// rate: 1024 frames = 93 ms at 11025 Hz, a few game tics of headroom. The
-// compositor page plays the ring through an AudioWorklet and resamples it.
-const ringCapacityFrames = 1024
+// rate: 8192 frames = 743 ms at 11025 Hz. The mixer runs up to
+// runloop.MixAheadMax (0.5 s) ahead when frames are slow; a ring of 93 ms (1024
+// frames), below the 0.1 s mix-ahead, dropped the end of every write.
+// The compositor page plays the ring through an AudioWorklet and resamples it.
+const ringCapacityFrames = 8192
 
 // RingAudio is an AudioDevice that relays the engine's mixer output to the
 // wasmbox compositor page. A worker has no AudioContext, so instead of

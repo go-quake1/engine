@@ -136,7 +136,8 @@ no `AudioContext`. There the mixer output (11025 Hz stereo) is written as float3
 PCM into a lock-free SharedArrayBuffer ring
 ([`github.com/wasmdesk/wasmbox/audioring`](https://github.com/wasmdesk/wasmbox/tree/main/audioring),
 `RingAudio`), and the wasmbox page plays it from an AudioWorklet, resampling it
-and resuming on the first click or key. The ring is 1024 frames (93 ms); frames
+and resuming on the first click or key. The ring is 8192 frames (743 ms: the
+mixer runs up to 0.5 s ahead when frames are slow, `runloop.MixAheadMax`); frames
 that do not fit are dropped, never blocking the game loop. `WebAudio` stays as the
 fallback when the ring is refused. wasmbox's `test/probe-audio.mjs` checks it in
 headless Chromium against the real client, with a planted negative.

@@ -155,7 +155,7 @@ func TestMixerPacing_StallDoesNotBurst(t *testing.T) {
 	r, _ := newRunner(t, d)
 	pool, _ := sound.NewPool(8)
 	r.SoundPool, r.MixBuffer = pool, make([]sound.StereoSample, sound.MixBufferStereoFrames)
-	now, biggest := 0.0, 0
+	now, biggest, atStall := 0.0, 0, 0
 	for k, dt := range dts {
 		d.advance(dt)
 		now += dt
@@ -163,20 +163,77 @@ func TestMixerPacing_StallDoesNotBurst(t *testing.T) {
 		if err := r.RunFrame(float32(dt), float32(now)); err != nil {
 			t.Fatal(err)
 		}
-		if n := d.offered - before; n > biggest {
-			biggest = n
+		n := d.offered - before
+		biggest = max(biggest, n)
+		if dt == 2.5 {
+			atStall = n
 		}
-		if d.queued > MixAhead*sound.DefaultSampleRate+1 {
+		if d.queued > MixAheadMax*sound.DefaultSampleRate+1 {
 			t.Fatalf("tic %d: %.0f frames queued after the stall", k, d.queued)
 		}
 	}
-	ahead := float64(MixAhead)
-	if limit := int(ahead * sound.DefaultSampleRate); biggest > limit {
-		t.Errorf("one tic painted %d frames, more than the mix-ahead %d: the stall was paid back in a burst", biggest, limit)
+	// The tic that ends the stall is not paid back: at most the mix-ahead it had
+	// been running with (the slow-frame allowance only grows for the tics after).
+	aheadFrames, maxFrames := MixAhead*sound.DefaultSampleRate, MixAheadMax*sound.DefaultSampleRate
+	if limit := int(aheadFrames - 0.5); atStall > limit+1 {
+		t.Errorf("the stalled tic painted %d frames, more than the mix-ahead %d: the stall was paid back in a burst", atStall, limit)
+	}
+	// And no tic ever paints more than the most the mixer may run ahead.
+	if limit := int(maxFrames); biggest > limit {
+		t.Errorf("one tic painted %d frames, more than MixAheadMax %d", biggest, limit)
 	}
 	// After the stall the output is refilled to the lead and the clock resumes.
 	if d.queued < MixLead*sound.DefaultSampleRate/2 {
 		t.Errorf("the lead was not refilled after the stall: %.0f queued", d.queued)
+	}
+}
+
+// Slow frames must not break the sound up: a tic longer than what the output
+// has queued is a gap the listener hears. The runner of go-wasmcontainers/
+// playground#63 ran Quake at 14 frames a second and its audio underran 204 times
+// in 66 s with the fixed 0.1 s mix-ahead. The mixer runs ahead by what the
+// slowest recent tic needs, so after a warm-up the output never runs dry; the
+// control, with the allowance switched off (MixAheadMax = MixAhead), runs dry on
+// every long tic.
+func TestMixerPacing_SlowFramesDoNotUnderrun(t *testing.T) {
+	steady := repeat(0.15, 400)
+	jitter := make([]float64, 400)
+	for i := range jitter {
+		jitter[i] = []float64{0.07, 0.16, 0.07, 0.12}[i%4]
+	}
+	for _, c := range []struct {
+		name string
+		dts  []float64
+	}{{"7 frames a second", steady}, {"jittery, 9.5 a second", jitter}} {
+		run := func(limit float32) (underruns int, maxQueued float64) {
+			d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+			r, _ := newRunner(t, d)
+			pool, _ := sound.NewPool(8)
+			r.SoundPool, r.MixBuffer = pool, make([]sound.StereoSample, sound.MixBufferStereoFrames)
+			r.MixAheadMax = limit
+			now := 0.0
+			for k, dt := range c.dts {
+				d.advance(dt)
+				now += dt
+				if k == 100 {
+					d.underruns = 0 // the warm-up: the allowance grows after the first slow tics
+				}
+				if err := r.RunFrame(float32(dt), float32(now)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return d.underruns, d.maxQueued
+		}
+		got, maxQ := run(0)
+		if got != 0 {
+			t.Errorf("%s: the output ran dry %d times in 300 tics after the warm-up", c.name, got)
+		}
+		if maxQ > MixAheadMax*sound.DefaultSampleRate+1 {
+			t.Errorf("%s: %.0f frames queued, more than MixAheadMax", c.name, maxQ)
+		}
+		if control, _ := run(MixAhead); control < 100 {
+			t.Errorf("%s: with the allowance off the output ran dry only %d times: the test cannot see the defect", c.name, control)
+		}
 	}
 }
 
@@ -185,7 +242,9 @@ func TestMixerPacing_StallDoesNotBurst(t *testing.T) {
 // (elapsed * rate), up to the lead the first tic prefills. The stalls are the
 // tics longer than the mix-ahead, and each drops its excess over MixAhead.
 func TestMixerPacing_StallsAccountForTheRatio(t *testing.T) {
-	dts := append(append(append(repeat(1.0/30, 90), 0.35), repeat(1.0/30, 90)...), 0.2)
+	// The second stall comes after 10 s at 30 Hz: the allowance the first one
+	// raised (slow frames, below) has been forgotten.
+	dts := append(append(append(repeat(1.0/30, 90), 0.35), repeat(1.0/30, 300)...), 0.2)
 	d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
 	r, _ := newRunner(t, d)
 	pool, _ := sound.NewPool(8)
