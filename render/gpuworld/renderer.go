@@ -8,6 +8,7 @@ package gpuworld
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-gfx/webgpu"
 
@@ -52,6 +53,22 @@ type Renderer struct {
 	// Uploaded and UploadedBytes are the surface rectangles and bytes the
 	// last frame wrote into the atlases.
 	Uploaded, UploadedBytes int
+	// Writes is the number of WriteTexture commands those took: the surfaces
+	// of a shelf near each other go in one ([Geometry.Coalesce]); NoCoalesce
+	// writes each surface alone, as before v0.22.0, and CoalesceSlack (0:
+	// [DefaultCoalesceSlack]) is the unchanged bytes a write may carry to save
+	// another.
+	Writes        int
+	NoCoalesce    bool
+	CoalesceSlack int
+	// PlantCoalesceDefect zeroes the texels of the merged writes (the planted
+	// defect of the coalescing check).
+	PlantCoalesceDefect bool
+	writes              []Write
+	stage               []byte
+	// UploadTime is the time the last frame spent recording those uploads, and
+	// the geometry's BakeTime the time it spent baking them.
+	UploadTime time.Duration
 
 	// Mip is how a frame picks the mip level of a face; the zero value of the
 	// field in a Renderer made by [New] is Quake's ([Chosen]).
@@ -267,15 +284,35 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 	return p.End()
 }
 
+// BakeTime is the time the last frame spent baking the surfaces it re-baked
+// (render.DrawSurface), apart from recording their upload ([Renderer.UploadTime]).
+func (r *Renderer) BakeTime() time.Duration { return r.geo.BakeTime }
+
 // recordUpdates writes the surfaces the frame's Draws re-baked (light styles
 // and '+' textures that moved) into the atlases, one WriteTexture each, before
 // the pass that reads them.
 func (r *Renderer) recordUpdates() {
-	r.Uploaded, r.UploadedBytes = 0, 0
+	r.Uploaded, r.UploadedBytes, r.Writes, r.UploadTime = 0, 0, 0, 0
 	if r.NoAnimate {
 		return
 	}
-	for _, u := range r.geo.Updates {
+	t0 := time.Now()
+	defer func() { r.UploadTime = time.Since(t0) }()
+	r.Uploaded = len(r.geo.Updates)
+	r.writes = r.writes[:0]
+	if r.NoCoalesce {
+		for _, u := range r.geo.Updates {
+			r.writes = append(r.writes, Write{Low: u.Low, R: u.R, Pix: u.Pix})
+		}
+	} else {
+		slack := r.CoalesceSlack
+		if slack == 0 {
+			slack = DefaultCoalesceSlack
+		}
+		r.geo.PlantCoalesceDefect = r.PlantCoalesceDefect
+		r.writes, r.stage = r.geo.Coalesce(r.geo.Updates, slack, r.writes, r.stage)
+	}
+	for _, u := range r.writes {
 		tex := r.surfTex
 		if u.Low {
 			tex = r.surfLowTex
@@ -283,7 +320,7 @@ func (r *Renderer) recordUpdates() {
 		r.rec.WriteTexture(webgpu.TexelCopyTextureInfo{Texture: tex, Origin: webgpu.Origin3D{X: u.R.X, Y: u.R.Y}},
 			u.Pix, webgpu.TexelCopyBufferLayout{BytesPerRow: u.R.W, RowsPerImage: u.R.H},
 			webgpu.Extent3D{Width: u.R.W, Height: u.R.H})
-		r.Uploaded++
+		r.Writes++
 		r.UploadedBytes += len(u.Pix)
 	}
 }

@@ -434,6 +434,11 @@ same 4 MiB budget: `quake-worldcheck --dlights` (a muzzle flash, a rocket and an
 explosion around each of the 16 views) on a real GPU, 7 of 1,024,000 pixels unexplained,
 the lights changing 87 % of the reference's pixels; a GPU that ignores them fails at 81 %.
 See [docs/webgpu-world/2026-11-16-dynamic-lights.md](docs/webgpu-world/2026-11-16-dynamic-lights.md).
+The surfaces a frame re-bakes are uploaded coalesced (`Geometry.Coalesce`: the surfaces of a
+shelf close to each other in one write): with three lights around the view the GPU world's
+wall time is 7 % lower and its CPU time unchanged, because 59 % of that time is the bake of
+the lit surfaces, not their upload
+([docs/webgpu-world/2026-11-16-coalesced-uploads.md](docs/webgpu-world/2026-11-16-coalesced-uploads.md)).
 `TE_EXPLOSION2` makes the same light, and the entities are lit by the lights too:
 `R_AliasSetupLighting`'s dynamic-light term (`render.AliasDLightLevels`, on the CPU
 alias path, the runner and the GPU alias pass), see
