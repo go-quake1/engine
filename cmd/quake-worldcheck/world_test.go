@@ -98,6 +98,17 @@ func TestDynamicLightsMatch(t *testing.T) {
 		float64(v.Moved)/float64(v.Pixels), v.Uploaded, v.UploadedBytes, v.Frames, v.MaxFrameBytes)
 }
 
+// TestBadCoalesceFails is the planted negative of the coalesced uploads: the
+// merged writes carry zeros instead of the atlas' texels (--badCoalesce) while the
+// reference has the lit surfaces, and the comparison must fail. (The same run
+// without the defect is TestDynamicLightsMatch: the writes are coalesced by default.)
+func TestBadCoalesceFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--dlights", "--badCoalesce")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a GPU whose merged uploads are wrong was not caught: %+v", v)
+	}
+}
+
 // TestNoDynamicLightsFails is the planted negative of the dynamic lights: the
 // GPU bakes its surfaces without them (--noDlights) while the reference has
 // them, and the comparison must fail.
@@ -293,6 +304,8 @@ type benchRes struct {
 	SoftwareP95MS  float64 `json:"software_p95_ms"`
 	GPUCPUP95MS    float64 `json:"gpu_cpu_p95_ms"`
 	GPUWallP95MS   float64 `json:"gpu_wall_p95_ms"`
+	GPUBakeMS      float64 `json:"gpu_bake_ms"`
+	GPUUploadMS    float64 `json:"gpu_upload_ms"`
 }
 
 func load(t *testing.T) float64 {

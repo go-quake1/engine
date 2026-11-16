@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/go-gfx/webgpu/atlas"
 
@@ -163,6 +164,13 @@ type Geometry struct {
 	Updates     []Update
 	UpdateBytes int
 	Deferred    int
+	// PlantCoalesceDefect zeroes the texels of every merged write ([Geometry.Coalesce]),
+	// the planted defect of the dynamic light check.
+	PlantCoalesceDefect bool
+	sorted              []Update
+	// BakeTime is the time the last Draws spent in render.DrawSurface (the CPU
+	// side of the re-bakes, apart from the upload).
+	BakeTime time.Duration
 	// UpdateBudget is the most surface bytes one frame re-bakes (MaxUpdateBytes
 	// from Build).
 	UpdateBudget int
@@ -267,7 +275,10 @@ func (g *Geometry) refresh(w *worldview.World, f *worldview.Face, ord, mip int) 
 	}
 	d := f.Surf.Desc
 	d.Texture = tex
-	if err := render.DrawSurface(px, &d, adj, mip, &env); err != nil {
+	t0 := time.Now()
+	err := render.DrawSurface(px, &d, adj, mip, &env)
+	g.BakeTime += time.Since(t0)
+	if err != nil {
 		return
 	}
 	g.updBuf = g.updBuf[:start+n]
@@ -435,7 +446,7 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 	mv := worldview.NewMipView(width, height, w.FOV)
 	var ptsBuf [render.MaxPolyVerts][3]float32
 	out = out[:0]
-	g.Updates, g.UpdateBytes, g.Deferred = g.Updates[:0], 0, 0
+	g.Updates, g.UpdateBytes, g.Deferred, g.BakeTime = g.Updates[:0], 0, 0, 0
 	g.frameNo++
 	g.updBuf = g.updBuf[:0]
 	// Back to front: the walk's list is front to back and Quake's edge sorter

@@ -141,7 +141,7 @@ func main() {
 			i++
 			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
-			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip", "--noAliasDLights":
+			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip", "--noAliasDLights", "--noCoalesce", "--badCoalesce":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++
@@ -267,6 +267,8 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 	}
 	gr.NoAnimate = opts.ablate["--noAnimate"]
 	gr.IgnoreDLights = opts.ablate["--noDlights"]
+	gr.NoCoalesce = opts.ablate["--noCoalesce"]
+	gr.PlantCoalesceDefect = opts.ablate["--badCoalesce"]
 	// --anim: the light styles and '+' texture frames of several times (the
 	// runner's: worldview.LightStyleValue and the miptex chains), on both
 	// sides; otherwise the resting world once.
@@ -403,6 +405,10 @@ type benchRes struct {
 	SoftwareP95MS  float64 `json:"software_p95_ms"`
 	GPUCPUP95MS    float64 `json:"gpu_cpu_p95_ms"`
 	GPUWallP95MS   float64 `json:"gpu_wall_p95_ms"`
+	// GPUBakeMS and GPUUploadMS are the parts of the GPU frame's CPU time spent
+	// baking the re-baked surfaces and recording their upload.
+	GPUBakeMS   float64 `json:"gpu_bake_ms"`
+	GPUUploadMS float64 `json:"gpu_upload_ms"`
 }
 
 func pct(v []float64, p float64) float64 {
@@ -419,7 +425,7 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 	fb, _ := render.NewFrameBuffer(width, height)
 	const passes = 8
 	tick := 0
-	var sw, gc, gw, en, cold []float64
+	var sw, gc, gw, en, cold, bk, up []float64
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	for p := 0; p < passes+1; p++ { // the first pass warms up
 		for _, view := range views {
@@ -445,6 +451,7 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 			_ = gr.Wait(ctx)
 			t3 := time.Now()
 			if p > 0 {
+				bk, up = append(bk, ms(gr.BakeTime())), append(up, ms(gr.UploadTime))
 				sw, gc, gw = append(sw, ms(t1.Sub(t0))), append(gc, ms(t2.Sub(t1))), append(gw, ms(t3.Sub(t1)))
 				en = append(en, ms(e1.Sub(e0)))
 			}
@@ -464,5 +471,5 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 		}
 	}
 	return &benchRes{Frames: len(sw), SoftwareColdMS: pct(cold, .5), SoftwareMS: pct(sw, .5), EngineMS: pct(en, .5), EngineP95MS: pct(en, .95), GPUCPUMS: pct(gc, .5), GPUWallMS: pct(gw, .5),
-		SoftwareP95MS: pct(sw, .95), GPUCPUP95MS: pct(gc, .95), GPUWallP95MS: pct(gw, .95)}
+		SoftwareP95MS: pct(sw, .95), GPUCPUP95MS: pct(gc, .95), GPUWallP95MS: pct(gw, .95), GPUBakeMS: pct(bk, .5), GPUUploadMS: pct(up, .5)}
 }

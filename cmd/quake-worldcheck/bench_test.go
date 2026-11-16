@@ -15,6 +15,8 @@ var (
 	benchDir  = flag.String("wc.dir", ".", "the quake-worldcheck directory whose program BenchmarkWorldPass builds and runs in the browser (a clean clone of a tag, for abbench's base side)")
 	benchAnim = flag.Bool("wc.anim", false, "BenchmarkWorldPass draws with the light styles and '+' textures moving (--anim): the program must know the flag")
 
+	benchNoCoalesce = flag.Bool("wc.nocoalesce", false, "BenchmarkWorldPass uploads every re-baked surface with its own write (--noCoalesce)")
+
 	benchDLights = flag.Bool("wc.dlights", false, "BenchmarkWorldPass draws with a muzzle flash, a rocket and an explosion around each view (--dlights): the program must know the flag")
 )
 
@@ -39,6 +41,9 @@ func BenchmarkWorldPass(b *testing.B) {
 	if *benchDLights {
 		args = append(args, "--dlights")
 	}
+	if *benchNoCoalesce {
+		args = append(args, "--noCoalesce")
+	}
 	for i := 0; i < b.N; i++ {
 		raw := runInBrowserIn(b, *benchDir, args...)
 		var v struct {
@@ -49,6 +54,8 @@ func BenchmarkWorldPass(b *testing.B) {
 		}
 		b.ReportMetric(v.Bench.GPUCPUMS, "gpu-cpu-ms")
 		b.ReportMetric(v.Bench.GPUWallMS, "gpu-wall-ms")
+		b.ReportMetric(v.Bench.GPUBakeMS, "gpu-bake-ms")
+		b.ReportMetric(v.Bench.GPUUploadMS, "gpu-upload-ms")
 		b.ReportMetric(v.Bench.SoftwareMS, "software-ms")
 		b.ReportMetric(v.Bench.GPUCPUP95MS, "gpu-cpu-p95-ms")
 		b.ReportMetric(v.Bench.GPUWallP95MS, "gpu-wall-p95-ms")

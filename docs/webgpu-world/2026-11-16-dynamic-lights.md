@@ -103,6 +103,6 @@ more CPU time and 2.3 ms more wall time than the unlit frame. That is the heavy 
 muzzle flash, a rocket and an explosion at once around the player: a light reaches the
 surfaces within its radius, and the software reference re-builds the same ones in every
 frame it is lit as well (its frame is 40 ms, and 41 ms with the lights). The GPU frame
-with all three lights is still about a tenth of the software one. Cheaper uploads
-(one `WriteTexture` per run of adjacent rectangles) are not done: they are the next thing
-to look at if a game shows it.
+with all three lights is still about a tenth of the software one. Cheaper uploads were done
+afterwards, see [2026-11-16-coalesced-uploads.md](2026-11-16-coalesced-uploads.md): they cut
+the wall time by 7 % and showed that the CPU time is the bake, not the upload.
