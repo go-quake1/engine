@@ -196,8 +196,10 @@ compared with `cmd/quake-worldcheck`'s measure, the share of pixels a one-pixel
 shift does not explain, against 2.5 % (`gpuworld.Compare`), and the run fails
 above it. The `--worldref` hashes above, which the playground's `TestQuake`
 compares, are still the software frame's and are printed first, unchanged. The
-game loop draws its lit world faces on the GPU too when `--gpuworld` is given
-without `--worldref` (the CPU is the default): the map is built and the atlases
+game loop draws its lit world faces on the GPU too, by default, when a GPU is
+granted (`wctr run --gpu`); with none, or when the device refuses the map, it
+says so on stderr and the CPU draws the world. `--cpuworld` forces the CPU;
+`--gpuworld` asks for the GPU and fails instead of falling back. The map is built and the atlases
 uploaded once, before the first frame, and each frame is one submit with its
 read-back. The software pass draws over the GPU's index frame, in its own order,
 the sky and water faces (the GPU sky is not Quake's dome), the entities, the

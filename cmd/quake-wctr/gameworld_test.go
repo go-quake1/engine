@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -81,6 +82,58 @@ type fakeGPUFrame struct {
 
 func (f fakeGPUFrame) Draw(worldview.View) ([]byte, error) { *f.frames++; return f.frame, nil }
 func (f fakeGPUFrame) Close()                              { *f.closed++ }
+
+// TestRunGameDefaultsToTheGPUWorld: with a GPU granted (a batch device that
+// opens) and no flag, the GPU draws the world; with --cpuworld (auto off) it
+// does not open the device; with no device the CPU plays, and says so.
+// (Needs the freepak pak0.pak.)
+func TestRunGameDefaultsToTheGPUWorld(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		opts      gameOpts
+		openErr   error
+		wantOpen  int
+		wantGPU   bool
+		wantError bool
+		wantLog   string
+	}{
+		{"default, GPU granted", gameOpts{auto: true}, nil, 1, true, false, ""},
+		{"default, no GPU", gameOpts{auto: true}, errors.New("no device"), 1, false, false, "the CPU draws its world"},
+		{"forced CPU", gameOpts{}, nil, 0, false, false, ""},
+		{"--gpuworld, no GPU", gameOpts{gpuWorld: true, auto: true}, errors.New("no device"), 1, false, true, ""},
+	} {
+		p := &fakePresenter{}
+		closes, gclose, gframes := 0, 0, 0
+		withSurface(t, p, false, &closes)
+		opened := 0
+		old := openGPUWorld
+		openGPUWorld = func(_ *worldview.World, _ *render.ColorMap, w, h int) (gpuDrawer, error) {
+			opened++
+			if c.openErr != nil {
+				return nil, c.openErr
+			}
+			return countingGPU{frames: &gframes, w: w, h: h, closed: &gclose}, nil
+		}
+		var out, errOut bytes.Buffer
+		err := runGameWith(&out, &errOut, realFS(t), "e1m1", 64, 40, 3, c.opts)
+		openGPUWorld = old
+		if (err != nil) != c.wantError {
+			t.Errorf("%s: err %v", c.name, err)
+		}
+		if opened != c.wantOpen || (gframes > 0) != c.wantGPU {
+			t.Errorf("%s: opened %d, GPU frames %d", c.name, opened, gframes)
+		}
+		if c.wantLog != "" && !strings.Contains(errOut.String(), c.wantLog) {
+			t.Errorf("%s: no %q in %q", c.name, c.wantLog, errOut.String())
+		}
+	}
+}
+
+func TestCPUWorldFlag(t *testing.T) {
+	if _, _, err := run(t, "--pak", emptyPak(t), "--cpuworld", "--gpuworld"); err == nil || !strings.Contains(err.Error(), "excludes") {
+		t.Errorf("--cpuworld with --gpuworld: %v", err)
+	}
+}
 
 func TestCheckStats(t *testing.T) {
 	const w, h = 8, 4

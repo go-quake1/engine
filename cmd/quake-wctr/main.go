@@ -111,7 +111,7 @@ var openSurface func(w, h int) (*gpuSurface, error)
 func RootCmd() *cobra.Command {
 	var pakPath, mapSlug string
 	var w, h, worldref, frames int
-	var gpuWorld, gpuCheck bool
+	var gpuWorld, gpuCheck, cpuWorld bool
 	c := &cobra.Command{
 		Use:           "quake-wctr",
 		Short:         "Quake in a wasmcontainers playground container: the game on a wasi-gfx surface, from the main menu",
@@ -131,6 +131,9 @@ func RootCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("quake-wctr: %s: %w", pakPath, err)
 			}
+			if cpuWorld && (gpuWorld || gpuCheck) {
+				return errors.New("quake-wctr: --cpuworld excludes --gpuworld and --gpuworld-check")
+			}
 			if gpuCheck && !gpuWorld {
 				return errors.New("quake-wctr: --gpuworld-check needs --gpuworld")
 			}
@@ -144,7 +147,7 @@ func RootCmd() *cobra.Command {
 				}
 				return runWorldref(cmd.OutOrStdout(), p, slug, worldref, w, h, gpuWorld, frames)
 			}
-			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck})
+			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck, auto: !cpuWorld})
 		},
 	}
 	fl := c.Flags()
@@ -154,6 +157,7 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&h, "height", 400, "frame height")
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
+	fl.BoolVar(&cpuWorld, "cpuworld", false, "in the game loop, draw the world on the CPU even when a GPU is granted (by default the GPU draws it, and the CPU when none is granted)")
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
 	return c
@@ -309,13 +313,17 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		Logf:               func(format string, args ...any) { fmt.Fprintf(errOut, "QUAKE: "+format+"\n", args...) },
 	}
 	var stats *checkStats
-	if g.gpuWorld {
+	if g.gpuWorld || g.auto {
 		world := slug
 		if world == "" {
 			world = "start"
 		}
 		gw, err := openGameWorld(fsys, world, w, h)
 		switch {
+		case err != nil && g.auto && !g.gpuWorld:
+			// The default: no GPU granted (or the device refused the map), so
+			// the CPU draws the world. --gpuworld asks for the GPU and fails.
+			fmt.Fprintf(errOut, "QUAKE: GPU world unavailable for %s (%v): the CPU draws its world\n", world, err)
 		case errors.Is(err, gpuworld.ErrAtlasFull):
 			// The map's surfaces do not fit the GPU atlas: play it on the CPU.
 			fmt.Fprintf(errOut, "QUAKE: GPU world unavailable for %s (%v): the CPU draws its world\n", slug, err)
