@@ -35,5 +35,28 @@ func openBatchWorld(wv *worldview.World, cm *render.ColorMap, w, h int) (gpuDraw
 	return &batchWorld{sink: s, r: r}, nil
 }
 
+// EnableEntities builds the alias models on the device and gives the entities a
+// layer of their own (gpuworld.Renderer.EnableAliasLayer).
+func (b *batchWorld) EnableEntities(models []*worldview.AliasModel) error {
+	var set []*worldview.AliasModel
+	for _, m := range models {
+		if m != nil {
+			set = append(set, m)
+		}
+	}
+	as, err := gpuworld.BuildAlias(set)
+	if err != nil {
+		return err
+	}
+	if err := b.r.EnableAlias(as); err != nil {
+		return err
+	}
+	return b.r.EnableAliasLayer()
+}
+
+func (b *batchWorld) DrawLayers(v worldview.View, ents []worldview.AliasEnt) ([]byte, []byte, error) {
+	return b.r.DrawReadLayers(v, ents)
+}
+
 func (b *batchWorld) Draw(v worldview.View) ([]byte, error) { return b.r.DrawRead(v) }
 func (b *batchWorld) Close()                                { b.sink.Close() }

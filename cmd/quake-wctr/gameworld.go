@@ -23,6 +23,11 @@ type gameOpts struct {
 	gpuWorld bool // draw the lit world faces on the batch device
 	check    bool // with gpuWorld: compare every frame with the CPU's
 	auto     bool // the default: the GPU when one is granted, else the CPU (no --cpuworld)
+	// corruptSkins is the planted defect of the entity check (--corrupt-gpu-skins):
+	// the GPU draws the entities with every skin index shifted by 16.
+	corruptSkins bool
+	// minGPUEntities is runner.SetupOpts.MinGPUEntities (0: its default).
+	minGPUEntities int
 }
 
 // gameWorld is the runner's WorldDrawer over a [gpuDrawer]: the map is built
@@ -37,6 +42,76 @@ type gameWorld struct {
 	styles func(style byte) int
 
 	times gpuTimes // per frame, for the --frames phase line
+
+	// The alias entities on the GPU (runner.EntityDrawer): ld is the drawer's
+	// entity layer (nil: none), ents the frame's entities, layer the last frame's
+	// entity layer; swap, with the planted defect, maps a model to the copy whose
+	// skins are shifted; entCount and entFrames are the entities drawn and the
+	// frames they were drawn in, for the check's summary.
+	ld                  layerDrawer
+	ents                []worldview.AliasEnt
+	layer               []byte
+	swap                map[*worldview.AliasModel]*worldview.AliasModel
+	corrupt             bool
+	entCount, entFrames int
+}
+
+// layerDrawer is a [gpuDrawer] that also draws alias entities into a layer of
+// their own, in the same submit and read-back (gpuworld.Renderer.DrawReadLayers).
+type layerDrawer interface {
+	EnableEntities(models []*worldview.AliasModel) error
+	DrawLayers(v worldview.View, ents []worldview.AliasEnt) (world, layer []byte, err error)
+}
+
+// SetAliasModels implements runner.EntityDrawer. With the planted defect
+// (--corrupt-gpu-skins) the GPU gets copies of the models whose skins have every
+// palette index shifted by 16 while the CPU keeps the true ones.
+func (g *gameWorld) SetAliasModels(models []*worldview.AliasModel) error {
+	ld, ok := g.gd.(layerDrawer)
+	if !ok {
+		return fmt.Errorf("this GPU drawer has no entity layer")
+	}
+	use := models
+	if g.corrupt {
+		g.swap = map[*worldview.AliasModel]*worldview.AliasModel{}
+		use = make([]*worldview.AliasModel, len(models))
+		for i, am := range models {
+			if am == nil {
+				continue
+			}
+			c := *am
+			c.Skins = nil
+			for _, s := range am.Skins {
+				px := make([]byte, len(s.Pixels))
+				for k, b := range s.Pixels {
+					px[k] = b + 16
+				}
+				c.Skins = append(c.Skins, &render.Pic{Width: s.Width, Height: s.Height, Pixels: px})
+			}
+			g.swap[am] = &c
+			use[i] = &c
+		}
+	}
+	if err := ld.EnableEntities(use); err != nil {
+		return err
+	}
+	g.ld = ld
+	return nil
+}
+
+// SetEntities implements runner.EntityDrawer.
+func (g *gameWorld) SetEntities(ents []worldview.AliasEnt) {
+	g.ents = ents
+	g.entCount += len(ents)
+	g.entFrames++
+}
+
+// CompositeEntities implements runner.EntityDrawer: the entities of the last
+// DrawWorld go over fb (after the CPU drew the sky and water).
+func (g *gameWorld) CompositeEntities(fb *render.FrameBuffer) {
+	if len(g.layer) == g.w*fb.Height {
+		gpuworld.CompositeLayer(fb.Pixels, fb.Pitch, g.layer, g.w, fb.Height)
+	}
 }
 
 // openGameWorld loads the map's GPU content for a w x h frame.
@@ -87,7 +162,23 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 		g.wv.Anim.Style = g.styles
 	}
 	t0 := time.Now()
-	frame, err := g.gd.Draw(worldview.View{Origin: origin, Angles: angles})
+	var frame []byte
+	var err error
+	view := worldview.View{Origin: origin, Angles: angles}
+	if g.ld != nil && len(g.ents) > 0 {
+		ents := g.ents
+		if g.swap != nil {
+			ents = make([]worldview.AliasEnt, len(g.ents))
+			for i, e := range g.ents {
+				e.Model = g.swap[e.Model]
+				ents[i] = e
+			}
+		}
+		frame, g.layer, err = g.ld.DrawLayers(view, ents)
+	} else {
+		g.layer = nil
+		frame, err = g.gd.Draw(view)
+	}
 	if err != nil {
 		return err
 	}
@@ -105,7 +196,32 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 // checkStats accumulates the per-frame comparison of --gpuworld-check.
 type checkStats struct {
 	frames, pixels, differ, unexplained int
-	worst                               float64 // largest share of unexplained pixels in a frame
+	worst                               float64    // largest share of unexplained pixels in a frame
+	ents                                *gameWorld // when set, its entity counts are in the summary
+
+	// The pixels the alias entities change on either side (the GPU's layer, or
+	// what the CPU's entities drew over its frame): how many, how many differ
+	// between the two frames and how many a one-pixel shift does not explain.
+	entPixels, entDiffer, entUnexplained int
+}
+
+// addEntities is the runner's EntityCheck: the entity pixels are those the GPU's
+// layer holds or the CPU's alias entities changed (cpu against cpuNoEntities);
+// over them the CPU frame and the GPU-mode frame are compared.
+func (c *checkStats) addEntities(cpu *render.FrameBuffer, cpuNoEntities, gpu []byte) {
+	if c.ents == nil || len(c.ents.layer) != cpu.Width*cpu.Height {
+		return
+	}
+	mask := make([]bool, cpu.Width*cpu.Height)
+	for y := 0; y < cpu.Height; y++ {
+		for x := 0; x < cpu.Width; x++ {
+			mask[y*cpu.Width+x] = c.ents.layer[y*cpu.Width+x] != gpuworld.EntityClear || cpu.Pixels[y*cpu.Pitch+x] != cpuNoEntities[y*cpu.Pitch+x]
+		}
+	}
+	n, d, u := gpuworld.CompareMasked(cpu.Pixels, cpu.Pitch, gpu, cpu.Pitch, cpu.Width, cpu.Height, mask)
+	c.entPixels += n
+	c.entDiffer += d
+	c.entUnexplained += u
 }
 
 func (c *checkStats) add(cpu *render.FrameBuffer, gpu []byte) {
@@ -122,8 +238,19 @@ func (c *checkStats) add(cpu *render.FrameBuffer, gpu []byte) {
 func (c *checkStats) report(out io.Writer) error {
 	fmt.Fprintf(out, "gpuworld check: %d frames, %d of %d pixels differ, %d unexplained, worst frame %.4f unexplained (tolerance %.3f)\n",
 		c.frames, c.differ, c.pixels, c.unexplained, c.worst, gpuworld.Tolerance)
+	if c.ents != nil {
+		fmt.Fprintf(out, "gpuworld check: %d alias entities drawn by the GPU over %d frames\n", c.ents.entCount, c.ents.entFrames)
+	}
 	if c.frames == 0 {
 		return fmt.Errorf("quake-wctr: --gpuworld-check compared no frame")
+	}
+	if c.ents != nil && c.entPixels > 0 {
+		rate := float64(c.entUnexplained) / float64(c.entPixels)
+		fmt.Fprintf(out, "gpuworld check: entities: %d pixels changed by an entity, %d differ, %d unexplained (%.4f, tolerance %.3f)\n",
+			c.entPixels, c.entDiffer, c.entUnexplained, rate, gpuworld.AliasTolerance)
+		if rate > gpuworld.AliasTolerance {
+			return fmt.Errorf("quake-wctr: the entities differ from the CPU's by %.4f unexplained, above the tolerance %.3f", rate, gpuworld.AliasTolerance)
+		}
 	}
 	if c.worst > gpuworld.Tolerance {
 		return fmt.Errorf("quake-wctr: a frame differs from the CPU's by %.4f unexplained, above the tolerance %.3f", c.worst, gpuworld.Tolerance)

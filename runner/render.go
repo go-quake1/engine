@@ -69,6 +69,10 @@ type setupRendererOpts struct {
 	// all-CPU world frame and the GPU-mode frame.
 	worldDraw  WorldDrawer
 	worldCheck func(cpu *render.FrameBuffer, gpu []byte)
+	// minGPUEntities: see SetupOpts.MinGPUEntities.
+	minGPUEntities int
+	// entityCheck: see SetupOpts.EntityCheck.
+	entityCheck func(cpu *render.FrameBuffer, cpuNoEntities, gpu []byte)
 }
 
 // WorldDrawer draws the lit world faces of a frame into fb.Pixels, on a GPU,
@@ -87,6 +91,40 @@ type WorldDrawer interface {
 // the time cl.time: the runner calls SetDLights before DrawWorld.
 type DynamicLighter interface {
 	SetDLights(lights *[client.MaxDLights]client.DLight, now float32)
+}
+
+// EntityDrawer is implemented by a [WorldDrawer] that draws the alias entities
+// on the GPU too, in the world's submit. SetAliasModels gives it, once, the
+// models by precache index (nil for one it must not draw: it has animated frame
+// groups, which the GPU poses do not follow); an error means no GPU entities.
+// Each frame the runner calls SetEntities with the entities it chose, then
+// DrawWorld; after the CPU has drawn the sky and water over the GPU frame it
+// calls CompositeEntities, which puts the entity layer over fb. The entities the
+// GPU draws are not drawn by the CPU alias pass that frame. The ones that
+// R_AliasCheckBBox draws by recursive subdivision (far models, drawn as points
+// by the software pass, which the GPU does not reproduce) and the view model are
+// left to the CPU.
+type EntityDrawer interface {
+	SetAliasModels(models []*worldview.AliasModel) error
+	SetEntities(ents []worldview.AliasEnt)
+	CompositeEntities(fb *render.FrameBuffer)
+}
+
+// DefaultMinGPUEntities is the default of SetupOpts.MinGPUEntities: the entity
+// layer's second pass and read-back cost about 0.3 ms a frame on an Apple M4 Max
+// and the software pass about 0.2 ms for the one entity of e1m1's first view (a
+// whole alias view of 16 takes 0.6 ms), so the break-even is a few entities.
+const DefaultMinGPUEntities = 3
+
+// aliasHasFrameGroup reports whether a model has a frame group (torches, flames),
+// whose sub-frame follows the time: the GPU's poses are those of sub-frame 0.
+func aliasHasFrameGroup(m *mdl.Model) bool {
+	for i := range m.Frames {
+		if m.Frames[i].Type == mdl.FrameGroup {
+			return true
+		}
+	}
+	return false
 }
 
 // LightStyler is implemented by a [WorldDrawer] that animates its surfaces with
@@ -117,6 +155,28 @@ func setupRenderer(opts setupRendererOpts) error {
 	boltSkins := opts.boltSkins
 	state := opts.state
 	logf := opts.logf
+
+	// The GPU draws the alias entities too (see [EntityDrawer]) when the world
+	// drawer can: the models it can draw go to it once, here.
+	var gpuEnt EntityDrawer
+	var gpuModels []*worldview.AliasModel
+	if ed, ok := opts.worldDraw.(EntityDrawer); ok {
+		gm := make([]*worldview.AliasModel, len(aliasModels))
+		n := 0
+		for i, am := range aliasModels {
+			if am == nil || aliasHasFrameGroup(am) || aliasSkins[i] == nil {
+				continue
+			}
+			gm[i] = &worldview.AliasModel{Path: fmt.Sprintf("model %d", i), M: am, Skins: []*render.Pic{aliasSkins[i]}}
+			n++
+		}
+		if err := ed.SetAliasModels(gm); err != nil {
+			logf("GPU entities unavailable (%v): the CPU draws the alias entities", err)
+		} else {
+			gpuEnt, gpuModels = ed, gm
+			logf("GPU entities: %d alias models on the GPU (the rest, with animated frame groups, stay on the CPU)", n)
+		}
+	}
 
 	bspBytes, size, err := loadBSP(pakFS, opts.mapFile, logf)
 	if err != nil {
@@ -710,86 +770,24 @@ func setupRenderer(opts setupRendererOpts) error {
 			}
 		}
 
-		gpuLit := false
-		if wd := opts.worldDraw; wd != nil {
-			if ls, ok := wd.(LightStyler); ok {
-				ls.SetLightStyles(styleAt)
-			}
-			if dl, ok := wd.(DynamicLighter); ok {
-				dl.SetDLights(&runner.Client.DLights, dlNow)
-			}
-			if err := wd.DrawWorld(fb, origin, viewAngles, fovX, turbTimeSec); err != nil {
-				logf("GPU world: %v (this frame's lit faces fall back to the CPU)", err)
-			} else {
-				gpuLit = true
-			}
-		}
-		if gpuLit && opts.worldCheck != nil {
-			// Check mode: finish the GPU-mode frame (sky and water on the CPU),
-			// keep it, draw the whole world on the CPU into a cleared frame, hand
-			// both to the check, and put the GPU-mode frame back.
-			drawFaces(true)
-			gpuFrame = append(gpuFrame[:0], fb.Pixels...)
-			for i := range fb.Pixels {
-				fb.Pixels[i] = 0x10
-			}
-			drawFaces(false)
-			opts.worldCheck(fb, gpuFrame)
-			copy(fb.Pixels, gpuFrame)
-		} else {
-			drawFaces(gpuLit)
-		}
-
-		worldSurf.endFrame()
-		runner.Timer.Mark(render.StageWorld)
-
-		// Per-tic projectile trail emission.
-		trailNow := runner.Client.MsgTime
-		if realHost != nil && runner.ParticlePool != nil {
-			precache := realHost.Server.ModelPrecache
-			seenThisTic := make(map[int]struct{}, len(runner.Client.Entities))
-			for entNum, es := range runner.Client.Entities {
-				seenThisTic[entNum] = struct{}{}
-				if es.ModelIdx <= 0 || es.ModelIdx >= len(precache) {
-					continue
-				}
-				kind, ok := trailKindForModel(precache[es.ModelIdx])
-				if !ok {
-					continue
-				}
-				prev, hadPrev := prevEntityOrigin[entNum]
-				prevEntityOrigin[entNum] = es.Origin
-				if !hadPrev {
-					continue
-				}
-				runner.ParticlePool.EmitTrail(prev, es.Origin, kind, trailNow, particleRNG)
-			}
-			for k := range prevEntityOrigin {
-				if _, ok := seenThisTic[k]; !ok {
-					delete(prevEntityOrigin, k)
-				}
-			}
-		}
-
-		// Alias-model pass.
+		// What the alias pass draws for an entity: the model and skin, the frames
+		// and their blend, the light and the dynamic-light levels. dl is the scratch
+		// the levels are appended to (nil: a slice of their own).
 		const aliasFramePeriod = float32(0.1)
-		aliasShade := render.AliasShadeRange{
-			Ambient:   0.3,
-			DirectMin: 0.0,
-			DirectMax: 0.7,
-			LightDir:  [3]float32{0, 0, -1},
-		}
 		now := runner.Client.MsgTime
 		var dlScratch [client.MaxDLights]int
-		aliasRendered := 0
-		var (
-			sampleES   client.EntityState
-			sampleAM   *mdl.Model
-			haveSample bool
-		)
-		for _, es := range runner.Client.Entities {
+		type aliasItem struct {
+			es                client.EntityState
+			am                *mdl.Model
+			skin              *render.Pic
+			ent               render.AliasEntityInterp
+			light             int
+			prevIdx, frameIdx int
+			lerp              float32
+		}
+		plan := func(es client.EntityState, dl []int) (aliasItem, bool) {
 			if es.ModelIdx <= 0 || es.ModelIdx >= len(aliasModels) {
-				continue
+				return aliasItem{}, false
 			}
 			// PVS cull: skip entities whose origin falls in a leaf
 			// the world walk did NOT mark visible this frame. Without
@@ -801,11 +799,11 @@ func setupRenderer(opts setupRendererOpts) error {
 			// scenes (which mark every leaf visible above) trivially
 			// pass.
 			if !aliasEntityVisible(bm, es.Origin, stampFrame) {
-				continue
+				return aliasItem{}, false
 			}
 			am := aliasModels[es.ModelIdx]
 			if am == nil {
-				continue
+				return aliasItem{}, false
 			}
 			skin := aliasSkins[es.ModelIdx]
 			if skin == nil {
@@ -840,10 +838,149 @@ func setupRenderer(opts setupRendererOpts) error {
 				},
 				FrameIdxNext: frameIdx,
 				Lerp:         lerp,
-				DLights:      aliasDLights(dlScratch[:0], es.Origin, &runner.Client.DLights, now),
+				DLights:      aliasDLights(dl, es.Origin, &runner.Client.DLights, now),
 			}
 			light := lightSampler.LightPointOr(es.Origin, func(s byte) int { return lightStyleOf(runner.Client, s, now) }, render.AliasStandInLight)
-			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, am, skin, ent); err != nil {
+			return aliasItem{es: es, am: am, skin: skin, ent: ent, light: light, prevIdx: prevIdx, frameIdx: frameIdx, lerp: lerp}, true
+		}
+		drawItem := func(it aliasItem) error {
+			return render.DrawAliasInterpQuake(fb, rd, &cm, it.light, false, it.am, it.skin, it.ent)
+		}
+		// The entities the GPU draws, if it can: not the ones the software pass
+		// draws by recursive subdivision (far models), whose points the GPU does
+		// not reproduce.
+		var gpuItems []aliasItem
+		gpuKeys := map[int]bool{}
+		if gpuEnt != nil {
+			var ents []worldview.AliasEnt
+			for entNum, es := range runner.Client.Entities {
+				if es.ModelIdx <= 0 || es.ModelIdx >= len(gpuModels) || gpuModels[es.ModelIdx] == nil {
+					continue
+				}
+				it, ok := plan(es, nil)
+				if !ok {
+					continue
+				}
+				if draw, accept := render.AliasClassify(fb.Width, fb.Height, rd, it.am, it.ent); !draw || accept == render.AliasFarSubdiv {
+					continue
+				}
+				gpuItems = append(gpuItems, it)
+				gpuKeys[entNum] = true
+				ents = append(ents, worldview.AliasEnt{Model: gpuModels[es.ModelIdx], Origin: es.Origin, Angles: es.Angles,
+					Frame: it.prevIdx, Next: it.frameIdx, Lerp: it.lerp, Light: it.light, DLights: it.ent.DLights})
+			}
+			minEnts := opts.minGPUEntities
+			if minEnts <= 0 {
+				minEnts = DefaultMinGPUEntities
+			}
+			if len(ents) < minEnts { // too few to pay for the layer: the CPU draws them
+				ents, gpuItems = nil, nil
+				clear(gpuKeys)
+			}
+			gpuEnt.SetEntities(ents)
+		}
+
+		gpuLit := false
+		if wd := opts.worldDraw; wd != nil {
+			if ls, ok := wd.(LightStyler); ok {
+				ls.SetLightStyles(styleAt)
+			}
+			if dl, ok := wd.(DynamicLighter); ok {
+				dl.SetDLights(&runner.Client.DLights, dlNow)
+			}
+			if err := wd.DrawWorld(fb, origin, viewAngles, fovX, turbTimeSec); err != nil {
+				logf("GPU world: %v (this frame's lit faces fall back to the CPU)", err)
+			} else {
+				gpuLit = true
+			}
+		}
+		if gpuLit && opts.worldCheck != nil {
+			// Check mode: finish the GPU-mode frame (sky and water on the CPU),
+			// keep it, draw the whole world on the CPU into a cleared frame, hand
+			// both to the check, and put the GPU-mode frame back.
+			drawFaces(true)
+			if gpuEnt != nil {
+				gpuEnt.CompositeEntities(fb)
+			}
+			gpuFrame = append(gpuFrame[:0], fb.Pixels...)
+			for i := range fb.Pixels {
+				fb.Pixels[i] = 0x10
+			}
+			drawFaces(false)
+			var cpuNoEnt []byte
+			if gpuEnt != nil && opts.entityCheck != nil {
+				cpuNoEnt = append([]byte(nil), fb.Pixels...)
+			}
+			for _, it := range gpuItems { // the entities the GPU drew, on the CPU
+				_ = drawItem(it)
+			}
+			if cpuNoEnt != nil {
+				opts.entityCheck(fb, cpuNoEnt, gpuFrame)
+			}
+			opts.worldCheck(fb, gpuFrame)
+			copy(fb.Pixels, gpuFrame)
+		} else {
+			drawFaces(gpuLit)
+			if gpuLit && gpuEnt != nil {
+				gpuEnt.CompositeEntities(fb)
+			}
+		}
+		skipGPUEntities := gpuLit && gpuEnt != nil
+
+		worldSurf.endFrame()
+		runner.Timer.Mark(render.StageWorld)
+
+		// Per-tic projectile trail emission.
+		trailNow := runner.Client.MsgTime
+		if realHost != nil && runner.ParticlePool != nil {
+			precache := realHost.Server.ModelPrecache
+			seenThisTic := make(map[int]struct{}, len(runner.Client.Entities))
+			for entNum, es := range runner.Client.Entities {
+				seenThisTic[entNum] = struct{}{}
+				if es.ModelIdx <= 0 || es.ModelIdx >= len(precache) {
+					continue
+				}
+				kind, ok := trailKindForModel(precache[es.ModelIdx])
+				if !ok {
+					continue
+				}
+				prev, hadPrev := prevEntityOrigin[entNum]
+				prevEntityOrigin[entNum] = es.Origin
+				if !hadPrev {
+					continue
+				}
+				runner.ParticlePool.EmitTrail(prev, es.Origin, kind, trailNow, particleRNG)
+			}
+			for k := range prevEntityOrigin {
+				if _, ok := seenThisTic[k]; !ok {
+					delete(prevEntityOrigin, k)
+				}
+			}
+		}
+
+		// Alias-model pass.
+		aliasShade := render.AliasShadeRange{
+			Ambient:   0.3,
+			DirectMin: 0.0,
+			DirectMax: 0.7,
+			LightDir:  [3]float32{0, 0, -1},
+		}
+		aliasRendered := 0
+		var (
+			sampleES   client.EntityState
+			sampleAM   *mdl.Model
+			haveSample bool
+		)
+		for entNum, es := range runner.Client.Entities {
+			if skipGPUEntities && gpuKeys[entNum] {
+				continue // drawn by the GPU, in the entity layer
+			}
+			it, ok := plan(es, dlScratch[:0])
+			if !ok {
+				continue
+			}
+			am, prevIdx, frameIdx, lerp := it.am, it.prevIdx, it.frameIdx, it.lerp
+			if err := drawItem(it); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit modelIdx=%d from=%d to=%d lerp=%v err: %v",
 						es.ModelIdx, prevIdx, frameIdx, lerp, err)

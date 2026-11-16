@@ -7,6 +7,7 @@ package gpuworld
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/go-gfx/webgpu"
 
@@ -24,6 +25,63 @@ type aliasGPU struct {
 	ents  *webgpu.Buffer
 	data  []byte
 	draws []AliasDraw
+	pl    *webgpu.PipelineLayout
+}
+
+// aliasEntityShader is the alias shader for the entity layer: a texel of 255
+// would read as EntityClear, so the layer's shader writes 254 for it.
+func aliasEntityShader() string {
+	const ret = "return vec4u(textureLoad(cmap, vec2u(texel, row), 0).r, 0u, 0u, 0u);"
+	return strings.Replace(AliasShaderWGSL, ret, "return vec4u(min(textureLoad(cmap, vec2u(texel, row), 0).r, 254u), 0u, 0u, 0u);", 1)
+}
+
+// EnableAliasLayer (after [Renderer.EnableAlias]) gives the entities a pass of
+// their own, into a second index texture cleared to [EntityClear]: the world's
+// pass then has none, and [Renderer.DrawReadLayers] returns both.
+func (r *Renderer) EnableAliasLayer() error {
+	a := r.alias
+	if a == nil {
+		return fmt.Errorf("gpuworld: EnableAliasLayer before EnableAlias")
+	}
+	dev := r.dev
+	var err error
+	if r.entTarget, err = dev.CreateTexture(webgpu.TextureDescriptor{Label: "entity indices", Size: webgpu.Extent3D{Width: uint32(r.width), Height: uint32(r.height)},
+		Format: webgpu.TextureFormatR8Uint, Usage: webgpu.TextureUsageRenderAttachment | webgpu.TextureUsageTextureBinding | webgpu.TextureUsageCopySrc}); err != nil {
+		return err
+	}
+	tv, err := r.entTarget.CreateView(nil)
+	if err != nil {
+		return err
+	}
+	r.entPass = webgpu.RenderPassDescriptor{ColorAttachments: []*webgpu.RenderPassColorAttachment{{View: tv, LoadOp: webgpu.LoadOpClear,
+		StoreOp: webgpu.StoreOpStore, ClearValue: webgpu.Color{R: EntityClear}}}}
+	mod, err := dev.CreateShaderModule(webgpu.ShaderModuleDescriptor{Label: "alias layer", Code: aliasEntityShader()})
+	if err != nil {
+		return err
+	}
+	if r.entPipe, err = dev.CreateRenderPipeline(webgpu.RenderPipelineDescriptor{
+		Layout:    a.pl,
+		Vertex:    webgpu.VertexState{Module: mod, EntryPoint: "vs"},
+		Primitive: webgpu.PrimitiveState{Topology: webgpu.PrimitiveTopologyTriangleList, CullMode: webgpu.CullModeNone},
+		Fragment:  &webgpu.FragmentState{Module: mod, EntryPoint: "fs", Targets: []webgpu.ColorTargetState{{Format: webgpu.TextureFormatR8Uint}}},
+	}); err != nil {
+		return err
+	}
+	r.layered = true
+	return nil
+}
+
+// recordAliasLayer is the entities' pass of a layered frame.
+func (r *Renderer) recordAliasLayer() error {
+	p := r.rec.BeginRenderPass(r.entPass)
+	if a := r.alias; a != nil && len(a.draws) > 0 {
+		p.SetPipeline(r.entPipe)
+		p.SetBindGroup(0, a.group)
+		for _, d := range a.draws {
+			p.Draw(d.Count, 1, d.First, d.Instance)
+		}
+	}
+	return p.End()
 }
 
 // EnableAlias uploads the alias models of set and builds the alias
@@ -82,6 +140,7 @@ func (r *Renderer) EnableAlias(set *AliasSet) error {
 	if err != nil {
 		return err
 	}
+	a.pl = pl
 	if a.group, err = dev.CreateBindGroup(webgpu.BindGroupDescriptor{Layout: bgl, Entries: []webgpu.BindGroupEntry{
 		{Binding: 0, Buffer: r.ub}, {Binding: 1, TextureView: sv}, {Binding: 2, TextureView: r.cmView},
 		{Binding: 3, Buffer: poses}, {Binding: 4, Buffer: corners}, {Binding: 5, Buffer: a.ents},
