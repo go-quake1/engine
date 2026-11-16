@@ -68,7 +68,7 @@ jobs:
         run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime "$FUZZTIME" -parallel 2 ${{ matrix.pkg }}
       - name: the crashing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crasher-${{ matrix.target }}
           path: '**/testdata/fuzz/${{ matrix.target }}/*'
