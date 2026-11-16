@@ -124,49 +124,70 @@ func Paint(pool *Pool, output []StereoSample, numFrames int) error {
 		if ch.Free() {
 			continue
 		}
-		// How many frames this channel contributes before it ends.
-		// EndPos is the absolute sample index at which playback
-		// halts; mix min(remaining, numFrames) samples then let the
-		// stop-check below retire the slot if we've consumed it.
-		remaining := ch.EndPos - ch.Position
-		count := numFrames
-		if remaining < count {
-			count = remaining
-		}
-
-		data := ch.Sfx.Data
-		pos := ch.Position
-		lv := int32(ch.LeftVol)
-		rv := int32(ch.RightVol)
-		switch ch.Sfx.BitsPerSam {
-		case 8:
-			// 8-bit signed bytes; one byte per sample.
-			for j := 0; j < count; j++ {
-				s := int32(int8(data[pos+j]))
-				output[j].L += int16(s * lv / 256)
-				output[j].R += int16(s * rv / 256)
+		// Paint numFrames frames from this channel. EndPos is the
+		// sample index at which playback halts: a channel that gets
+		// there is retired, unless it is looping, in which case it
+		// restarts at the sample's LoopStart and the rest of the
+		// frames come from there (as many wraps as the frames need).
+		// tyrquake: S_PaintChannels, "if at end of loop, restart"
+		// (snd_mix.c): `if (ch->looping && sc->loopstart >= 0) {
+		// ch->pos = sc->loopstart; ch->end = ltime + sc->length - ch->pos;
+		// } else { ch->sfx = NULL; break; }`.
+		done := 0
+		for done < numFrames {
+			remaining := ch.EndPos - ch.Position
+			count := numFrames - done
+			if remaining < count {
+				count = remaining
 			}
-		case 16:
-			// 16-bit signed little-endian; two bytes per sample.
-			// int32 widen on the multiply avoids int16 overflow
-			// (int16 * int16 can exceed int16 range); `>> 8`
-			// brings the result to the 8-bit path's scale so
-			// downstream clamp + transfer logic is bit-depth-
-			// agnostic.
-			for j := 0; j < count; j++ {
-				off := (pos + j) * 2
-				s := int32(int16(binary.LittleEndian.Uint16(data[off : off+2])))
-				output[j].L += int16(s * lv >> 8)
-				output[j].R += int16(s * rv >> 8)
+			if count > 0 {
+				paintSamples(ch, output[done:done+count])
+				ch.Position += count
+				done += count
 			}
-		}
-
-		ch.Position += numFrames
-		if ch.Position >= ch.EndPos {
-			ch.Stop()
+			if ch.Position >= ch.EndPos {
+				// A loop point at or past the end would never advance:
+				// treat it as not looped rather than spin.
+				if ch.Looping && ch.Sfx.LoopStart >= 0 && ch.Sfx.LoopStart < ch.EndPos {
+					ch.Position = ch.Sfx.LoopStart
+					continue
+				}
+				ch.Stop()
+				break
+			}
 		}
 	}
 	return nil
+}
+
+// paintSamples mixes len(out) samples of ch, from ch.Position, into out.
+func paintSamples(ch *Channel, out []StereoSample) {
+	data := ch.Sfx.Data
+	pos := ch.Position
+	lv := int32(ch.LeftVol)
+	rv := int32(ch.RightVol)
+	switch ch.Sfx.BitsPerSam {
+	case 8:
+		// 8-bit signed bytes; one byte per sample.
+		for j := range out {
+			s := int32(int8(data[pos+j]))
+			out[j].L += int16(s * lv / 256)
+			out[j].R += int16(s * rv / 256)
+		}
+	case 16:
+		// 16-bit signed little-endian; two bytes per sample.
+		// int32 widen on the multiply avoids int16 overflow
+		// (int16 * int16 can exceed int16 range); `>> 8`
+		// brings the result to the 8-bit path's scale so
+		// downstream clamp + transfer logic is bit-depth-
+		// agnostic.
+		for j := range out {
+			off := (pos + j) * 2
+			s := int32(int16(binary.LittleEndian.Uint16(data[off : off+2])))
+			out[j].L += int16(s * lv >> 8)
+			out[j].R += int16(s * rv >> 8)
+		}
+	}
 }
 
 // ClampToInt8 converts the int16 stereo accumulator to int8 PCM,

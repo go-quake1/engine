@@ -16,6 +16,7 @@ var (
 	wavMagicFmt  = [4]byte{'f', 'm', 't', ' '}
 	wavMagicData = [4]byte{'d', 'a', 't', 'a'}
 	wavMagicCue  = [4]byte{'c', 'u', 'e', ' '}
+	wavMagicList = [4]byte{'L', 'I', 'S', 'T'}
 )
 
 // WAV format codes (a tiny subset; Quake assets are always PCM).
@@ -79,6 +80,7 @@ func LoadWav(name string, blob []byte) (*Sample, error) {
 		dataOffset int
 		dataLength int
 		loopStart  = -1
+		markEnd    = 0 // loopstart + the loop length of a "mark" in a LIST chunk, 0: none
 	)
 	for pos+8 <= len(blob) {
 		var id [4]byte
@@ -113,6 +115,15 @@ func LoadWav(name string, blob []byte) (*Sample, error) {
 			if bodyEnd-bodyStart >= 4+24 {
 				loopStart = int(binary.LittleEndian.Uint32(blob[bodyStart+24 : bodyStart+28]))
 			}
+		case wavMagicList:
+			// A LIST chunk after the cue chunk may carry a loop-length
+			// marker; tyrquake's GetWavinfo ("this is not a proper
+			// parse, but it works with cooledit"): "mark" at +20 of the
+			// body, the samples in the loop at +16. The sound then ends
+			// at loopstart + that length.
+			if loopStart >= 0 && bodyEnd-bodyStart >= 24 && string(blob[bodyStart+20:bodyStart+24]) == "mark" {
+				markEnd = loopStart + int(binary.LittleEndian.Uint32(blob[bodyStart+16:bodyStart+20]))
+			}
 		}
 		// Chunks pad to even-byte boundaries on the wire.
 		pos = bodyEnd
@@ -135,6 +146,11 @@ func LoadWav(name string, blob []byte) (*Sample, error) {
 	}
 
 	numSamples := dataLength / (bitsPerSam / 8)
+	// The loop marker ends the sound early (info.samples in GetWavinfo; a
+	// marker past the data is a bad loop length there, ignored here).
+	if markEnd > 0 && markEnd < numSamples {
+		numSamples = markEnd
+	}
 	pcm := make([]byte, dataLength)
 	copy(pcm, blob[dataOffset:dataOffset+dataLength])
 	if bitsPerSam == 8 {
