@@ -112,7 +112,8 @@ var openSurface func(w, h int) (*gpuSurface, error)
 func RootCmd() *cobra.Command {
 	var pakPath, mapSlug string
 	var w, h, worldref, frames int
-	var gpuWorld, gpuCheck, cpuWorld bool
+	var gpuWorld, gpuCheck, cpuWorld, corruptSkins bool
+	var minEnts int
 	c := &cobra.Command{
 		Use:           "quake-wctr",
 		Short:         "Quake in a wasmcontainers playground container: the game on a wasi-gfx surface, from the main menu",
@@ -132,6 +133,9 @@ func RootCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("quake-wctr: %s: %w", pakPath, err)
 			}
+			if corruptSkins && !gpuCheck {
+				return errors.New("quake-wctr: --corrupt-gpu-skins needs --gpuworld-check")
+			}
 			if cpuWorld && (gpuWorld || gpuCheck) {
 				return errors.New("quake-wctr: --cpuworld excludes --gpuworld and --gpuworld-check")
 			}
@@ -148,7 +152,7 @@ func RootCmd() *cobra.Command {
 				}
 				return runWorldref(cmd.OutOrStdout(), p, slug, worldref, w, h, gpuWorld, frames)
 			}
-			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck, auto: !cpuWorld})
+			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck, auto: !cpuWorld, corruptSkins: corruptSkins, minGPUEntities: minEnts})
 		},
 	}
 	fl := c.Flags()
@@ -158,6 +162,8 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&h, "height", 400, "frame height")
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
+	fl.BoolVar(&corruptSkins, "corrupt-gpu-skins", false, "with --gpuworld-check: the planted defect of the entity check, the GPU draws the alias entities with every skin index shifted by 16, which the check must fail")
+	fl.IntVar(&minEnts, "min-gpu-entities", 0, "the fewest alias entities in a frame for which the GPU draws them (0: 3; the entity layer costs a second pass and read-back, so a frame with fewer keeps them on the CPU; --gpuworld-check uses 1)")
 	fl.BoolVar(&cpuWorld, "cpuworld", false, "in the game loop, draw the world on the CPU even when a GPU is granted (by default the GPU draws it, and the CPU when none is granted)")
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
 	fl.BoolVar(&fixedMixer, "fixed-mixer", false, "paint a fixed 512 mix frames every tic instead of pacing the mixer to the sound output's queue (what the game did before the pacing; for measuring the real-time ratio)")
@@ -336,10 +342,14 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 			return err
 		default:
 			defer gw.Close()
+			gw.corrupt = g.corruptSkins
+			so.MinGPUEntities = g.minGPUEntities
 			so.WorldDraw = gw
 			if g.check {
-				stats = &checkStats{}
+				stats = &checkStats{ents: gw}
 				so.WorldCheck = stats.add
+				so.EntityCheck = stats.addEntities
+				so.MinGPUEntities = 1 // the check draws every entity on the GPU: a frame with one is a test of it
 			}
 		}
 	}

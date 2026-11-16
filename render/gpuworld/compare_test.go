@@ -5,6 +5,17 @@ package gpuworld
 
 import "testing"
 
+// TestCompositeLayer: only the texels an entity drew (not EntityClear) go over
+// the frame, in a frame whose rows are wider than the layer's.
+func TestCompositeLayer(t *testing.T) {
+	dst := []byte{1, 1, 1, 9, 1, 1, 1, 9}
+	layer := []byte{EntityClear, 7, EntityClear, 0, EntityClear, EntityClear}
+	CompositeLayer(dst, 4, layer, 3, 2)
+	if want := []byte{1, 7, 1, 9, 0, 1, 1, 9}; string(dst) != string(want) {
+		t.Errorf("%v, want %v", dst, want)
+	}
+}
+
 func TestCompare(t *testing.T) {
 	const w, h, pitch = 8, 4, 10
 	ref := make([]byte, pitch*h)

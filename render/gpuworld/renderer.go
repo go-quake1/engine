@@ -39,6 +39,15 @@ type Renderer struct {
 	cur      worldview.View
 	readBuf  *webgpu.Buffer // DrawRead's MAP_READ buffer
 
+	// The entity layer ([Renderer.EnableAliasLayer]): the alias entities go in a
+	// pass of their own into a second index texture, cleared to EntityClear, so
+	// that the caller composites them over what it draws after the world.
+	layered   bool
+	entTarget *webgpu.Texture
+	entPipe   *webgpu.RenderPipeline
+	entPass   webgpu.RenderPassDescriptor
+	entRead   *webgpu.Buffer
+
 	surfTex, surfLowTex *webgpu.Texture // the surface atlases, rewritten where a surface is re-baked
 	// NoAnimate leaves the surfaces as baked (the planted defect of the
 	// animation check): a frame does not upload the re-baked rectangles.
@@ -280,8 +289,16 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 		}
 	}
 	r.recordSpecial(p)
-	r.recordAlias(p)
-	return p.End()
+	if !r.layered {
+		r.recordAlias(p)
+	}
+	if err := p.End(); err != nil {
+		return err
+	}
+	if r.layered {
+		return r.recordAliasLayer()
+	}
+	return nil
 }
 
 // BakeTime is the time the last frame spent baking the surfaces it re-baked
@@ -357,6 +374,57 @@ func (r *Renderer) DrawRead(v worldview.View) ([]byte, error) {
 		return nil, err
 	}
 	return Depad(make([]byte, 0, r.width*r.height), b, r.width, pitch, r.height), nil
+}
+
+// DrawReadLayers is DrawRead with the alias entities ents in a layer of their
+// own ([Renderer.EnableAliasLayer]): the world's index frame and the entity
+// layer (EntityClear where nothing was drawn) come back from one submit, so
+// that the caller can draw what it keeps on the CPU (the sky and water) between
+// them. Both must fit the host's read window together.
+func (r *Renderer) DrawReadLayers(v worldview.View, ents []worldview.AliasEnt) (world, layer []byte, err error) {
+	if !r.layered {
+		return nil, nil, fmt.Errorf("gpuworld: DrawReadLayers without EnableAliasLayer")
+	}
+	pitch := Pitch(r.width)
+	if 2*pitch*r.height > ReadWindow {
+		return nil, nil, fmt.Errorf("gpuworld: a %dx%d frame and its entity layer (%d padded bytes) do not fit the %d-byte read window of one submit", r.width, r.height, 2*pitch*r.height, ReadWindow)
+	}
+	mk := func(label string) (*webgpu.Buffer, error) {
+		return r.dev.CreateBuffer(webgpu.BufferDescriptor{Label: label, Size: uint64(pitch * r.height),
+			Usage: webgpu.BufferUsageMapRead | webgpu.BufferUsageCopyDst})
+	}
+	if r.readBuf == nil {
+		if r.readBuf, err = mk("world readback"); err != nil {
+			return nil, nil, err
+		}
+	}
+	if r.entRead == nil {
+		if r.entRead, err = mk("entity layer readback"); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := r.record(v, ents); err != nil {
+		return nil, nil, err
+	}
+	layout := webgpu.TexelCopyBufferLayout{BytesPerRow: uint32(pitch), RowsPerImage: uint32(r.height)}
+	size := webgpu.Extent3D{Width: uint32(r.width), Height: uint32(r.height)}
+	r.rec.CopyTextureToBuffer(webgpu.TexelCopyTextureInfo{Texture: r.target}, r.readBuf, layout, size)
+	r.rec.CopyTextureToBuffer(webgpu.TexelCopyTextureInfo{Texture: r.entTarget}, r.entRead, layout, size)
+	rbW := r.rec.ReadBuffer(r.readBuf, 0, uint64(pitch*r.height))
+	rbE := r.rec.ReadBuffer(r.entRead, 0, uint64(pitch*r.height))
+	if _, err := r.rec.Submit(); err != nil {
+		return nil, nil, err
+	}
+	bw, err := rbW.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	be, err := rbE.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	return Depad(make([]byte, 0, r.width*r.height), bw, r.width, pitch, r.height),
+		Depad(make([]byte, 0, r.width*r.height), be, r.width, pitch, r.height), nil
 }
 
 // Wait blocks until the GPU has finished every frame submitted.

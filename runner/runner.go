@@ -130,6 +130,18 @@ type SetupOpts struct {
 	// shown is the WorldDraw one.
 	WorldCheck func(cpu *render.FrameBuffer, gpu []byte)
 
+	// EntityCheck, if set with WorldCheck and a WorldDraw that is an
+	// [EntityDrawer], is called in the same frames with the all-CPU frame, the
+	// all-CPU frame before its alias entities (the GPU drew some of them) and
+	// the GPU-mode frame: what the entities changed on each side is what to compare.
+	EntityCheck func(cpu *render.FrameBuffer, cpuNoEntities, gpu []byte)
+
+	// MinGPUEntities is the fewest alias entities in a frame for which the GPU
+	// draws them (0: [DefaultMinGPUEntities]): the entity layer costs a second
+	// pass and a second read-back whatever it holds, which the software pass
+	// does not, so a frame with fewer entities keeps them on the CPU.
+	MinGPUEntities int
+
 	// Logf is the engine's bring-up log sink. nil = fmt.Printf with a
 	// "QUAKE: " prefix.
 	Logf func(format string, args ...any)
@@ -503,6 +515,8 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		mapFile:         renderMapFile(renderSlug),
 		worldDraw:       opts.WorldDraw,
 		worldCheck:      opts.WorldCheck,
+		entityCheck:     opts.EntityCheck,
+		minGPUEntities:  opts.MinGPUEntities,
 	}); err != nil {
 		return nil, fmt.Errorf("setupRenderer: %w", err)
 	}
