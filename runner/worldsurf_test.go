@@ -10,6 +10,7 @@ import (
 	"github.com/go-quake1/engine/assets"
 	"github.com/go-quake1/engine/bench"
 	"github.com/go-quake1/engine/bsprender"
+	"github.com/go-quake1/engine/client"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/vfs"
 	"github.com/go-quake1/engine/worldview"
@@ -41,7 +42,7 @@ func loadE1M1(t testing.TB) (*worldview.World, *render.ColorMap) {
 // drawRunnerWorld draws the faces the reference draws with the runner's
 // worldSurfaces, in the given order (forward: the reference's; reverse: the
 // runner's painter's order).
-func drawRunnerWorld(t testing.TB, ws *worldSurfaces, w *worldview.World, cm *render.ColorMap, v worldview.View, fb *render.FrameBuffer, reverse bool, style func(byte) int) {
+func drawRunnerWorld(t testing.TB, ws *worldSurfaces, w *worldview.World, cm *render.ColorMap, v worldview.View, fb *render.FrameBuffer, reverse bool, style func(byte) int, lights ...*[client.MaxDLights]client.DLight) {
 	t.Helper()
 	for i := range fb.Pixels {
 		fb.Pixels[i] = worldview.ClearIndex
@@ -56,6 +57,9 @@ func drawRunnerWorld(t testing.TB, ws *worldSurfaces, w *worldview.World, cm *re
 	}
 	view := rd.SetupView()
 	ws.beginFrame(fb.Width, fb.Height, w.FOV)
+	if len(lights) > 0 {
+		ws.pushDlights(lights[0], 0)
+	}
 	allFaces, _ := w.File.Faces()
 	planes, _ := w.File.Planes()
 	for n := range faces {

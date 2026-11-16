@@ -14,6 +14,8 @@ import (
 var (
 	benchDir  = flag.String("wc.dir", ".", "the quake-worldcheck directory whose program BenchmarkWorldPass builds and runs in the browser (a clean clone of a tag, for abbench's base side)")
 	benchAnim = flag.Bool("wc.anim", false, "BenchmarkWorldPass draws with the light styles and '+' textures moving (--anim): the program must know the flag")
+
+	benchDLights = flag.Bool("wc.dlights", false, "BenchmarkWorldPass draws with a muzzle flash, a rocket and an explosion around each view (--dlights): the program must know the flag")
 )
 
 // BenchmarkWorldPass is one browser run of the world benchmark (1280x800, the
@@ -33,6 +35,9 @@ func BenchmarkWorldPass(b *testing.B) {
 	args := []string{"--bench", "--width", "1280", "--height", "800"}
 	if *benchAnim {
 		args = append(args, "--anim")
+	}
+	if *benchDLights {
+		args = append(args, "--dlights")
 	}
 	for i := 0; i < b.N; i++ {
 		raw := runInBrowserIn(b, *benchDir, args...)

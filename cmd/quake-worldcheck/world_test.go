@@ -81,6 +81,32 @@ func TestAnimatedWorldMatches(t *testing.T) {
 		v.Frames, float64(v.Moved)/float64(v.Pixels), v.Uploaded, v.UploadedBytes, v.MaxFrameBytes)
 }
 
+// TestDynamicLightsMatch: a muzzle flash, a rocket and its explosion
+// (--dlights: R_PushDlights, R_MarkLights, the dynamic light term of
+// R_BuildLightMap on the reference and on the GPU) around each of the 16 fixed
+// views; the GPU still matches, and the lights do change the picture.
+func TestDynamicLightsMatch(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--dlights")
+	if v.Check != "PASS" || v.Faces == 0 {
+		t.Fatalf("verdict %+v", v)
+	}
+	if rate := float64(v.Moved) / float64(v.Pixels); rate < 0.05 || v.Uploaded == 0 {
+		t.Fatalf("the lights move only %.4f of the reference's pixels (%d surfaces uploaded): the views do not show them", rate, v.Uploaded)
+	}
+	t.Logf("the lights move %.3f of the reference's pixels; %d surfaces (%d bytes) uploaded over %d frames, at most %d bytes in a frame",
+		float64(v.Moved)/float64(v.Pixels), v.Uploaded, v.UploadedBytes, v.Frames, v.MaxFrameBytes)
+}
+
+// TestNoDynamicLightsFails is the planted negative of the dynamic lights: the
+// GPU bakes its surfaces without them (--noDlights) while the reference has
+// them, and the comparison must fail.
+func TestNoDynamicLightsFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--dlights", "--noDlights")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a GPU without the dynamic lights was not caught: %+v", v)
+	}
+}
+
 // TestStaticAtlasFails is the planted negative of the animation: the GPU keeps
 // the surfaces it baked once (--noAnimate) while the reference animates, and the
 // comparison must fail.

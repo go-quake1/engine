@@ -119,6 +119,22 @@ type SurfaceDesc struct {
 	Samples []byte
 	Styles  [4]byte // surf->styles; 255 ends the list
 	Texture *SurfaceTexture
+
+	// Plane is surf->plane and TexVecs surf->texinfo->vecs (s and t, each x, y,
+	// z and the offset): what R_AddDynamicLights reads to place a light on the
+	// surface. DLightFrame and DLightBits are surf->dlightframe and dlightbits,
+	// written by R_MarkLights (bsprender.MarkLights): the surface is lit by the
+	// lights in DLightBits when DLightFrame is the frame being drawn.
+	Plane       Plane
+	TexVecs     [2][4]float32
+	DLightFrame int32
+	DLightBits  uint32
+}
+
+// DLit reports whether the surface is lit by a dynamic light in the frame env
+// draws: surf->dlightframe == r_framecount, with lights to read.
+func (d *SurfaceDesc) DLit(env *SurfaceEnv) bool {
+	return env.DLights != nil && d.DLightFrame == env.FrameCount
 }
 
 // SurfaceEnv is the renderer state R_BuildLightMap reads besides the surface.
@@ -130,6 +146,11 @@ type SurfaceEnv struct {
 	HaveLightData bool
 	// Fullbright is the r_fullbright cvar.
 	Fullbright bool
+	// DLights is cl_dlights and FrameCount r_framecount: surfaces whose
+	// DLightFrame is FrameCount add the lights of their DLightBits. Nil
+	// DLights: no dynamic lights.
+	DLights    []DLight
+	FrameCount int32
 }
 
 // Errors of the surface port.
@@ -148,7 +169,8 @@ var (
 // 8.8 fixed point with the ambient level, then bounded, inverted and shifted
 // into colormap rows (t = (255 * 256 - sum) >> (8 - VID_CBITS), not below
 // 1 << 6). blocklights gets (Extents[0]>>4 + 1) * (Extents[1]>>4 + 1)
-// values. Dynamic lights are not added (R_AddDynamicLights is not ported).
+// values. A surface that [SurfaceDesc.DLit] has the dynamic lights of its
+// DLightBits added before the bound ([AddDynamicLights]).
 func BuildLightMap(blocklights []uint32, d *SurfaceDesc, lightadj [4]int, env *SurfaceEnv) error {
 	smax := (d.Extents[0] >> 4) + 1
 	tmax := (d.Extents[1] >> 4) + 1
@@ -177,6 +199,9 @@ func BuildLightMap(blocklights []uint32, d *SurfaceDesc, lightadj [4]int, env *S
 			}
 			lightmap = lightmap[size:]
 		}
+	}
+	if d.DLit(env) {
+		AddDynamicLights(blocklights, d, env.DLights)
 	}
 	for i := 0; i < size; i++ {
 		t := (255*256 - int(int32(blocklights[i]))) >> (8 - 6)
@@ -465,8 +490,8 @@ func (c *SurfaceCache) Cache(f *SurfaceFace, mip int, lightadj [4]int, env *Surf
 		return nil, ErrSurfaceMip
 	}
 	cache := f.spots[mip]
-	// dlights are not ported, so surface->dlightframe never equals r_framecount.
-	if cache != nil && !cache.Dlight && cache.Texture == f.Desc.Texture && cache.LightAdj == lightadj {
+	dlit := f.Desc.DLit(env)
+	if cache != nil && !cache.Dlight && !dlit && cache.Texture == f.Desc.Texture && cache.LightAdj == lightadj {
 		return cache, nil
 	}
 	// determine shape of surface
@@ -483,7 +508,7 @@ func (c *SurfaceCache) Cache(f *SurfaceFace, mip int, lightadj [4]int, env *Surf
 		cache.owner = &f.spots[mip]
 		cache.MipScale = surfscale
 	}
-	cache.Dlight = false
+	cache.Dlight = dlit
 	if len(cache.Data) != surfwidth*surfheight {
 		cache.Data = make([]byte, surfwidth*surfheight)
 	}

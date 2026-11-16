@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-quake1/engine/assets"
+	"github.com/go-quake1/engine/client"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/render/gpuworld"
 	"github.com/go-quake1/engine/vfs"
@@ -57,6 +58,16 @@ func openGameWorld(fsys fs.FS, slug string, w, h int) (*gameWorld, error) {
 }
 
 func (g *gameWorld) Close() { g.gd.Close() }
+
+// SetDLights implements runner.DynamicLighter: the lights of the frame go to
+// the world, which marks the faces they reach and bakes them into the surfaces.
+func (g *gameWorld) SetDLights(lights *[client.MaxDLights]client.DLight, now float32) {
+	for i := range lights {
+		l := &lights[i]
+		g.wv.DLights[i] = render.DLight{Origin: l.Origin, Radius: l.Radius, Die: l.Die, Decay: l.Decay, MinLight: l.MinLight, Key: l.Key, Color: l.Color}
+	}
+	g.wv.Now = now
+}
 
 // DrawWorld implements runner.WorldDrawer.
 func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error {
