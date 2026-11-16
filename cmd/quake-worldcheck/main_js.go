@@ -60,8 +60,11 @@ type verdict struct {
 	// Animation (--anim): the frames compared, the surface rectangles and bytes
 	// the GPU re-baked and uploaded over them (the feature was exercised if
 	// non-zero) and the largest upload of one frame.
-	Frames        int        `json:"frames,omitempty"`
-	Moved         int        `json:"moved_pixels,omitempty"`
+	Frames int `json:"frames,omitempty"`
+	Moved  int `json:"moved_pixels,omitempty"`
+	// Clipped counts the entities of the alias views that cross the near plane
+	// or a side of the frame (--nearplane).
+	Clipped       int        `json:"clipped_entities,omitempty"`
 	Uploaded      int        `json:"uploaded_rects,omitempty"`
 	UploadedBytes int        `json:"uploaded_bytes,omitempty"`
 	MaxFrameBytes int        `json:"max_frame_upload_bytes,omitempty"`
@@ -138,7 +141,7 @@ func main() {
 			i++
 			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
-			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights":
+			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++

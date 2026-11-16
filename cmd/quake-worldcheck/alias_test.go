@@ -34,6 +34,31 @@ func TestGPUAliasMatchesTheSoftwareAlias(t *testing.T) {
 	}
 }
 
+// TestNearPlaneAliasMatches: the 16 alias views with the camera 10 to 28 units
+// from its target (--nearplane), so that the models cross the near plane and
+// r_aclip.c's clipping is in the picture: the GPU matches the software alias pass,
+// and entities did cross.
+func TestNearPlaneAliasMatches(t *testing.T) {
+	v := runInBrowser(t, "--part", "alias", "--nearplane", "--tolerance", aliasTolerance)
+	if v.Check != "PASS" || v.Pixels == 0 {
+		t.Fatalf("verdict %+v", v)
+	}
+	if v.Clipped < 8 {
+		t.Fatalf("only %d entities cross the near plane or the frame: the views do not show the clipping", v.Clipped)
+	}
+	t.Logf("%d clipped entities", v.Clipped)
+}
+
+// TestNoAliasClipFails is the planted negative of r_aclip.c: the GPU drops the
+// triangles that cross the near plane or a side of the frame (--noAliasClip)
+// while the reference clips them, and the comparison must fail.
+func TestNoAliasClipFails(t *testing.T) {
+	v := runInBrowser(t, "--part", "alias", "--nearplane", "--tolerance", aliasTolerance, "--noAliasClip")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a GPU without the alias clipping was not caught: %+v", v)
+	}
+}
+
 // TestCorruptedSkinFails is the planted negative: the GPU gets skins with
 // every palette index shifted while the reference keeps the true ones.
 func TestCorruptedSkinFails(t *testing.T) {

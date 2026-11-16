@@ -81,7 +81,7 @@ func TestAliasE1M1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		recs, draws, err := s2.Entities(v.Ents, nil, nil)
+		recs, draws, err := s2.Entities(v.Ents, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("view %d: %v", i, err)
 		}
@@ -101,6 +101,21 @@ func TestAliasE1M1(t *testing.T) {
 			if n := f(0)*f(0) + f(4)*f(4) + f(8)*f(8); math.Abs(n-1) > 1e-4 {
 				t.Errorf("view %d entity %d: rotation row length^2 %v", i, k, n)
 			}
+			// without clipping the record's stride is 3, its first vertex the model's first corner
+			if z, w := binary.LittleEndian.Uint32(r[88:]), binary.LittleEndian.Uint32(r[92:]); z != 3 || w != d.First {
+				t.Errorf("view %d entity %d: stride %d first %d, want 3 and %d", i, k, z, w, d.First)
+			}
+		}
+		// an entity that r_aclip.c clips draws FanStride vertices for each triangle
+		recs2, draws2, err := s2.Entities(v.Ents, nil, nil, func(worldview.AliasEnt) bool { return true })
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, d := range draws2 {
+			z, w := binary.LittleEndian.Uint32(recs2[k*EntRecordSize+88:]), binary.LittleEndian.Uint32(recs2[k*EntRecordSize+92:])
+			if d.Count != draws[k].Count/3*FanStride || d.First != draws[k].First || z != FanStride || w != d.First {
+				t.Errorf("view %d entity %d: clipped draw %+v stride %d first %d, plain %+v", i, k, d, z, w, draws[k])
+			}
 		}
 	}
 }
@@ -110,7 +125,7 @@ func TestEntitiesRejectsAModelOutsideTheSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = set.Entities([]worldview.AliasEnt{{Model: &worldview.AliasModel{Path: "x"}}}, nil, nil)
+	_, _, err = set.Entities([]worldview.AliasEnt{{Model: &worldview.AliasModel{Path: "x"}}}, nil, nil, nil)
 	if err == nil {
 		t.Fatal("a model outside the set was accepted")
 	}

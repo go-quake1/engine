@@ -16,9 +16,10 @@ import "math"
 //
 // What is the engine's own, and not Quake's: there is no z buffer (the engine
 // draws entities after the world with no depth test), so the span drawers'
-// z test is always true and zi is not carried; pixels are clipped to the frame
-// rather than relying on r_aclip.c's clipping of partly visible triangles; the
-// colormap row of a pixel is clamped to the colormap.
+// z test is always true and zi is not carried; pixels are still clipped to the
+// frame (the partly visible triangles of a clipped model are clipped before, by
+// r_aclip.c's code in alias_clip.go); the colormap row of a pixel is clamped to
+// the colormap.
 
 // FinalVert is finalvert_t: V holds u and v (screen pixels), s and t (the skin
 // coordinates in 16.16 fixed point), the light (a colormap row times 256) and
@@ -26,6 +27,9 @@ import "math"
 type FinalVert struct {
 	V      [6]int32
 	OnSeam bool
+	// Flags are the clip flags (AliasZClip, AliasLeftClip...) the clipper of
+	// r_aclip.c reads; the rasteriser does not.
+	Flags uint8
 }
 
 // polyEdgeTable is edgetable: which vertices (indices into r_p0, r_p1, r_p2,

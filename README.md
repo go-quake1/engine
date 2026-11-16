@@ -315,7 +315,8 @@ measured in v0.9.0's back-to-front order, 0.006 % in the earlier forward order
 once the shader reproduced the reference's 8-pixel sub-spans and left-edge
 coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
 repository: point `QUAKE_PAK` at it. The light styles and the `+` textures move on
-the GPU since v0.18.0, and the dynamic lights are on the CPU and the GPU since v0.19.0 (below).
+the GPU since v0.18.0, the dynamic lights are on the CPU and the GPU since v0.20.0 and
+the alias triangles are clipped since v0.21.0 (below).
 Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
@@ -418,7 +419,7 @@ fails at 8.07 %. The GPU follows the CPU path's animation (the 11 default styles
 `lightstyle` is not wired on either). See
 [docs/webgpu-world/2026-11-16-light-styles-textures.md](docs/webgpu-world/2026-11-16-light-styles-textures.md).
 
-**Dynamic lights** (v0.19.0, [#106](https://github.com/go-quake1/engine/issues/106) item 7)
+**Dynamic lights** (v0.20.0, [#106](https://github.com/go-quake1/engine/issues/106) item 7)
 are ported from the reference: `R_MarkLights` and `R_PushDlights`
 (`bsprender.MarkLights`, `PushDlights`), the dynamic light term of `R_BuildLightMap`
 (`render.AddDynamicLights`, with `D_CacheSurface` rebuilding a lit surface in every
@@ -432,8 +433,20 @@ explosion around each of the 16 views) on a real GPU, 7 of 1,024,000 pixels unex
 the lights changing 87 % of the reference's pixels; a GPU that ignores them fails at 81 %.
 See [docs/webgpu-world/2026-11-16-dynamic-lights.md](docs/webgpu-world/2026-11-16-dynamic-lights.md).
 
-Not ported: the clipping of triangles that cross the near plane
-(`r_aclip.c`: they are dropped).
+**Alias triangles are clipped** (v0.21.0, [#106](https://github.com/go-quake1/engine/issues/106)
+item 8): `render.AliasClipTriangle` ports `r_aclip.c` (`R_AliasClipTriangle`,
+`R_AliasClip`, `R_Alias_clip_z` and the four side clips, with the vertex flags of
+`R_AliasPreparePoints`): a triangle of a model that is partly outside the view is clipped
+against the near plane (`ALIAS_Z_CLIP_PLANE`, 5) and the four sides of the frame and drawn
+as a fan, where it was dropped (near plane) or only cut by the pixel loop (sides). Tests
+are pinned on clips worked by hand from the source. The GPU runs the same clipper in
+its alias vertex shader, six fan triangles for each source triangle of an entity that
+`R_AliasCheckBBox` finds partly outside the view. `quake-worldcheck --part alias --nearplane`
+puts the camera 10 to 28 units from each of the 16 targets, so that 37 entities cross the
+near plane or the frame: 286 of 173,271 alias pixels unexplained (0.17 %, tolerance 3 %);
+the 16 ordinary alias views are unchanged (346 unexplained of about 50,000, as before); a GPU
+that drops those triangles fails at 6.33 %. See
+[docs/webgpu-world/2026-11-16-alias-clip.md](docs/webgpu-world/2026-11-16-alias-clip.md).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

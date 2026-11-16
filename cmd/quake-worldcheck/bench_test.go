@@ -54,3 +54,29 @@ func BenchmarkWorldPass(b *testing.B) {
 		b.ReportMetric(v.Bench.GPUWallP95MS, "gpu-wall-p95-ms")
 	}
 }
+
+var benchNearPlane = flag.Bool("wc.nearplane", false, "BenchmarkAliasPass puts the camera at the near plane of each target (--nearplane): the program must know the flag")
+
+// BenchmarkAliasPass is BenchmarkWorldPass for the alias pass (--part alias
+// --bench: the engine's software alias pass and the GPU one alternating frame by
+// frame on the 16 alias views at 1280x800): the medians of the alias part of the
+// frame, so that abbench can compare two builds.
+func BenchmarkAliasPass(b *testing.B) {
+	args := []string{"--part", "alias", "--bench", "--width", "1280", "--height", "800"}
+	if *benchNearPlane {
+		args = append(args, "--nearplane")
+	}
+	for i := 0; i < b.N; i++ {
+		raw := runInBrowserIn(b, *benchDir, args...)
+		var v struct {
+			B *partBenchRes `json:"part_bench"`
+		}
+		if err := json.Unmarshal([]byte(raw), &v); err != nil || v.B == nil {
+			b.Fatalf("no part_bench in %q: %v", raw, err)
+		}
+		b.ReportMetric(v.B.EnginePartMS, "software-alias-ms")
+		b.ReportMetric(v.B.GPUPartWallMS, "gpu-alias-wall-ms")
+		b.ReportMetric(v.B.GPUFrameWallMS, "gpu-frame-wall-ms")
+		b.ReportMetric(v.B.GPUFrameWallP95MS, "gpu-frame-wall-p95-ms")
+	}
+}
