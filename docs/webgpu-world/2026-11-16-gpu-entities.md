@@ -1,5 +1,11 @@
 # The alias entities on the GPU in the game loop (engine#122)
 
+**Status (v0.26.0): opt-in, `--gpu-entities`.** On the playground's macOS CI lane (Chromium and
+Firefox) the device was lost at the first frame with GPU entities (`webgpu: object destroyed`,
+which also ends the GPU world), in v0.24.0 and again with the pipeline warmed in v0.25.0; the
+Apple M4 Max runs it. The cause is not found, so the CPU draws the entities by default. The
+rest of this page describes the path as built and measured on the M4 Max.
+
 Until v0.24.0 `quake-wctr` drew every alias model (monsters, items, the player's weapon pickups)
 with the software pass, whatever the world was drawn with: `gpuworld.Renderer.DrawEntities` existed and
 `quake-worldcheck` compared it, but the game loop did not call it. Now, with the world on the GPU (the

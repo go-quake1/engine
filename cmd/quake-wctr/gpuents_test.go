@@ -58,7 +58,7 @@ func TestGPUEntities(t *testing.T) {
 			return layerGPU{w: w, h: h, models: &models, frames: &frames, entsSeen: &seen}, nil
 		}
 		var out, errOut bytes.Buffer
-		err := runGameWith(&out, &errOut, realFS(t), "e1m1", 320, 200, 150, gameOpts{auto: true, corruptSkins: corrupt, minGPUEntities: 1})
+		err := runGameWith(&out, &errOut, realFS(t), "e1m1", 320, 200, 150, gameOpts{auto: true, corruptSkins: corrupt, minGPUEntities: 1, gpuEntities: true})
 		openGPUWorld = old
 		if err != nil {
 			t.Fatalf("%v\n%s", err, errOut.String())
@@ -102,6 +102,27 @@ func TestGPUEntities(t *testing.T) {
 
 var errTest = errors.New("the device refuses the models")
 
+// TestGPUEntitiesAreOptIn: by default the CPU draws the alias entities and the log
+// says why (the entity layer lost the device on the macOS CI lane).
+func TestGPUEntitiesAreOptIn(t *testing.T) {
+	var m []*worldview.AliasModel
+	var s [][]worldview.AliasEnt
+	withSurface(t, &fakePresenter{}, false, new(int))
+	old := openGPUWorld
+	openGPUWorld = func(_ *worldview.World, _ *render.ColorMap, w, h int) (gpuDrawer, error) {
+		return layerGPU{w: w, h: h, models: &m, frames: new(int), entsSeen: &s}, nil
+	}
+	var out, errOut bytes.Buffer
+	err := runGameWith(&out, &errOut, realFS(t), "e1m1", 64, 40, 3, gameOpts{auto: true})
+	openGPUWorld = old
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m != nil || !strings.Contains(errOut.String(), "off by default, pass --gpu-entities") {
+		t.Errorf("models given to the device: %v; log %q", m, errOut.String())
+	}
+}
+
 // TestGPUEntitiesUnavailable: a device with no entity layer, or that refuses the
 // models, leaves the alias entities to the CPU, and the game still plays.
 func TestGPUEntitiesUnavailable(t *testing.T) {
@@ -120,7 +141,7 @@ func TestGPUEntitiesUnavailable(t *testing.T) {
 		old := openGPUWorld
 		openGPUWorld = func(_ *worldview.World, _ *render.ColorMap, w, h int) (gpuDrawer, error) { return c.open(w, h), nil }
 		var out, errOut bytes.Buffer
-		err := runGameWith(&out, &errOut, realFS(t), "e1m1", 64, 40, 3, gameOpts{auto: true})
+		err := runGameWith(&out, &errOut, realFS(t), "e1m1", 64, 40, 3, gameOpts{auto: true, gpuEntities: true})
 		openGPUWorld = old
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", c.name, err, errOut.String())
