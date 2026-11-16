@@ -68,7 +68,29 @@ func (r *Renderer) EnableAliasLayer() error {
 		return err
 	}
 	r.layered = true
-	return nil
+	return r.warmAliasLayer()
+}
+
+// warmAliasLayer draws one degenerate triangle with the entity pipeline in a
+// submit of its own, right after the pipeline was created: the host gives a
+// submit that creates objects a 2 s turn and a frame that only streams commands
+// 500 ms (go-wasmcontainers/gpu's scheduler, which destroys the device of a
+// container that overruns), and the first use of a pipeline can take longer than
+// the second on a slow GPU. The record is all zeros: every vertex lands in one
+// point and the triangle is dropped.
+func (r *Renderer) warmAliasLayer() error {
+	a := r.alias
+	r.rec.Reset()
+	r.rec.WriteBuffer(a.ents, 0, make([]byte, EntRecordSize))
+	p := r.rec.BeginRenderPass(r.entPass)
+	p.SetPipeline(r.entPipe)
+	p.SetBindGroup(0, a.group)
+	p.Draw(3, 1, 0, 0)
+	if err := p.End(); err != nil {
+		return err
+	}
+	_, err := r.rec.Submit()
+	return err
 }
 
 // recordAliasLayer is the entities' pass of a layered frame.

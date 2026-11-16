@@ -32,14 +32,14 @@ func TestWritePhases(t *testing.T) {
 	g.add(6*time.Millisecond, time.Millisecond)
 	var out bytes.Buffer
 	writePhases(&out, samples, g)
-	want := "phases over 2 frames: sim-ms=2.000 world-ms=5.000 gpu-ms=5.000 copy-ms=1.000 models-ms=3.000 composite-ms=4.000 present-ms=5.000 wait-ms=5.000 frame-ms=30.000\n"
+	want := "phases over 2 frames: sim-ms=2.000 world-ms=5.000 gpu-ms=5.000 copy-ms=1.000 models-ms=3.000 composite-ms=4.000 present-ms=5.000 wait-ms=5.000 frame-ms=30.000 gpu-max-ms=50.000\n"
 	if out.String() != want {
 		t.Errorf("got  %q\nwant %q", out.String(), want)
 	}
 	// Without a GPU world the world stage is the software world.
 	out.Reset()
 	writePhases(&out, samples, nil)
-	want = "phases over 2 frames: sim-ms=2.000 world-ms=11.000 gpu-ms=0.000 copy-ms=0.000 models-ms=3.000 composite-ms=4.000 present-ms=5.000 wait-ms=5.000 frame-ms=30.000\n"
+	want = "phases over 2 frames: sim-ms=2.000 world-ms=11.000 gpu-ms=0.000 copy-ms=0.000 models-ms=3.000 composite-ms=4.000 present-ms=5.000 wait-ms=5.000 frame-ms=30.000 gpu-max-ms=0.000\n"
 	if out.String() != want {
 		t.Errorf("software: got %q\nwant %q", out.String(), want)
 	}
