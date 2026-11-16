@@ -285,6 +285,11 @@ type State struct {
 	// reported world-space coord).
 	EmitTempEntity func(kind int, origin [3]float32)
 
+	// EmitExplosion2 is the optional sink for TE_EXPLOSION2's colour range
+	// (R_ParticleExplosion2): called before EmitTempEntity for that kind, with
+	// the wire's colorStart and colorLength.
+	EmitExplosion2 func(origin [3]float32, colorStart, colorLength int)
+
 	// CenterPrintText is the latest svc_centerprint payload the
 	// renderer should overlay horizontally-centered near the top of
 	// the screen. tyrquake: scr_centerstring + scr_centertime_off in
