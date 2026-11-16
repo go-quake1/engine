@@ -22,6 +22,7 @@ import (
 type gameOpts struct {
 	gpuWorld bool // draw the lit world faces on the batch device
 	check    bool // with gpuWorld: compare every frame with the CPU's
+	auto     bool // the default: the GPU when one is granted, else the CPU (no --cpuworld)
 }
 
 // gameWorld is the runner's WorldDrawer over a [gpuDrawer]: the map is built
