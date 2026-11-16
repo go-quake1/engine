@@ -33,7 +33,7 @@ func entSeeds() map[string][]byte {
 		"unterminated-q": []byte("{ \"a \"b"),
 		"many-empty":     []byte(strings.Repeat("{}", 1000)),
 		"deep-braces":    []byte(strings.Repeat("{", 1000)),
-		"nul":            []byte("{ \"a\"\x00\"b\" }\x00"),
+		"nul-byte":       []byte("{ \"a\"\x00\"b\" }\x00"), // not "nul": a Windows device name cannot be a file in a module
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -40,9 +41,31 @@ func Bounded(t testing.TB, n int, f func()) {
 	}
 }
 
+// BadPathElement reports whether name, one element of a file path, makes the
+// module zip of a release fail (cmd/go: "malformed file path"): a Windows
+// device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or without an
+// extension, in any case), or a character Windows forbids in a file name. A
+// corpus file named "nul" broke the module zip of v0.17.0, v0.18.0 and v0.19.0:
+// `go get` of them failed.
+func BadPathElement(name string) bool {
+	if name == "" || strings.ContainsAny(name, "<>:\"|?*\\") {
+		return true
+	}
+	base, _, _ := strings.Cut(name, ".")
+	switch up := strings.ToUpper(base); up {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	default:
+		return len(up) == 4 && (strings.HasPrefix(up, "COM") || strings.HasPrefix(up, "LPT")) && up[3] >= '1' && up[3] <= '9'
+	}
+}
+
 // WriteSeed writes data as seed file name of fuzz target target, in the Go
 // fuzz corpus format, under dir (the package's testdata/fuzz).
 func WriteSeed(dir, target, name string, data []byte) error {
+	if BadPathElement(name) {
+		return fmt.Errorf("fuzzcheck: seed name %q cannot be a file in a Go module (a Windows device name or an invalid character): the module zip of every release would fail", name)
+	}
 	d := filepath.Join(dir, target)
 	if err := os.MkdirAll(d, 0o755); err != nil {
 		return err
