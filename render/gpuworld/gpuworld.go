@@ -254,22 +254,30 @@ func (g *Geometry) refresh(w *worldview.World, f *worldview.Face, ord, mip int) 
 		g.Deferred++
 		return
 	}
-	if g.updBuf == nil {
-		g.updBuf = make([]byte, 0, g.UpdateBudget)
+	// bake straight into the frame's upload buffer (earlier updates of the frame
+	// keep their slices if it has to grow)
+	start := len(g.updBuf)
+	if start+n > cap(g.updBuf) {
+		g.updBuf = make([]byte, 0, max(g.UpdateBudget, 2*cap(g.updBuf), n))
+		start = 0
 	}
-	px, ok := bakeMip(f, adj, tex, mip, &env)
-	if !ok {
+	px := g.updBuf[start : start+n : start+n]
+	if sw, sh := f.Surf.Desc.Extents[0]>>mip, f.Surf.Desc.Extents[1]>>mip; sw <= 0 || sh <= 0 {
 		return
 	}
+	d := f.Surf.Desc
+	d.Texture = tex
+	if err := render.DrawSurface(px, &d, adj, mip, &env); err != nil {
+		return
+	}
+	g.updBuf = g.updBuf[:start+n]
 	*st = surfState{adj, tex, dlit}
 	at := g.Surf
 	if mip > 0 {
 		at = g.SurfLow
 	}
 	blitRows(at, r, px, int(r.W))
-	start := len(g.updBuf)
-	g.updBuf = append(g.updBuf, px...)
-	g.Updates = append(g.Updates, Update{Low: mip > 0, R: r, Pix: g.updBuf[start : start+n : start+n]})
+	g.Updates = append(g.Updates, Update{Low: mip > 0, R: r, Pix: px})
 	g.UpdateBytes += n
 }
 
