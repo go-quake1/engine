@@ -67,7 +67,13 @@ func (r *Renderer) EnableAliasLayer() error {
 	}); err != nil {
 		return err
 	}
+	r.hold(tv, mod)
 	r.layered = true
+	// both buffers of the layer's read-back exist before the first frame: a handle
+	// first created after a collection is the one that takes a freed id (see hold)
+	if err := r.createReadBuffers(); err != nil {
+		return err
+	}
 	return r.warmAliasLayer()
 }
 
@@ -182,6 +188,7 @@ func (r *Renderer) EnableAlias(set *AliasSet) error {
 		return err
 	}
 	r.alias = a
+	r.hold(skins, sv, poses, corners, bgl, pl, mod)
 	return nil
 }
 
