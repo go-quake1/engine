@@ -180,6 +180,51 @@ func TestMixerPacing_StallDoesNotBurst(t *testing.T) {
 	}
 }
 
+// A ratio under 1 is a game below real time when the stalls account for it:
+// offered + MixDropped + what is still owed is the whole of the game's time
+// (elapsed * rate), up to the lead the first tic prefills. The stalls are the
+// tics longer than the mix-ahead, and each drops its excess over MixAhead.
+func TestMixerPacing_StallsAccountForTheRatio(t *testing.T) {
+	dts := append(append(append(repeat(1.0/30, 90), 0.35), repeat(1.0/30, 90)...), 0.2)
+	d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+	r, _ := newRunner(t, d)
+	pool, _ := sound.NewPool(8)
+	r.SoundPool, r.MixBuffer = pool, make([]sound.StereoSample, sound.MixBufferStereoFrames)
+	now := 0.0
+	for _, dt := range dts {
+		d.advance(dt)
+		now += dt
+		if err := r.RunFrame(float32(dt), float32(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.MixStalls != 2 {
+		t.Errorf("%d stalled tics, want 2 (0.35 s and 0.2 s against a mix-ahead of %.1f s)", r.MixStalls, MixAhead)
+	}
+	want := (0.35 - MixAhead + 0.2 - MixAhead) * sound.DefaultSampleRate
+	if got := float64(r.MixDropped); got < want*0.98 || got > want*1.02 {
+		t.Errorf("%d mix frames dropped, want about %.0f (the stalls' excess over the mix-ahead)", r.MixDropped, want)
+	}
+	total := now * sound.DefaultSampleRate
+	got := float64(d.offered+r.MixDropped) + r.mixOwed
+	if over := got - total; over < -float64(len(dts)) || over > MixLead*sound.DefaultSampleRate+float64(len(dts)) {
+		t.Errorf("offered %d + dropped %d + owed %.0f = %.0f, the game's time is %.0f frames: %.0f apart", d.offered, r.MixDropped, r.mixOwed, got, total, over)
+	}
+	// And without a stall nothing is dropped.
+	r2d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+	r2, _ := newRunner(t, r2d)
+	r2.SoundPool, r2.MixBuffer = pool, make([]sound.StereoSample, sound.MixBufferStereoFrames)
+	for k, dt := range repeat(1.0/20, 100) {
+		r2d.advance(dt)
+		if err := r2.RunFrame(float32(dt), float32(float64(k+1)*dt)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r2.MixStalls != 0 || r2.MixDropped != 0 {
+		t.Errorf("20 tics a second dropped %d frames in %d stalls, want none", r2.MixDropped, r2.MixStalls)
+	}
+}
+
 // RunUntilQuit wraps the backend in a quit observer: the pacing must survive
 // the wrapper (a struct that embeds the Backend interface only promotes
 // Backend's methods and would hide QueuedFrames, leaving the mixer unpaced in

@@ -441,7 +441,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 	}
 	el := time.Since(start)
 	fmt.Fprintf(out, "%d frames in %v: %.2f ms per frame\n", frames, el.Round(time.Millisecond), el.Seconds()*1000/float64(frames))
-	writeAudioStats(out, be, el)
+	writeAudioStats(out, be, el, frames, r.MixDropped, r.MixStalls)
 	writePhases(out, r.Timer.Samples(), gt)
 	return nil
 }

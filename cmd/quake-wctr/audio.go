@@ -71,16 +71,24 @@ func (f fixedChunk) AudioStats() wasisurface.AudioStats { return f.stats() }
 // the real-time ratio: mix frames offered per second of game time over the
 // 11025 a second an output plays. 1.00 is real time (a little above it is the
 // lead the pacing prefills); the fixed chunk is 2.8 at 60 tics a second.
-func writeAudioStats(out io.Writer, be backend.Backend, el time.Duration) {
+//
+// The line goes on with what explains a ratio under 1: the game's frame rate,
+// and the mix frames the stalled tics (longer than the mix-ahead) were owed and
+// not paid back (runloop.Runner.MixDropped). Offered plus dropped is the whole
+// of the game's time, so "with them" is 1.00 (a little above: the lead the
+// first tic prefills) whatever the speed of the machine: a ratio under 1 with
+// "with them" at 1.00 is a game below real time, not a mixer that under-produces.
+func writeAudioStats(out io.Writer, be backend.Backend, el time.Duration, frames, dropped, stalls int) {
 	s, ok := be.(audioStatser)
 	if !ok || el <= 0 {
 		return
 	}
 	st := s.AudioStats()
-	ratio := float64(st.Offered) / (el.Seconds() * sound.DefaultSampleRate)
+	total := el.Seconds() * sound.DefaultSampleRate
 	state := "playing"
 	if st.Silent {
 		state = "silent"
 	}
-	fmt.Fprintf(out, "audio: %s, %d mix frames offered, %d accepted, in %.2f s: real-time ratio %.3f\n", state, st.Offered, st.Accepted, el.Seconds(), ratio)
+	fmt.Fprintf(out, "audio: %s, %d mix frames offered, %d accepted, in %.2f s: real-time ratio %.3f; %.1f frames a second, %d mix frames dropped in %d stalled tics, ratio with them %.3f\n",
+		state, st.Offered, st.Accepted, el.Seconds(), float64(st.Offered)/total, float64(frames)/el.Seconds(), dropped, stalls, float64(st.Offered+dropped)/total)
 }

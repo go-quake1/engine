@@ -145,6 +145,14 @@ type Runner struct {
 	MixAhead, MixLead float32
 	mixOwed           float64
 
+	// MixDropped is the mix frames the clock owed that a stalled tic (longer
+	// than MixAhead) did not pay back, MixStalls the number of such tics: with
+	// the frames offered, they account for the whole of the game's time
+	// (offered + dropped = elapsed * rate, up to the lead the first tic
+	// prefills), so a ratio under 1 is a game below real time, not a mixer
+	// under-producing.
+	MixDropped, MixStalls int
+
 	// Compose configuration.
 	BackgroundIdx  byte    // palette fill for Compose2D
 	NotifyLifetime float32 // seconds a notify row stays visible
@@ -733,6 +741,8 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 	maxAhead := int(float64(ahead) * rate)
 	r.mixOwed += float64(dt) * rate
 	if r.mixOwed > float64(maxAhead) {
+		r.MixDropped += int(r.mixOwed) - maxAhead
+		r.MixStalls++
 		r.mixOwed = float64(maxAhead)
 	}
 	queued := qa.QueuedFrames()
