@@ -97,6 +97,37 @@ type Audio interface {
 	SampleRate() int
 }
 
+// QueuedAudio is the optional extension of [Audio] that lets the runloop pace
+// the mixer like tyrquake's S_Update: it reports how many mix frames (the
+// engine's 11025 Hz stereo frames, not the output's) have been queued and not
+// played yet, the role SNDDMA_GetDMAPos plays upstream. A backend that does not
+// know (or has no output) leaves it out, and the runloop keeps painting a fixed
+// chunk every tic. A backend whose output is not playing yet may report 0.
+type QueuedAudio interface {
+	Audio
+	// QueuedFrames is the number of mix frames waiting to be played.
+	QueuedFrames() int
+}
+
+// ForwardQueue returns outer, a Backend that wraps inner (a quit observer, a
+// frame timer), so that it implements [QueuedAudio] exactly when inner does. A
+// wrapper that embeds the Backend interface only promotes Backend's methods,
+// and would otherwise hide the queue from the runloop and leave the mixer
+// unpaced.
+func ForwardQueue(outer, inner Backend) Backend {
+	if q, ok := inner.(QueuedAudio); ok {
+		return &queuedForward{Backend: outer, q: q}
+	}
+	return outer
+}
+
+type queuedForward struct {
+	Backend
+	q QueuedAudio
+}
+
+func (f *queuedForward) QueuedFrames() int { return f.q.QueuedFrames() }
+
 // Input is the per-frame button + mouse delta contract.
 type Input interface {
 	// PollInput consumes any queued input events + returns the

@@ -706,7 +706,7 @@ func (s *Session) RunUntilQuit() error {
 	original := r.Backend
 	defer func() { r.Backend = original }()
 	obs := &quitObserver{Backend: original}
-	r.Backend = obs
+	r.Backend = backend.ForwardQueue(obs, original)
 
 	lastNow := original.Now()
 	dt := runloop.MinFrameTime

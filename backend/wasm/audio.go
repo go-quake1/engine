@@ -95,6 +95,18 @@ func (a *WebAudio) WritePCM(samples []sound.StereoSample) error {
 	return nil
 }
 
+// QueuedFrames is the audio still scheduled and not yet played, in mix frames
+// (the engine's 11025 Hz): the playhead's lead over the context's clock. A
+// suspended context's clock stands still, so what is queued before the user's
+// gesture stays queued, and the runloop stops painting at its mix-ahead.
+func (a *WebAudio) QueuedFrames() int {
+	lead := a.playhead - a.ctx.Get("currentTime").Float()
+	if lead <= 0 {
+		return 0
+	}
+	return int(lead * engineMixerRate)
+}
+
 // SampleRate returns the AudioContext's negotiated output rate.
 func (a *WebAudio) SampleRate() int { return a.sampleRate }
 

@@ -138,6 +138,13 @@ type Runner struct {
 	RGBA      []byte               // size = fb.Width * fb.Height * 4
 	MixBuffer []sound.StereoSample // size = sound.MixBufferStereoFrames
 
+	// MixAhead and MixLead (seconds of mix; 0 means MixAhead / MixLead) pace
+	// the mixer of a backend that reports its queue (backend.QueuedAudio):
+	// the most the mixer runs ahead of the output, and how much it keeps
+	// queued. mixOwed is the clock's debt in mix frames, kept between tics.
+	MixAhead, MixLead float32
+	mixOwed           float64
+
 	// Compose configuration.
 	BackgroundIdx  byte    // palette fill for Compose2D
 	NotifyLifetime float32 // seconds a notify row stays visible
@@ -649,8 +656,14 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	}
 	r.Timer.Mark(render.StagePresent)
 
-	// 8+9) Audio (optional).
-	if r.SoundPool != nil && len(r.MixBuffer) > 0 {
+	// 8+9) Audio (optional). A backend that reports its queue is paced like
+	// tyrquake's S_Update (see paceAudio); one that does not gets the fixed
+	// chunk below, as before.
+	if qa, ok := r.Backend.(backend.QueuedAudio); ok && r.SoundPool != nil && len(r.MixBuffer) > 0 {
+		if err := r.paceAudio(qa, dt); err != nil {
+			return err
+		}
+	} else if r.SoundPool != nil && len(r.MixBuffer) > 0 {
 		// Zero the accumulator each tic; sound.Paint accumulates.
 		for i := range r.MixBuffer {
 			r.MixBuffer[i] = sound.StereoSample{}
@@ -679,6 +692,87 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 
 	// Audio is in the frame's Work time but in no stage.
 	r.Timer.End()
+	return nil
+}
+
+// Mixer pacing defaults, in seconds of mix. MixAhead is tyrquake's
+// _snd_mixahead (snd_dma.c, 0.1): the most the mixer ever runs ahead of the
+// output. MixLead is how much it keeps queued, so that a tic that comes a
+// little late does not starve the output (a game at 60 Hz would otherwise
+// queue about one tic).
+const (
+	MixAhead = 0.1
+	MixLead  = 0.05
+)
+
+// paceAudio paints and queues what the clock owes the output, tyrquake's
+// S_Update_ (snd_dma.c): never more than MixAhead ahead of what the output has
+// played. Each tic it paints
+//
+//	min(MixAhead*rate - queued, max(owed, MixLead*rate - queued))
+//
+// frames, where owed is dt * rate accumulated since the last paint (capped at
+// MixAhead*rate: a stalled tic is not a debt to burst out), in batches of at
+// most len(MixBuffer). In the steady state that is dt*rate a tic, so sounds
+// are consumed in real time; MixLead only refills after the output ran low (the
+// first tic, a stall), and MixAhead only caps. rate is the mix rate, 11025
+// frames a second, whatever rate the backend resamples to.
+func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
+	const rate = sound.DefaultSampleRate
+	ahead := r.MixAhead
+	if ahead <= 0 {
+		ahead = MixAhead
+	}
+	lead := r.MixLead
+	if lead <= 0 {
+		lead = MixLead
+	}
+	if lead > ahead {
+		lead = ahead
+	}
+	maxAhead := int(float64(ahead) * rate)
+	r.mixOwed += float64(dt) * rate
+	if r.mixOwed > float64(maxAhead) {
+		r.mixOwed = float64(maxAhead)
+	}
+	queued := qa.QueuedFrames()
+	if queued < 0 {
+		queued = 0
+	}
+	want := int(r.mixOwed)
+	if refill := int(float64(lead)*rate) - queued; refill > want {
+		want = refill
+	}
+	if room := maxAhead - queued; want > room {
+		want = room
+	}
+	painted := 0
+	for want > 0 {
+		n := want
+		if n > len(r.MixBuffer) {
+			n = len(r.MixBuffer)
+		}
+		if n > sound.MaxMixOutputFrames {
+			n = sound.MaxMixOutputFrames
+		}
+		for i := 0; i < n; i++ {
+			r.MixBuffer[i] = sound.StereoSample{}
+		}
+		if err := sound.Paint(r.SoundPool, r.MixBuffer, n); err != nil {
+			return err
+		}
+		r.tickMusic(r.MixBuffer[:n])
+		if err := r.Backend.QueueAudio(r.MixBuffer[:n]); err != nil {
+			if !errors.Is(err, backend.ErrUnsupported) {
+				return err
+			}
+		}
+		painted += n
+		want -= n
+	}
+	if r.mixOwed -= float64(painted); r.mixOwed < 0 {
+		r.mixOwed = 0
+	}
 	return nil
 }
 

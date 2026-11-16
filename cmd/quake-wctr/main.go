@@ -383,7 +383,7 @@ func (q *quitObserver) PollInput() (backend.InputSnapshot, error) {
 // it can stop after a number of frames and time them.
 func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *gpuTimes) error {
 	obs := &quitObserver{Backend: be}
-	r.Backend = obs
+	r.Backend = backend.ForwardQueue(obs, be)
 	start := time.Now()
 	if frames > 0 {
 		// Time the frame's stages (the --frames run prints them below).
