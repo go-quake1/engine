@@ -431,7 +431,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		if memStats && n%60 == 0 {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
-			fmt.Fprintf(out, "memstats frame %d: alloc %d KiB, inuse %d KiB, sys %d KiB, gcs %d\n", n, m.HeapAlloc>>10, m.HeapInuse>>10, m.Sys>>10, m.NumGC)
+			fmt.Fprintf(out, "memstats frame %d at %d ms: alloc %d KiB, inuse %d KiB, sys %d KiB, gcs %d, total alloc %d KiB, mallocs %d\n", n, time.Since(start).Milliseconds(), m.HeapAlloc>>10, m.HeapInuse>>10, m.Sys>>10, m.NumGC, m.TotalAlloc>>10, m.Mallocs)
 		}
 		dt = max(float32(now-last), runloop.MinFrameTime)
 		last = now
