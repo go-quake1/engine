@@ -370,6 +370,64 @@ func TestAmbientSound_HappyPath(t *testing.T) {
 	}
 }
 
+// cueWAV is synthWAV(n) with a cue chunk whose point is loop (tyrquake
+// GetWavinfo: the cue point's sample offset is the sample's loopstart).
+func cueWAV(n, loop int) []byte {
+	b := synthWAV(n)
+	cue := make([]byte, 8+28)
+	copy(cue, "cue ")
+	binary.LittleEndian.PutUint32(cue[4:], 28)
+	binary.LittleEndian.PutUint32(cue[8:], 1)
+	binary.LittleEndian.PutUint32(cue[8+24:], uint32(loop))
+	b = append(b, cue...)
+	binary.LittleEndian.PutUint32(b[4:], uint32(len(b)-8))
+	return b
+}
+
+// A channel started for a sample with a loop point is looping (tyrquake:
+// target_chan->looping = (sc->loopstart >= 0), for both the dynamic channels
+// and the static ambients); one for a sample without is not.
+func TestSoundChannelsLoopWhenTheSampleDoes(t *testing.T) {
+	h := hostForSoundTest(t)
+	blobs := map[string][]byte{"loop.wav": cueWAV(200, 50), "once.wav": synthWAV(200)}
+	h.SetSoundLoader(func(n string) ([]byte, bool) {
+		for k, b := range blobs {
+			if strings.HasSuffix(n, k) {
+				return b, true
+			}
+		}
+		return nil, false
+	})
+	for _, n := range []string{"loop.wav", "once.wav"} {
+		if _, err := h.PrecacheSound(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pool := poolForSoundTest(t, 8)
+	h.SetSoundPool(pool)
+	for _, c := range []struct {
+		name string
+		want bool
+	}{{"loop.wav", true}, {"once.wav", false}} {
+		slot, err := h.StartSound(1, 2, c.name, 200, -1, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := pool.Channels[slot].Looping; got != c.want {
+			t.Errorf("StartSound %s: looping %v, want %v", c.name, got, c.want)
+		}
+		if _, err := h.AmbientSound(0, 9, c.name, 150); err != nil {
+			t.Fatal(err)
+		}
+		if got := pool.Channels[0].Looping; got != c.want {
+			t.Errorf("AmbientSound %s: looping %v, want %v", c.name, got, c.want)
+		}
+	}
+	if pool.Channels[0].Sfx.LoopStart != -1 || pool.Channels[0].Sfx.NumSamples != 200 {
+		t.Errorf("sample: %+v", pool.Channels[0].Sfx)
+	}
+}
+
 // TestAmbientSound_Guards: nil host, no pool, empty name, nil server,
 // bad slot, missing precache.
 func TestAmbientSound_Guards(t *testing.T) {

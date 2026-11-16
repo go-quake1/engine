@@ -43,6 +43,10 @@ type Channel struct {
 	EntNum     int     // owning entity, 0 = world / global
 	EntChannel int     // entity-relative channel (0..7); same ent+channel replaces
 	Master     bool    // true = locally-played (no spatial attenuation)
+	// Looping: at EndPos the channel restarts at Sfx.LoopStart instead of
+	// stopping. tyrquake: channel_t.looping, set when the sound starts to
+	// (sc->loopstart >= 0) (snd_dma.c, SND_StartSound and S_StaticSound).
+	Looping bool
 }
 
 // Free reports whether c is an available slot.
@@ -55,6 +59,7 @@ func (c *Channel) Stop() {
 	c.EndPos = 0
 	c.LeftVol = 0
 	c.RightVol = 0
+	c.Looping = false
 }
 
 // Pool is the fixed-cap channel bank. Slot 0..(reservedStatic-1)

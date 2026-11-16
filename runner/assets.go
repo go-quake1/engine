@@ -244,6 +244,7 @@ func seedSoundPool(pool *enginesound.Pool, pakFS fs.FS, names []string, logf fun
 		ch.Sfx = s
 		ch.Position = 0
 		ch.EndPos = s.NumSamples
+		ch.Looping = s.LoopStart >= 0
 		ch.LeftVol = 200
 		ch.RightVol = 200
 		ch.Master = true

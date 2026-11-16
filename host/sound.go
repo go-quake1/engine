@@ -266,6 +266,7 @@ func (h *Host) StartSound(entIdx, channel int, name string, volume int, leftVol,
 	ch.Sfx = sample
 	ch.Position = 0
 	ch.EndPos = sample.NumSamples
+	ch.Looping = sample.LoopStart >= 0 // tyrquake: target_chan->looping = (sc->loopstart >= 0)
 	ch.EntNum = entIdx
 	ch.EntChannel = channel
 	if leftVol < 0 {
@@ -365,16 +366,9 @@ func (h *Host) StartSoundAt(entIdx, channel int, name string, vol int, attenuati
 // On success returns the pool slot index (= slot). Errors mirror
 // StartSound: no pool, missing precache, slot out of range.
 //
-// The looped semantics is implemented by setting EndPos = NumSamples
-// + setting LoopStart on the channel via the upstream's convention
-// (the Sample.LoopStart field already records the cue-chunk loop
-// point; the mixer's Paint stops the channel when Position >= EndPos,
-// and for ambient sounds we restart from LoopStart instead -- but the
-// current Paint doesn't yet honour LoopStart. As a bring-up shape we
-// re-arm the channel by making EndPos very large (essentially looping
-// in caller-managed time). A proper Paint-side loop is a follow-up;
-// for the audio-pipeline-validation goal the ambient channel just
-// needs to be non-silent for the duration of the 5s headless run).
+// The channel loops when the sample has a cue-chunk loop point
+// (Sample.LoopStart >= 0): [sound.Paint] restarts it at LoopStart when
+// Position reaches EndPos.
 func (h *Host) AmbientSound(slot, entIdx int, name string, volume int) (int, error) {
 	if h == nil || h.soundPool == nil {
 		return -1, ErrNoSoundPool
@@ -399,13 +393,13 @@ func (h *Host) AmbientSound(slot, entIdx int, name string, volume int) (int, err
 	ch := &h.soundPool.Channels[slot]
 	ch.Sfx = sample
 	ch.Position = 0
-	// Ambient sounds loop: park EndPos at the sample's NumSamples
-	// (Paint will Stop the channel when consumed); a proper loop
-	// honours Sample.LoopStart via a Paint-side restart -- DEFERRED.
-	// For the headless 5s validation the one-shot length is enough
-	// (each ambient track is ~1-3 seconds at 11025Hz, so the channel
-	// stays active across the capture window).
+	// Ambient sounds loop: a sample with a cue loop point (LoopStart >= 0)
+	// restarts at it when its data is consumed ([sound.Paint], tyrquake's
+	// S_PaintChannels). One without a loop point plays once and ends;
+	// tyrquake's S_StaticSound would refuse it ("Sound %s not looped"), and
+	// this port keeps playing it once.
 	ch.EndPos = sample.NumSamples
+	ch.Looping = sample.LoopStart >= 0
 	ch.EntNum = entIdx
 	ch.EntChannel = 0
 	if volume > sound.MaxVolume {
