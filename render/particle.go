@@ -292,6 +292,33 @@ func ParticleExplosion(pool *Pool, origin [3]float32, now float32, rng func() by
 	}
 }
 
+// ParticleExplosion2 is R_ParticleExplosion2 (reference/common/r_part.c:292-316,
+// TE_EXPLOSION2): 512 particles of type pt_blob that die 0.3 s later, particle i
+// coloured colorStart + (i % colorLength), at origin plus a per-axis offset of
+// rand()%32 - 16 with a per-axis velocity of rand()%512 - 256 (the draws of
+// [ParticleExplosion]). It stops early when the pool is full. A colorLength of
+// 0 or less divides by zero in C; here it makes no particle.
+func ParticleExplosion2(pool *Pool, origin [3]float32, colorStart, colorLength int, now float32, rng func() byte) {
+	if colorLength <= 0 {
+		return
+	}
+	for i := 0; i < 512; i++ {
+		var init Particle
+		init.Type = ParticleBlob
+		init.Die = now + 0.3
+		init.Color = byte(colorStart + i%colorLength)
+		for j := 0; j < 3; j++ {
+			init.Origin[j] = origin[j] + float32(int(rng()&31)-16)
+			lo := uint16(rng())
+			hi := uint16(rng() & 1)
+			init.Velocity[j] = float32(int((hi<<8)|lo) - 256)
+		}
+		if _, ok := pool.Spawn(init, now); !ok {
+			return
+		}
+	}
+}
+
 // LavaSplash spawns the vertical fountain of particles at origin
 // (the boss-death effect). Topology: 32*32*1 = 1024 particles
 // arranged on an i in [-16,16), j in [-16,16), k = 0 grid.

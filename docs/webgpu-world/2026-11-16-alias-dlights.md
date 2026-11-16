@@ -5,8 +5,10 @@ Two pieces `2026-11-16-dynamic-lights.md` left out.
 - `TE_EXPLOSION2` (`reference/NQ/cl_tent.c:260-271`) allocates a light with `CL_AllocDlight(0)`:
   350 units at the point, `die = cl.time + 0.5`, `decay = 300`. The runner's temp-entity sink
   now makes it (`explosionDLight`, shared with `TE_EXPLOSION`). Its 512 colour-mapped particles
-  (`R_ParticleExplosion2`) need the colour range, which the `EmitTempEntity(kind, origin)`
-  sink does not carry: not made here.
+  (`R_ParticleExplosion2`) came afterwards: `render.ParticleExplosion2` (512 `pt_blob`
+  particles, 0.3 s, colour `colorStart + i % colorLength`) through a new
+  `State.EmitExplosion2(origin, colorStart, colorLength)` sink, tests pinned on the source
+  (`TestParticleExplosion2`, `TestApplyExplosion2Sink`, `TestExplosion2Particles`).
 - `R_AliasSetupLighting` (`reference/common/r_alias.c:684-691`): for each light with `die >=
   cl.time`, `lightlevel = (int)(radius - |origin - light origin|)`, added to `r_ambientlight`
   when positive; the clamps that follow were already in `render.NewAliasLighting`, which took

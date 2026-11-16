@@ -328,6 +328,9 @@ func applyTempEntity(state *State, m DecodedTempEntity) {
 		state.EmitBeam(int(m.Kind), m.EntityNum, m.Start, m.End)
 		return
 	}
+	if m.Kind == TEExplosion2 && state.EmitExplosion2 != nil {
+		state.EmitExplosion2(m.Origin, m.ColorStart, m.ColorLength)
+	}
 	if state.EmitTempEntity == nil {
 		return
 	}

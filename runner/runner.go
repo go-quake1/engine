@@ -428,6 +428,9 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 
 	beamPool := client.NewBeamPool()
 
+	clientState.EmitExplosion2 = func(origin [3]float32, colorStart, colorLength int) {
+		render.ParticleExplosion2(particlePool, origin, colorStart, colorLength, clientState.MsgTime, particleRNG)
+	}
 	clientState.EmitTempEntity = func(kind int, origin [3]float32) {
 		now := clientState.MsgTime
 		switch kind {
