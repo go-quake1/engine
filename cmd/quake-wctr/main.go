@@ -2,13 +2,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 // Command quake-wctr is Quake as a wasip1 guest of the wasmcontainers
-// playground (wctr): the engine runs e1m1 with the software renderer and
-// shows each frame on a wasi-gfx:surface, the pane of the playground's
-// dashboard, through render/wasipresent. Keys come from the surface.
+// playground (wctr): the engine runs with the software renderer and shows
+// each frame on a wasi-gfx:surface, the pane of the playground's dashboard,
+// through render/wasipresent. Keys, the mouse buttons and relative mouse
+// motion come from the surface: the game asks for the pointer lock, which
+// the page grants on the first click on the pane (Escape releases it).
 //
 //	GOOS=wasip1 GOARCH=wasm go build -o quake-wctr.wasm ./cmd/quake-wctr
-//	wctr run --rm --gpu -m 512m quake            # play
+//	wctr run --rm --gpu -m 512m quake            # play, from the main menu
+//	wctr run --rm --gpu -m 512m quake --map e1m1 # skip the menu, start on e1m1
 //	wctr run --rm --gpu -m 512m quake --worldref 4
+//
+// With no --map the game boots into the main menu, as the browser build
+// does: New Game, then a skill, starts the "start" hub, whose portals change
+// level. With --map the menu is skipped and that map runs from the first
+// tic (Escape still opens the menu).
 //
 // The game data is a pak0.pak (--pak, default /usr/share/quake/pak0.pak:
 // the playground image ships go-quake1/freepak there).
@@ -68,11 +76,15 @@ func main() {
 var ErrNoSurface = errors.New("quake-wctr: no wasi-gfx surface in this build (build with GOOS=wasip1 and run with wctr --gpu)")
 
 // gpuSurface is what a wasi-gfx surface gives the game: a presenter for the
-// frame and the two key streams.
+// frame, the two key streams and the mouse (each stream nil for none).
 type gpuSurface struct {
 	Presenter render.Presenter
 	Down, Up  wasisurface.KeyPoller
-	Close     func()
+	// Motion is the relative pointer motion, ButtonDown and ButtonUp the
+	// mouse buttons (gpu's surface extension).
+	Motion               wasisurface.MotionPoller
+	ButtonDown, ButtonUp wasisurface.ButtonPoller
+	Close                func()
 }
 
 // ErrNoGPUWorld is returned by --gpuworld when this build has no batch device
@@ -102,7 +114,7 @@ func RootCmd() *cobra.Command {
 	var gpuWorld, gpuCheck bool
 	c := &cobra.Command{
 		Use:           "quake-wctr",
-		Short:         "Quake in a wasmcontainers playground container: e1m1 on a wasi-gfx surface",
+		Short:         "Quake in a wasmcontainers playground container: the game on a wasi-gfx surface, from the main menu",
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		Args:          cobra.NoArgs,
@@ -126,14 +138,18 @@ func RootCmd() *cobra.Command {
 				return errors.New("quake-wctr: --gpuworld-check is for the game loop, not --worldref (which always compares)")
 			}
 			if cmd.Flags().Changed("worldref") {
-				return runWorldref(cmd.OutOrStdout(), p, mapSlug, worldref, w, h, gpuWorld, frames)
+				slug := mapSlug
+				if slug == "" {
+					slug = "e1m1" // the fixed views are of a map: --worldref's default
+				}
+				return runWorldref(cmd.OutOrStdout(), p, slug, worldref, w, h, gpuWorld, frames)
 			}
 			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck})
 		},
 	}
 	fl := c.Flags()
 	fl.StringVar(&pakPath, "pak", DefaultPak, "pak0.pak")
-	fl.StringVar(&mapSlug, "map", "e1m1", "map slug")
+	fl.StringVar(&mapSlug, "map", "", "map slug: start on this map and skip the menu (default: boot into the main menu; --worldref defaults to e1m1)")
 	fl.IntVar(&w, "width", 640, "frame width (the surface has the same size)")
 	fl.IntVar(&h, "height", 400, "frame height")
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
@@ -254,8 +270,12 @@ func gpuWorldFrame(out io.Writer, wv *worldview.World, cm *render.ColorMap, v wo
 	return frame, nil
 }
 
-// runGame plays the map on the surface until it is dropped, or for frames
-// frames when frames > 0.
+// testRunner, set by a test, receives the runner once it is set up (nil in
+// the command).
+var testRunner func(*runloop.Runner)
+
+// runGame plays on the surface until it is dropped, or for frames frames
+// when frames > 0: the map slug, or the main menu when slug is "".
 func runGame(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames int) error {
 	return runGameWith(out, errOut, fsys, slug, w, h, frames, gameOpts{})
 }
@@ -275,18 +295,26 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		return err
 	}
 	defer gs.Close()
+	// No map: boot into the main menu, as the browser build does (the runner
+	// spawns the "start" hub behind it, the attract demo off: its stream
+	// desyncs the client). A map: skip the menu and run that map.
 	so := runner.SetupOpts{
-		Backend:  nil,
-		PakFS:    fsys,
-		FBWidth:  w,
-		FBHeight: h,
-		MapSlug:  slug,
-		SkipMenu: true,
-		Logf:     func(format string, args ...any) { fmt.Fprintf(errOut, "QUAKE: "+format+"\n", args...) },
+		Backend:            nil,
+		PakFS:              fsys,
+		FBWidth:            w,
+		FBHeight:           h,
+		MapSlug:            slug,
+		SkipMenu:           slug != "",
+		DisableAttractDemo: true,
+		Logf:               func(format string, args ...any) { fmt.Fprintf(errOut, "QUAKE: "+format+"\n", args...) },
 	}
 	var stats *checkStats
 	if g.gpuWorld {
-		gw, err := openGameWorld(fsys, slug, w, h)
+		world := slug
+		if world == "" {
+			world = "start"
+		}
+		gw, err := openGameWorld(fsys, world, w, h)
 		switch {
 		case errors.Is(err, gpuworld.ErrAtlasFull):
 			// The map's surfaces do not fit the GPU atlas: play it on the CPU.
@@ -302,11 +330,14 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 			}
 		}
 	}
-	be := wasisurface.New(w, h, gs.Down, gs.Up)
+	be := wasisurface.New(w, h, gs.Down, gs.Up).WithMouse(gs.Motion, gs.ButtonDown, gs.ButtonUp)
 	so.Backend = be
 	r, err := runner.Setup(so)
 	if err != nil {
 		return err
+	}
+	if testRunner != nil {
+		testRunner(r)
 	}
 	rend, err := render.NewPresentRenderer(r.Pre2DDraw, gs.Presenter)
 	if err != nil {

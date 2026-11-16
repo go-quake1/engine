@@ -144,3 +144,82 @@ func TestBackendBasics(t *testing.T) {
 		t.Errorf("Now = %v, want 1.5", got)
 	}
 }
+
+type fakeMotion struct {
+	batches [][]wasigpu.MotionEvent
+	err     error
+}
+
+func (f *fakeMotion) Poll() ([]wasigpu.MotionEvent, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.batches) == 0 {
+		return nil, nil
+	}
+	b := f.batches[0]
+	f.batches = f.batches[1:]
+	return b, nil
+}
+
+type fakeButtons struct {
+	batches [][]wasigpu.ButtonEvent
+	err     error
+}
+
+func (f *fakeButtons) Poll() ([]wasigpu.ButtonEvent, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.batches) == 0 {
+		return nil, nil
+	}
+	b := f.batches[0]
+	f.batches = f.batches[1:]
+	return b, nil
+}
+
+// The mouse: motion sums into the frame's delta (the sign the engine's
+// ApplyMouseMove takes: right and down are positive, as the DOM's movementX/Y),
+// the left button is fire and the right one is Mouse2, buttons the engine does
+// not bind are dropped, and a backend without the mouse reports none.
+func TestPollInputMouse(t *testing.T) {
+	down := &fakeButtons{batches: [][]wasigpu.ButtonEvent{{{Button: 0}, {Button: 1}, {Button: 2}, {Button: 4}}}}
+	up := &fakeButtons{batches: [][]wasigpu.ButtonEvent{{{Button: 0}}}}
+	motion := &fakeMotion{batches: [][]wasigpu.MotionEvent{{{DX: 3, DY: -2}, {DX: 1.5, DY: 4}}}}
+	b := New(640, 400, &fakeKeys{}, &fakeKeys{}).WithMouse(motion, down, up)
+	snap, err := b.PollInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.MouseDX != 4.5 || snap.MouseDY != 2 {
+		t.Errorf("motion = %v,%v, want 4.5,2", snap.MouseDX, snap.MouseDY)
+	}
+	if want := []backend.KeyCode{backend.KeyMouse1, backend.KeyMouse2}; !reflect.DeepEqual(snap.KeysDown, want) {
+		t.Errorf("buttons down = %v, want %v", snap.KeysDown, want)
+	}
+	if want := []backend.KeyCode{backend.KeyMouse1}; !reflect.DeepEqual(snap.KeysUp, want) {
+		t.Errorf("buttons up = %v, want %v", snap.KeysUp, want)
+	}
+	// The next frame starts from nothing.
+	if snap, _ = b.PollInput(); snap.MouseDX != 0 || snap.MouseDY != 0 || len(snap.KeysDown) != 0 || len(snap.KeysUp) != 0 {
+		t.Errorf("second poll = %+v, want empty", snap)
+	}
+	// Keys and buttons share the snapshot.
+	kd := &fakeKeys{batches: [][]wasigpu.KeyEvent{{{Key: "key-w"}}}}
+	b = New(640, 400, kd, nil).WithMouse(nil, &fakeButtons{batches: [][]wasigpu.ButtonEvent{{{Button: 0}}}}, nil)
+	if snap, _ = b.PollInput(); !reflect.DeepEqual(snap.KeysDown, []backend.KeyCode{backend.KeyW, backend.KeyMouse1}) {
+		t.Errorf("keys and buttons = %v", snap.KeysDown)
+	}
+	// Without the mouse there is none, and a stream error comes back.
+	if snap, _ = New(640, 400, nil, nil).PollInput(); snap.MouseDX != 0 || len(snap.KeysDown) != 0 {
+		t.Errorf("no mouse: %+v", snap)
+	}
+	boom := errors.New("boom")
+	if _, err := New(640, 400, nil, nil).WithMouse(&fakeMotion{err: boom}, nil, nil).PollInput(); !errors.Is(err, boom) {
+		t.Errorf("motion error = %v", err)
+	}
+	if _, err := New(640, 400, nil, nil).WithMouse(nil, &fakeButtons{err: boom}, nil).PollInput(); !errors.Is(err, boom) {
+		t.Errorf("button error = %v", err)
+	}
+}

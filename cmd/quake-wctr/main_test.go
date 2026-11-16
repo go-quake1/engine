@@ -18,6 +18,7 @@ import (
 	"github.com/go-quake1/engine/backend/wasisurface"
 	"github.com/go-quake1/engine/pak"
 	"github.com/go-quake1/engine/render"
+	"github.com/go-quake1/engine/runloop"
 	"github.com/go-wasmcontainers/gpu/wasigpu"
 )
 
@@ -262,5 +263,119 @@ func TestWorldrefPresentsThroughSurface(t *testing.T) {
 	}
 	if p.frames != worldrefPresents || closes != 1 {
 		t.Errorf("presented %d, closed %d", p.frames, closes)
+	}
+}
+
+// scriptKeys is a key stream that gives one scripted batch per poll.
+type scriptKeys struct {
+	batches [][]wasigpu.KeyEvent
+	i       int
+}
+
+func (s *scriptKeys) Poll() ([]wasigpu.KeyEvent, error) {
+	if s.i >= len(s.batches) {
+		return nil, nil
+	}
+	b := s.batches[s.i]
+	s.i++
+	return b, nil
+}
+func (s *scriptKeys) Closed() bool { return false }
+
+// fakeMouse feeds the same motion every poll, and button batches in turn.
+type fakeMouse struct {
+	dx, dy float64
+	down   [][]wasigpu.ButtonEvent
+	i      int
+}
+
+func (f *fakeMouse) Poll() ([]wasigpu.MotionEvent, error) {
+	return []wasigpu.MotionEvent{{DX: f.dx, DY: f.dy}}, nil
+}
+
+func (f *fakeMouse) pollButtons() ([]wasigpu.ButtonEvent, error) {
+	if f.i >= len(f.down) {
+		return nil, nil
+	}
+	b := f.down[f.i]
+	f.i++
+	return b, nil
+}
+
+type buttonsOf struct{ f *fakeMouse }
+
+func (b buttonsOf) Poll() ([]wasigpu.ButtonEvent, error) { return b.f.pollButtons() }
+
+func enter() []wasigpu.KeyEvent { return []wasigpu.KeyEvent{{Key: "enter"}} }
+
+// TestRunGameMenu: with no map the game boots into the main menu (the world
+// frozen behind it), and Single Player, New Game and a skill, each an Enter,
+// leave it for the game. With a map the menu is skipped.
+func TestRunGameMenu(t *testing.T) {
+	var r *runloop.Runner
+	var boot string
+	old := testRunner
+	testRunner = func(x *runloop.Runner) { r, boot = x, x.Menu.State.String() }
+	t.Cleanup(func() { testRunner = old })
+	keys := &scriptKeys{batches: [][]wasigpu.KeyEvent{nil, enter(), nil, enter(), nil, enter()}}
+	oldOpen := openSurface
+	openSurface = func(w, h int) (*gpuSurface, error) {
+		return &gpuSurface{Presenter: &fakePresenter{}, Down: keys, Up: fakeKeys{}, Close: func() {}}, nil
+	}
+	t.Cleanup(func() { openSurface = oldOpen })
+	var out, errOut bytes.Buffer
+	if err := runGame(&out, &errOut, realFS(t), "", 64, 40, 8); err != nil {
+		t.Fatalf("runGame: %v\n%s", err, errOut.String())
+	}
+	if boot != "main" {
+		t.Errorf("menu state at boot = %q, want main", boot)
+	}
+	if strings.Contains(errOut.String(), "menu skipped") {
+		t.Errorf("the menu was skipped with no --map:\n%s", errOut.String())
+	}
+	// Three Enters in: Single Player, New Game, the skill; the menu is gone.
+	if got := r.Menu.State.String(); got != "none" {
+		t.Errorf("menu state after Single Player, New Game, skill = %q, want none", got)
+	}
+}
+
+// TestRunGameMouseLook: relative motion turns the view the way the DOM's
+// movementX/Y turn it in the browser build (mouse right: yaw decreases; mouse
+// down: pitch increases), and the left button is fire.
+func TestRunGameMouseLook(t *testing.T) {
+	angles := func(dx, dy float64) [3]float32 {
+		var r *runloop.Runner
+		old := testRunner
+		testRunner = func(x *runloop.Runner) { r = x }
+		defer func() { testRunner = old }()
+		m := &fakeMouse{dx: dx, dy: dy}
+		oldOpen := openSurface
+		openSurface = func(w, h int) (*gpuSurface, error) {
+			return &gpuSurface{Presenter: &fakePresenter{}, Down: fakeKeys{}, Up: fakeKeys{}, Motion: m,
+				ButtonDown: buttonsOf{m}, ButtonUp: buttonsOf{&fakeMouse{}}, Close: func() {}}, nil
+		}
+		defer func() { openSurface = oldOpen }()
+		var errOut bytes.Buffer
+		if err := runGame(&bytes.Buffer{}, &errOut, realFS(t), "e1m1", 64, 40, 60); err != nil {
+			t.Fatalf("runGame: %v\n%s", err, errOut.String())
+		}
+		return r.ViewAngles
+	}
+	still := angles(0, 0)
+	moved := angles(40, 30)
+	norm := func(d float32) float32 { // a difference of angles in (-180, 180]
+		for d > 180 {
+			d -= 360
+		}
+		for d <= -180 {
+			d += 360
+		}
+		return d
+	}
+	if dyaw := norm(moved[1] - still[1]); dyaw >= -1 {
+		t.Errorf("yaw changed by %v for a motion to the right, want it to decrease", dyaw)
+	}
+	if dpitch := norm(moved[0] - still[0]); dpitch <= 1 {
+		t.Errorf("pitch changed by %v for a motion down, want it to increase", dpitch)
 	}
 }
