@@ -29,6 +29,18 @@ func NewSurfaceTexture(mt *bspfile.MipTex) (st *render.SurfaceTexture, ok bool) 
 	return st, true
 }
 
+// SetSurfaceGeometry sets what R_AddDynamicLights reads of a face besides its
+// lightmap: surf->plane (the face's plane, from its vertices) and
+// surf->texinfo->vecs.
+func SetSurfaceGeometry(desc *render.SurfaceDesc, fv bsprender.FaceVerts, info bsprender.LightmapInfo) {
+	pl := bsprender.SurfacePlaneOf(fv, info)
+	desc.Plane = render.Plane{Normal: pl.Normal, Dist: pl.Dist}
+	desc.TexVecs = [2][4]float32{
+		{pl.AxisS[0], pl.AxisS[1], pl.AxisS[2], pl.OffS},
+		{pl.AxisT[0], pl.AxisT[1], pl.AxisT[2], pl.OffT},
+	}
+}
+
 // NewSurfaceDesc is the msurface_t of a lit face as the surface cache reads it
 // (Mod_LoadFaces: extents, texturemins, styles, samples), from the face's
 // lightmap geometry and the lighting lump. The returned info is the one to

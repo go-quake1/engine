@@ -138,7 +138,7 @@ func main() {
 			i++
 			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
-			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate":
+			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++
@@ -263,6 +263,7 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		render.PerspSubdivStep = 1 // the reference exact per pixel: what the 8-pixel steps cost
 	}
 	gr.NoAnimate = opts.ablate["--noAnimate"]
+	gr.IgnoreDLights = opts.ablate["--noDlights"]
 	// --anim: the light styles and '+' texture frames of several times (the
 	// runner's: worldview.LightStyleValue and the miptex chains), on both
 	// sides; otherwise the resting world once.
@@ -288,17 +289,20 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 		for vi, view := range views {
 			i := ti*len(views) + vi
 			ref, _ := render.NewFrameBuffer(width, height)
-			if tm >= 0 {
-				// How much the animation moves the picture: the reference at
-				// rest against the reference at time tm.
-				anim := w.Anim
-				w.Anim = worldview.Animation{}
+			if opts.ablate["--dlights"] {
+				w.DLights, w.Now = dlightScenario(view), 0
+			}
+			if tm >= 0 || opts.ablate["--dlights"] {
+				// How much the animation or the lights move the picture: the
+				// reference at rest against the reference with them.
+				anim, lights := w.Anim, w.DLights
+				w.Anim, w.DLights = worldview.Animation{}, [render.MaxDLights]render.DLight{}
 				rest, _ := render.NewFrameBuffer(width, height)
 				if err := w.DrawSoftware(rest, cm, view); err != nil {
 					v.Detail = err.Error()
 					return v
 				}
-				w.Anim = anim
+				w.Anim, w.DLights = anim, lights
 				if err := w.DrawSoftware(ref, cm, view); err != nil {
 					v.Detail = err.Error()
 					return v
@@ -416,6 +420,10 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	for p := 0; p < passes+1; p++ { // the first pass warms up
 		for _, view := range views {
+			if opts.ablate["--dlights"] {
+				// a muzzle flash, a rocket and its explosion around each view
+				w.DLights, w.Now = dlightScenario(view), 0
+			}
 			if opts.ablate["--anim"] {
 				// the light styles and '+' frames of a game at 60 frames per
 				// second (so more of them move between two visits of a view than

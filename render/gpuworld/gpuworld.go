@@ -152,6 +152,9 @@ type Geometry struct {
 	rects [][render.SurfMips]Rect // by ordinal
 	baked [][render.SurfMips]surfState
 	env   render.SurfaceEnv
+	// stamp is the frame (frameNo) a surface was last looked at in.
+	stamp   [][render.SurfMips]uint32
+	frameNo uint32
 
 	// Updates are the atlas rectangles the last [Geometry.Draws] re-baked
 	// (Atlas.Pixels already holds them), UpdateBytes their size and Deferred
@@ -164,6 +167,9 @@ type Geometry struct {
 	// from Build).
 	UpdateBudget int
 	updBuf       []byte
+	// IgnoreDLights bakes the surfaces without the world's dynamic lights (the
+	// planted defect of the dynamic light check).
+	IgnoreDLights bool
 }
 
 // MaxUpdateBytes is the default UpdateBudget: the bytes of re-baked surfaces
@@ -175,8 +181,9 @@ const MaxUpdateBytes = 4 << 20
 // surfState is what a baked surface was built with: D_CacheSurface's lightadj
 // and texture.
 type surfState struct {
-	adj [4]int
-	tex *render.SurfaceTexture
+	adj  [4]int
+	tex  *render.SurfaceTexture
+	dlit bool // baked with a dynamic light on it (D_CacheSurface's cache->dlight)
 }
 
 // Update is one re-baked surface: its rectangle in the atlas of level 0 (Low
@@ -220,9 +227,23 @@ func bakeSurfaces(w *worldview.World, f *worldview.Face, env *render.SurfaceEnv)
 // baked in another state than the world's animation gives now, within the
 // frame's budget.
 func (g *Geometry) refresh(w *worldview.World, f *worldview.Face, ord, mip int) {
+	// A face is in the frame's list once per leaf it is attached to: one bake
+	// serves them all.
+	if g.stamp[ord][mip] == g.frameNo {
+		return
+	}
+	g.stamp[ord][mip] = g.frameNo
 	adj, tex := w.SurfaceState(f)
 	st := &g.baked[ord][mip]
-	if st.adj == adj && st.tex == tex {
+	// The dynamic lights of the frame (R_PushDlights marked the face the way the
+	// CPU's surfaces are): a surface they light is baked with them in every
+	// frame it is lit, and once more after, to take them off.
+	env := g.env
+	if !g.IgnoreDLights {
+		w.LightEnv(&env)
+	}
+	dlit := f.Surf.Desc.DLit(&env)
+	if st.adj == adj && st.tex == tex && !st.dlit && !dlit {
 		return
 	}
 	r := g.rects[ord][mip]
@@ -236,11 +257,11 @@ func (g *Geometry) refresh(w *worldview.World, f *worldview.Face, ord, mip int) 
 	if g.updBuf == nil {
 		g.updBuf = make([]byte, 0, g.UpdateBudget)
 	}
-	px, ok := bakeMip(f, adj, tex, mip, &g.env)
+	px, ok := bakeMip(f, adj, tex, mip, &env)
 	if !ok {
 		return
 	}
-	*st = surfState{adj, tex}
+	*st = surfState{adj, tex, dlit}
 	at := g.Surf
 	if mip > 0 {
 		at = g.SurfLow
@@ -327,7 +348,8 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 			}
 		}
 		g.rects = append(g.rects, rs)
-		g.baked = append(g.baked, [render.SurfMips]surfState{{adj, tex}, {adj, tex}, {adj, tex}, {adj, tex}})
+		g.stamp = append(g.stamp, [render.SurfMips]uint32{})
+		g.baked = append(g.baked, [render.SurfMips]surfState{{adj, tex, false}, {adj, tex, false}, {adj, tex, false}, {adj, tex, false}})
 		n := f.Verts.NumVerts
 		base := uint32(len(g.Vertices) / VertexStride)
 		g.Ord[f.Idx] = int32(g.Faces)
@@ -406,6 +428,7 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 	var ptsBuf [render.MaxPolyVerts][3]float32
 	out = out[:0]
 	g.Updates, g.UpdateBytes, g.Deferred = g.Updates[:0], 0, 0
+	g.frameNo++
 	g.updBuf = g.updBuf[:0]
 	// Back to front: the walk's list is front to back and Quake's edge sorter
 	// shows, at every pixel, the face with the smallest key (the first the walk

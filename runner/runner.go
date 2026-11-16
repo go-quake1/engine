@@ -428,6 +428,9 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 		now := clientState.MsgTime
 		switch kind {
 		case protocol.TEExplosion, protocol.TETarExplosion:
+			if kind == protocol.TEExplosion { // the tarbaby's blob explosion has no light
+				explosionDLight(&clientState.DLights, origin, now)
+			}
 			render.ParticleExplosion(particlePool, origin, now, particleRNG)
 			if explosionSprite != nil {
 				tempSpritePool.Spawn(origin, now, 0)

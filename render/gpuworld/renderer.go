@@ -42,6 +42,9 @@ type Renderer struct {
 	// NoAnimate leaves the surfaces as baked (the planted defect of the
 	// animation check): a frame does not upload the re-baked rectangles.
 	NoAnimate bool
+	// IgnoreDLights draws the surfaces without the world's dynamic lights (the
+	// planted defect of the dynamic light check).
+	IgnoreDLights bool
 	// Uploaded and UploadedBytes are the surface rectangles and bytes the
 	// last frame wrote into the atlases.
 	Uploaded, UploadedBytes int
@@ -235,6 +238,7 @@ func (r *Renderer) DrawEntities(v worldview.View, ents []worldview.AliasEnt) err
 func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 	var err error
 	r.cur = v
+	r.geo.IgnoreDLights = r.IgnoreDLights
 	if r.draws, err = r.geo.Draws(r.w, v, r.width, r.height, r.draws, r.Mip); err != nil {
 		return err
 	}

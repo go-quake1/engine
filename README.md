@@ -303,8 +303,9 @@ reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 measured in v0.9.0's back-to-front order, 0.006 % in the earlier forward order
 once the shader reproduced the reference's 8-pixel sub-spans and left-edge
 coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
-repository: point `QUAKE_PAK` at it. Dynamic lights are a later step; the light
-styles and the `+` textures move on the GPU since v0.18.0 (below). Figures and where the two differ:
+repository: point `QUAKE_PAK` at it. The light styles and the `+` textures move on
+the GPU since v0.18.0, and the dynamic lights are on the CPU and the GPU since v0.19.0 (below).
+Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
 `render/gpuworld` also builds for `GOOS=wasip1` (quake level 2), on a remote
@@ -400,14 +401,28 @@ frame, only the atlas rectangles of the faces it draws whose styles or texture
 frame differ from what they were baked with, then uploads them with one
 `WriteTexture` each, within a 4 MiB budget per frame. At 60 frames per second on e1m1
 that is 4 to 8 KB a frame on average (a frame in about eight uploads 40 to 330 KB,
-the rest nothing). `quake-worldcheck --anim` on a real GPU: 0 of 4,096,000 pixels
-unexplained over 64 frames of animated views; a GPU that keeps its baked atlas fails at
-7.17 %. The GPU follows the CPU path's animation (the 11 default styles; the server's
+the rest nothing). `quake-worldcheck --anim` on a real GPU: 166 of 4,096,000 pixels
+(0.004 %) unexplained over 64 frames of animated views; a GPU that keeps its baked atlas
+fails at 8.07 %. The GPU follows the CPU path's animation (the 11 default styles; the server's
 `lightstyle` is not wired on either). See
 [docs/webgpu-world/2026-11-16-light-styles-textures.md](docs/webgpu-world/2026-11-16-light-styles-textures.md).
 
+**Dynamic lights** (v0.19.0, [#106](https://github.com/go-quake1/engine/issues/106) item 7)
+are ported from the reference: `R_MarkLights` and `R_PushDlights`
+(`bsprender.MarkLights`, `PushDlights`), the dynamic light term of `R_BuildLightMap`
+(`render.AddDynamicLights`, with `D_CacheSurface` rebuilding a lit surface in every
+frame it is lit and once after), `CL_AllocDlight`, `CL_DecayLights` and the lights
+`CL_RelinkEntities` and `TE_EXPLOSION` make (muzzle flash, bright and dim light, red and
+blue, the rocket's light, the explosion). Tests are pinned on values worked from
+`r_surf.c`, `r_light.c`, `cl_main.c` and `cl_tent.c`. The GPU re-bakes the surfaces a
+light reaches in each frame it reaches them, as the CPU does, and uploads them within the
+same 4 MiB budget: `quake-worldcheck --dlights` (a muzzle flash, a rocket and an
+explosion around each of the 16 views) on a real GPU, 7 of 1,024,000 pixels unexplained,
+the lights changing 87 % of the reference's pixels; a GPU that ignores them fails at 81 %.
+See [docs/webgpu-world/2026-11-16-dynamic-lights.md](docs/webgpu-world/2026-11-16-dynamic-lights.md).
+
 Not ported: the clipping of triangles that cross the near plane
-(`r_aclip.c`: they are dropped), and dynamic lights.
+(`r_aclip.c`: they are dropped).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

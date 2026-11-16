@@ -82,6 +82,13 @@ type WorldDrawer interface {
 	DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error
 }
 
+// DynamicLighter is implemented by a [WorldDrawer] that lights its faces with
+// the frame's dynamic lights (cl_dlights, the same the software pass uses) and
+// the time cl.time: the runner calls SetDLights before DrawWorld.
+type DynamicLighter interface {
+	SetDLights(lights *[client.MaxDLights]client.DLight, now float32)
+}
+
 // setupRenderer loads the BSP, builds the mark/walk contexts + synthetic
 // texture + identity colormap, anchors the camera origin, and installs
 // runner.Pre2DDraw as a closure that rasterizes one frame per call.
@@ -217,6 +224,8 @@ func setupRenderer(opts setupRendererOpts) error {
 	if err != nil {
 		return fmt.Errorf("surface textures: %w", err)
 	}
+	worldSurf.setLights(bsprender.NewDLightTree(bm), len(faces))
+	var lastDLightTime float32 // cl.time of the last frame, for CL_DecayLights
 	var skyCache render.SkyCache
 	frameCount := 0
 	var gpuFrame []byte // the GPU-mode frame kept by the check (opts.worldCheck)
@@ -562,6 +571,25 @@ func setupRenderer(opts setupRendererOpts) error {
 		// hands back byte offsets into this slice.
 		lightingLump := bm.File.Lighting()
 		worldSurf.beginFrame(fb.Width, fb.Height, fovX)
+		// Dynamic lights: CL_DecayLights, the lights the entities make
+		// (CL_RelinkEntities), then R_PushDlights marks the faces they reach.
+		dlNow := runner.Client.MsgTime
+		if dt := dlNow - lastDLightTime; dt > 0 {
+			decayDLights(&runner.Client.DLights, dlNow, dt)
+		}
+		lastDLightTime = dlNow
+		if realHost != nil {
+			precache := realHost.Server.ModelPrecache
+			for entNum, es := range runner.Client.Entities {
+				rocket := false
+				if es.ModelIdx > 0 && es.ModelIdx < len(precache) {
+					k, ok := trailKindForModel(precache[es.ModelIdx])
+					rocket = ok && k == render.TrailRocket
+				}
+				entityDLights(&runner.Client.DLights, entNum, es, rocket, dlNow, func() int { return int(particleRNG()) & 31 })
+			}
+		}
+		worldSurf.pushDlights(&runner.Client.DLights, dlNow)
 		// d_lightstylevalue at cl.time (R_AnimateLight).
 		styleAt := func(s byte) int { return lightStyleBrightness(s, turbTimeSec) }
 		// Painter's algorithm: WalkWorld emits faces FRONT-to-BACK
@@ -676,6 +704,9 @@ func setupRenderer(opts setupRendererOpts) error {
 
 		gpuLit := false
 		if wd := opts.worldDraw; wd != nil {
+			if dl, ok := wd.(DynamicLighter); ok {
+				dl.SetDLights(&runner.Client.DLights, dlNow)
+			}
 			if err := wd.DrawWorld(fb, origin, viewAngles, fovX, turbTimeSec); err != nil {
 				logf("GPU world: %v (this frame's lit faces fall back to the CPU)", err)
 			} else {

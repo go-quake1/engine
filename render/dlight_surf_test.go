@@ -46,6 +46,10 @@ func TestAddDynamicLightsWorked(t *testing.T) {
 		{"minlight above the radius left adds nothing", 0, DLight{Origin: [3]float32{16, 8, 24}, Radius: 30, MinLight: 10},
 			// rad = 30 - 24 = 6 < 10.
 			[6]uint32{}, ""},
+		{"the larger axis distance is td", 0, DLight{Origin: [3]float32{24, 40, 24}, Radius: 100},
+			// impact (24, 40): row 0 td 40: sd 24, 8, 8 give 40 + 12, 40 + 4, 40 + 4;
+			// row 1 td 24 (sd 24 is not > td): 24 + 12, 24 + 4, 24 + 4; each (76 - d) * 256.
+			[6]uint32{6144, 8192, 8192, 10240, 12288, 12288}, ""},
 		{"td is truncated toward zero", 0, DLight{Origin: [3]float32{16, 8.9, 24}, Radius: 100},
 			// row 1: int(8.9 - 16) = -7, so td 7: 16 + 3 = 19 (14592), 7 + 0 (17664), 19.
 			[6]uint32{14336, 17408, 14336, 14592, 17664, 14592}, ""},

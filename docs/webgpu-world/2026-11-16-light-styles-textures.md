@@ -42,13 +42,18 @@ the CPU, not a different animation.
 `quake-worldcheck --anim`: the light styles and `+` frames of eight times
 (`0.05 + 0.37 k` seconds) on both the reference and the GPU, on 8 views that look at an
 animated face from close by (`World.AnimatedViews`: the largest faces of an animated
-light style or `+` chain, alternately), 64 frames of 320x200. The animation moves 9.6 %
+light style or `+` chain, alternately), 64 frames of 320x200. The animation moves 10.6 %
 of the reference's pixels against the resting world.
 
 | | differ | unexplained | tolerance |
 |---|---|---|---|
-| GPU following the animation | 1,680 of 4,096,000 | 0 (0.0000 %) | 2.5 % |
-| planted: GPU keeps its baked atlas (`--noAnimate`) | 393,758 | 293,715 (7.17 %) | FAIL |
+| GPU following the animation | 22,305 of 4,096,000 | 166 (0.004 %) | 2.5 % |
+| planted: GPU keeps its baked atlas (`--noAnimate`) | 442,640 | 330,648 (8.07 %) | FAIL |
+
+Correction (2026-11-16, made after v0.18.0 was released): the first version of this table (0 unexplained, 7.17 %,
+9.6 % moved, 418 KB) was a cached `go test` result of an earlier set of views, not a
+run of the code released as v0.18.0. The figures above were measured with `-count=1` on a
+clean clone of the v0.18.0 tag.
 
 The 16 fixed views at rest, unchanged: 45 differ, 3 unexplained of 1,024,000.
 
@@ -71,8 +76,9 @@ most frames upload nothing:
 | 2 | 264 | 25 / 300 | 190 | 6.2 KB/frame | 66 KB | 279 KB |
 | 3 | 65 | 32 / 300 | 468 | 8.0 KB/frame | 74 KB | 79 KB |
 
-The checked frames, each at a new time (the worst case: every frame has something to
-re-bake), upload at most 418 KB. The budget (4 MiB) is not reached.
+The 64 checked frames, each at a new time (the worst case: every frame has something to
+re-bake), upload 930 surfaces (1.95 MB) in all and at most 199 KB in a frame. The budget
+(4 MiB) is not reached.
 
 ## World pass, before and after
 

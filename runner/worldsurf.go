@@ -7,6 +7,7 @@ package runner
 import (
 	"github.com/go-quake1/engine/bspfile"
 	"github.com/go-quake1/engine/bsprender"
+	"github.com/go-quake1/engine/client"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/worldview"
 )
@@ -19,9 +20,10 @@ import (
 // drawer reads that surface with the face's own gradients.
 //
 // What the runner adds to the reference's fixed views: light styles at their
-// real value (d_lightstylevalue, R_AnimateLight) and animated '+' textures,
+// real value (d_lightstylevalue, R_AnimateLight), animated '+' textures,
 // which are a changed texture for D_CacheSurface (the surface is rebuilt in
-// place, its block kept).
+// place, its block kept), and dynamic lights (R_PushDlights, R_MarkLights, the
+// light term of R_BuildLightMap).
 type worldSurfaces struct {
 	tex   []*render.SurfaceTexture // by miptex slot; nil for a slot that did not decode
 	light []byte                   // the lighting lump
@@ -33,6 +35,16 @@ type worldSurfaces struct {
 	env    render.SurfaceEnv
 
 	cv [render.MaxPolyVerts]render.CachedVertex
+
+	// Dynamic lights (R_PushDlights): the tree the lights walk, the per-face
+	// dlightframe and dlightbits R_MarkLights writes (a face's surface is made
+	// on its first draw, so they are kept here), the frame count
+	// (r_framecount, from 1) and the frame's lights.
+	dtree     bsprender.DLightTree
+	markFrame []int32
+	markBits  []uint32
+	frame     int32
+	lights    [render.MaxDLights]render.DLight
 
 	// Builds and Hits count what the cache did since the map was loaded.
 	Builds, Hits, ThrashFrames int
@@ -79,6 +91,37 @@ func (ws *worldSurfaces) beginFrame(width, height int, fovX float32) {
 	}
 	ws.cache.SetupFrame()
 	ws.cache.Thrash = false
+	ws.frame++
+}
+
+// setLights gives the walk the map's BSP and its face count.
+func (ws *worldSurfaces) setLights(t bsprender.DLightTree, numFaces int) {
+	ws.dtree = t
+	ws.markFrame = make([]int32, numFaces)
+	ws.markBits = make([]uint32, numFaces)
+}
+
+// pushDlights is R_PushDlights for the frame beginFrame started: the live
+// lights (die >= now) mark the faces they reach.
+func (ws *worldSurfaces) pushDlights(lights *[client.MaxDLights]client.DLight, now float32) {
+	for i := range lights {
+		l := &lights[i]
+		ws.lights[i] = render.DLight{Origin: l.Origin, Radius: l.Radius, Die: l.Die, Decay: l.Decay, MinLight: l.MinLight, Key: l.Key, Color: l.Color}
+	}
+	if ws.dtree.Node == nil {
+		return
+	}
+	frame := ws.frame
+	bsprender.PushDlights(ws.dtree, ws.lights[:], now, func(face int, bit uint32) {
+		if face < 0 || face >= len(ws.markFrame) {
+			return
+		}
+		if ws.markFrame[face] != frame {
+			ws.markBits[face] = 0
+			ws.markFrame[face] = frame
+		}
+		ws.markBits[face] |= bit
+	})
 }
 
 // endFrame counts a frame in which the cache thrashed (r_cache_thrash).
@@ -103,6 +146,7 @@ func (ws *worldSurfaces) face(bmFaceInfo bsprender.LightmapInfo, fv bsprender.Fa
 		return nil
 	}
 	desc, info, _ := worldview.NewSurfaceDesc(bmFaceInfo, ws.light, st)
+	worldview.SetSurfaceGeometry(&desc, fv, info)
 	f := &surfFace{
 		sf:   render.SurfaceFace{Desc: desc},
 		info: info,
@@ -139,6 +183,10 @@ func (ws *worldSurfaces) draw(fb *render.FrameBuffer, cm *render.ColorMap, view 
 		adj[i] = style(s)
 	}
 	f.sf.Desc.Texture = st // an animated texture is a changed texture to D_CacheSurface
+	if idx >= 0 && idx < len(ws.markFrame) {
+		f.sf.Desc.DLightFrame, f.sf.Desc.DLightBits = ws.markFrame[idx], ws.markBits[idx]
+	}
+	ws.env.DLights, ws.env.FrameCount = ws.lights[:], ws.frame
 	ws.env.Colormap = cm
 	had := f.sf.Spot(mip)
 	hit := had != nil && !had.Dlight && had.Texture == st && had.LightAdj == adj // D_CacheSurface's reuse test

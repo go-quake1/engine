@@ -222,6 +222,7 @@ func New(bsp []byte) (*World, error) {
 			continue
 		}
 		desc, info, plane := NewSurfaceDesc(info, light, surfTex[mi])
+		SetSurfaceGeometry(&desc, fv, info)
 		pts := make([][3]float32, fv.NumVerts)
 		for k := range pts {
 			pts[k] = fv.Vert(k)
@@ -358,6 +359,10 @@ func (w *World) pushDlights() {
 		d.DLightBits |= bit
 	})
 }
+
+// LightFrame is the frame count (r_framecount) of the last [World.Visible]: the
+// surfaces it marked with dynamic lights have it as their DLightFrame.
+func (w *World) LightFrame() int32 { return w.frame }
 
 // LightEnv sets the dynamic lights and the frame count (r_framecount) of the
 // frame the last [World.Visible] prepared in env, for the surfaces it marked.
