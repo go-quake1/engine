@@ -340,7 +340,10 @@ once the shader reproduced the reference's 8-pixel sub-spans and left-edge
 coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
 repository: point `QUAKE_PAK` at it. The light styles and the `+` textures move on
 the GPU since v0.18.0, the dynamic lights are on the CPU and the GPU since v0.20.0 and
-the alias triangles are clipped since v0.21.0 (below).
+the alias triangles are clipped since v0.21.0 (below). Since v0.22.0 `quake-wctr` draws
+the world on the GPU by default when one is granted (`--cpuworld` forces the CPU), the
+server's `lightstyle` messages are wired, `TE_EXPLOSION2` makes its light, entities are lit
+by the dynamic lights and the surface uploads are coalesced.
 Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
