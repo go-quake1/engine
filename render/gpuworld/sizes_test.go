@@ -46,7 +46,7 @@ func TestSurfaceAtlasSizes(t *testing.T) {
 			if f == nil {
 				continue
 			}
-			baked, ok := bakeSurfaces(f, env)
+			baked, ok := bakeSurfaces(w, f, env)
 			if !ok {
 				continue
 			}

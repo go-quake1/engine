@@ -38,6 +38,14 @@ type Renderer struct {
 	cur      worldview.View
 	readBuf  *webgpu.Buffer // DrawRead's MAP_READ buffer
 
+	surfTex, surfLowTex *webgpu.Texture // the surface atlases, rewritten where a surface is re-baked
+	// NoAnimate leaves the surfaces as baked (the planted defect of the
+	// animation check): a frame does not upload the re-baked rectangles.
+	NoAnimate bool
+	// Uploaded and UploadedBytes are the surface rectangles and bytes the
+	// last frame wrote into the atlases.
+	Uploaded, UploadedBytes int
+
 	// Mip is how a frame picks the mip level of a face; the zero value of the
 	// field in a Renderer made by [New] is Quake's ([Chosen]).
 	Mip MipPolicy
@@ -86,6 +94,7 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 		webgpu.TextureUsageRenderAttachment|webgpu.TextureUsageTextureBinding|webgpu.TextureUsageCopySrc); err != nil {
 		return nil, err
 	}
+	r.surfTex, r.surfLowTex = surfA, surfLowA
 	if err := r.upload(surfA, geo.Surf); err != nil {
 		return nil, err
 	}
@@ -230,6 +239,7 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 		return err
 	}
 	r.rec.Reset()
+	r.recordUpdates()
 	r.rec.WriteBuffer(r.ub, 0, UniformAt(v, r.w.FOV, r.width, r.height, r.Time))
 	if err := r.prepareAlias(ents); err != nil {
 		return err
@@ -247,6 +257,27 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 	r.recordSpecial(p)
 	r.recordAlias(p)
 	return p.End()
+}
+
+// recordUpdates writes the surfaces the frame's Draws re-baked (light styles
+// and '+' textures that moved) into the atlases, one WriteTexture each, before
+// the pass that reads them.
+func (r *Renderer) recordUpdates() {
+	r.Uploaded, r.UploadedBytes = 0, 0
+	if r.NoAnimate {
+		return
+	}
+	for _, u := range r.geo.Updates {
+		tex := r.surfTex
+		if u.Low {
+			tex = r.surfLowTex
+		}
+		r.rec.WriteTexture(webgpu.TexelCopyTextureInfo{Texture: tex, Origin: webgpu.Origin3D{X: u.R.X, Y: u.R.Y}},
+			u.Pix, webgpu.TexelCopyBufferLayout{BytesPerRow: u.R.W, RowsPerImage: u.R.H},
+			webgpu.Extent3D{Width: u.R.W, Height: u.R.H})
+		r.Uploaded++
+		r.UploadedBytes += len(u.Pix)
+	}
 }
 
 // DrawRead draws one frame of the world from v and reads the index frame back

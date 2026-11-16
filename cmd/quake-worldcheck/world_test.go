@@ -52,6 +52,43 @@ type verdict struct {
 	Interior     int        `json:"unexplained"`
 	InteriorRate float64    `json:"interior_rate"`
 	TotalRate    float64    `json:"total_rate"`
+
+	Frames        int `json:"frames"`
+	Moved         int `json:"moved_pixels"`
+	Uploaded      int `json:"uploaded_rects"`
+	UploadedBytes int `json:"uploaded_bytes"`
+	MaxFrameBytes int `json:"max_frame_upload_bytes"`
+}
+
+// TestAnimatedWorldMatches: with the light styles and the '+' textures of
+// eight times (--anim) on the reference and on the GPU, the GPU world still
+// matches, and surfaces were in fact re-baked and uploaded (a run that moved
+// nothing proves nothing).
+func TestAnimatedWorldMatches(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--anim")
+	if v.Check != "PASS" || v.Faces == 0 {
+		t.Fatalf("verdict %+v", v)
+	}
+	if v.Frames < 8 || v.Uploaded == 0 {
+		t.Fatalf("%d frames, %d surfaces uploaded: the animation did not move the atlas", v.Frames, v.Uploaded)
+	}
+	// The views must show the feature: the animation changes at least 5 % of
+	// the reference's pixels (the tolerance is 2.5 %), or a defect could hide.
+	if rate := float64(v.Moved) / float64(v.Pixels); rate < 0.05 {
+		t.Fatalf("the animation moves only %.4f of the reference's pixels: the views do not show it", rate)
+	}
+	t.Logf("%d frames, animation moves %.3f of the reference's pixels; %d surfaces (%d bytes) uploaded, at most %d bytes in a frame",
+		v.Frames, float64(v.Moved)/float64(v.Pixels), v.Uploaded, v.UploadedBytes, v.MaxFrameBytes)
+}
+
+// TestStaticAtlasFails is the planted negative of the animation: the GPU keeps
+// the surfaces it baked once (--noAnimate) while the reference animates, and the
+// comparison must fail.
+func TestStaticAtlasFails(t *testing.T) {
+	v := runInBrowser(t, "--tolerance", tolerance, "--anim", "--noAnimate")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a GPU that does not follow the light styles and textures was not caught: %+v", v)
+	}
 }
 
 // runInBrowser builds the program for js/wasm and runs it in Chromium with
@@ -77,7 +114,7 @@ func runInBrowser(t *testing.T, args ...string) verdict {
 }
 
 // runInBrowserRaw returns the program's last output line.
-func runInBrowserRaw(t *testing.T, args ...string) string {
+func runInBrowserRaw(t testing.TB, args ...string) string {
 	t.Helper()
 	return runInBrowserIn(t, ".", args...)
 }
@@ -85,7 +122,7 @@ func runInBrowserRaw(t *testing.T, args ...string) string {
 // runInBrowserIn is runInBrowserRaw for the program built from dir (a
 // quake-worldcheck directory: this one, or the same one of a clean clone of an
 // earlier tag).
-func runInBrowserIn(t *testing.T, dir string, args ...string) string {
+func runInBrowserIn(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	pakPath, chrome, profile := os.Getenv("QUAKE_PAK"), os.Getenv("QUAKE_CHROMIUM"), os.Getenv("QUAKE_PROFILE")
 	if pakPath == "" || chrome == "" || profile == "" {

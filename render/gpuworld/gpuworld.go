@@ -143,24 +143,113 @@ type Geometry struct {
 	SurfTab []byte
 	// SurfBytes is the sum of the surfaces' sizes, the atlas content.
 	SurfBytes [render.SurfMips]int
+
+	// The surfaces follow the world's animation (worldview.World.Anim): a
+	// surface is re-baked, at the mip level a frame draws it at, when the
+	// light styles or the texture frame it was baked with are no longer the
+	// frame's (D_CacheSurface's reuse test), and its rectangle is in
+	// Updates for the renderer to upload.
+	rects [][render.SurfMips]Rect // by ordinal
+	baked [][render.SurfMips]surfState
+	env   render.SurfaceEnv
+
+	// Updates are the atlas rectangles the last [Geometry.Draws] re-baked
+	// (Atlas.Pixels already holds them), UpdateBytes their size and Deferred
+	// the surfaces left for a later frame because the frame's UpdateBudget
+	// was reached.
+	Updates     []Update
+	UpdateBytes int
+	Deferred    int
+	// UpdateBudget is the most surface bytes one frame re-bakes (MaxUpdateBytes
+	// from Build).
+	UpdateBudget int
+	updBuf       []byte
 }
 
-// surfAtlasSurfaces bakes the four mip levels of face f with the software
+// MaxUpdateBytes is the default UpdateBudget: the bytes of re-baked surfaces
+// one frame uploads. It is a half of MaxBandBytes, far under the host's frame
+// (32 MiB); a frame that needs more shows the older surface for a frame or
+// more rather than overrunning the frame.
+const MaxUpdateBytes = 4 << 20
+
+// surfState is what a baked surface was built with: D_CacheSurface's lightadj
+// and texture.
+type surfState struct {
+	adj [4]int
+	tex *render.SurfaceTexture
+}
+
+// Update is one re-baked surface: its rectangle in the atlas of level 0 (Low
+// false) or of levels 1 to 3, and its Rect.W x Rect.H palette indices.
+type Update struct {
+	Low bool
+	R   Rect
+	Pix []byte
+}
+
+// bakeMip bakes one mip level of face f in the given state with the software
 // path's code (render.DrawSurface), refusing the faces the software path does
 // not draw (an empty surface, a texture without its mip levels).
-func bakeSurfaces(f *worldview.Face, env *render.SurfaceEnv) (s [render.SurfMips][]byte, ok bool) {
-	adj := worldview.StyleAdj(f.Surf.Desc.Styles)
+func bakeMip(f *worldview.Face, adj [4]int, tex *render.SurfaceTexture, mip int, env *render.SurfaceEnv) ([]byte, bool) {
+	sw, sh := f.Surf.Desc.Extents[0]>>mip, f.Surf.Desc.Extents[1]>>mip
+	if sw <= 0 || sh <= 0 {
+		return nil, false
+	}
+	px := make([]byte, sw*sh)
+	d := f.Surf.Desc
+	d.Texture = tex
+	if err := render.DrawSurface(px, &d, adj, mip, env); err != nil {
+		return nil, false
+	}
+	return px, true
+}
+
+// bakeSurfaces bakes the four mip levels of face f in the world's current
+// animation state.
+func bakeSurfaces(w *worldview.World, f *worldview.Face, env *render.SurfaceEnv) (s [render.SurfMips][]byte, ok bool) {
+	adj, tex := w.SurfaceState(f)
 	for mip := range s {
-		sw, sh := f.Surf.Desc.Extents[0]>>mip, f.Surf.Desc.Extents[1]>>mip
-		if sw <= 0 || sh <= 0 {
-			return s, false
-		}
-		s[mip] = make([]byte, sw*sh)
-		if err := render.DrawSurface(s[mip], &f.Surf.Desc, adj, mip, env); err != nil {
+		if s[mip], ok = bakeMip(f, adj, tex, mip, env); !ok {
 			return s, false
 		}
 	}
 	return s, true
+}
+
+// refresh re-bakes face f (ordinal ord) at mip level mip if its surface was
+// baked in another state than the world's animation gives now, within the
+// frame's budget.
+func (g *Geometry) refresh(w *worldview.World, f *worldview.Face, ord, mip int) {
+	adj, tex := w.SurfaceState(f)
+	st := &g.baked[ord][mip]
+	if st.adj == adj && st.tex == tex {
+		return
+	}
+	r := g.rects[ord][mip]
+	n := int(r.W) * int(r.H)
+	// A surface larger than the budget is still done, alone in its frame:
+	// otherwise it would never be.
+	if g.UpdateBytes > 0 && g.UpdateBytes+n > g.UpdateBudget {
+		g.Deferred++
+		return
+	}
+	if g.updBuf == nil {
+		g.updBuf = make([]byte, 0, g.UpdateBudget)
+	}
+	px, ok := bakeMip(f, adj, tex, mip, &g.env)
+	if !ok {
+		return
+	}
+	*st = surfState{adj, tex}
+	at := g.Surf
+	if mip > 0 {
+		at = g.SurfLow
+	}
+	blitRows(at, r, px, int(r.W))
+	start := len(g.updBuf)
+	g.updBuf = append(g.updBuf, px...)
+	g.Updates = append(g.Updates, Update{Low: mip > 0, R: r, Pix: g.updBuf[start : start+n : start+n]})
+	g.UpdateBytes += n
 }
 
 // Build bakes and packs the world's lit surfaces (every face at four mip
@@ -192,7 +281,7 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 		if f.Verts.NumVerts > render.MaxPolyVerts {
 			return nil, fmt.Errorf("gpuworld: face %d has %d vertices, above the %d the shader's edge loop is bounded to", f.Idx, f.Verts.NumVerts, render.MaxPolyVerts)
 		}
-		baked, ok := bakeSurfaces(f, env)
+		baked, ok := bakeSurfaces(w, f, env)
 		if !ok {
 			continue
 		}
@@ -228,12 +317,17 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 		if _, ok := placed[[2]int{f.Idx, 0}]; !ok {
 			continue
 		}
+		var rs [render.SurfMips]Rect
+		adj, tex := w.SurfaceState(f)
 		for mip := 0; mip < render.SurfMips; mip++ {
 			r := placed[[2]int{f.Idx, mip}]
+			rs[mip] = r
 			for _, x := range [4]uint32{r.X, r.Y, r.W, r.H} {
 				g.SurfTab = binary.LittleEndian.AppendUint32(g.SurfTab, x)
 			}
 		}
+		g.rects = append(g.rects, rs)
+		g.baked = append(g.baked, [render.SurfMips]surfState{{adj, tex}, {adj, tex}, {adj, tex}, {adj, tex}})
 		n := f.Verts.NumVerts
 		base := uint32(len(g.Vertices) / VertexStride)
 		g.Ord[f.Idx] = int32(g.Faces)
@@ -270,6 +364,7 @@ func Build(w *worldview.World, cm *render.ColorMap) (*Geometry, error) {
 		g.Faces++
 	}
 	g.Surf, g.SurfLow = surf.finish(), surfLow.finish()
+	g.env, g.UpdateBudget = *env, MaxUpdateBytes
 	return g, nil
 }
 
@@ -310,6 +405,8 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 	mv := worldview.NewMipView(width, height, w.FOV)
 	var ptsBuf [render.MaxPolyVerts][3]float32
 	out = out[:0]
+	g.Updates, g.UpdateBytes, g.Deferred = g.Updates[:0], 0, 0
+	g.updBuf = g.updBuf[:0]
 	// Back to front: the walk's list is front to back and Quake's edge sorter
 	// shows, at every pixel, the face with the smallest key (the first the walk
 	// emitted); with no depth test the same result is the list drawn in reverse.
@@ -332,6 +429,7 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 			if mip < 0 {
 				mip = max(0, min(render.SurfMips-1, level+pol.Bias))
 			}
+			g.refresh(w, f, int(g.Ord[idx]), mip)
 			out = append(out, FaceDraw{First: g.First[idx], Count: g.Count[idx], Mip: uint32(mip), Face: idx})
 		}
 	}

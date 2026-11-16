@@ -46,22 +46,30 @@ type viewStat struct {
 }
 
 type verdict struct {
-	Check        string     `json:"check"`
-	Detail       string     `json:"detail,omitempty"`
-	Adapter      string     `json:"adapter,omitempty"`
-	Fallback     bool       `json:"fallback"`
-	Width        int        `json:"width"`
-	Height       int        `json:"height"`
-	Faces        int        `json:"faces_on_gpu"`
-	Views        []viewStat `json:"views,omitempty"`
-	Pixels       int        `json:"pixels"`
-	Differ       int        `json:"differ"`
-	Interior     int        `json:"unexplained"`
-	InteriorRate float64    `json:"interior_rate"`
-	TotalRate    float64    `json:"total_rate"`
-	Tolerance    float64    `json:"tolerance"`
-	Bench        *benchRes  `json:"bench,omitempty"`
-	PartBench    *partBench `json:"part_bench,omitempty"`
+	Check    string     `json:"check"`
+	Detail   string     `json:"detail,omitempty"`
+	Adapter  string     `json:"adapter,omitempty"`
+	Fallback bool       `json:"fallback"`
+	Width    int        `json:"width"`
+	Height   int        `json:"height"`
+	Faces    int        `json:"faces_on_gpu"`
+	Views    []viewStat `json:"views,omitempty"`
+	Pixels   int        `json:"pixels"`
+	Differ   int        `json:"differ"`
+	Interior int        `json:"unexplained"`
+	// Animation (--anim): the frames compared, the surface rectangles and bytes
+	// the GPU re-baked and uploaded over them (the feature was exercised if
+	// non-zero) and the largest upload of one frame.
+	Frames        int        `json:"frames,omitempty"`
+	Moved         int        `json:"moved_pixels,omitempty"`
+	Uploaded      int        `json:"uploaded_rects,omitempty"`
+	UploadedBytes int        `json:"uploaded_bytes,omitempty"`
+	MaxFrameBytes int        `json:"max_frame_upload_bytes,omitempty"`
+	InteriorRate  float64    `json:"interior_rate"`
+	TotalRate     float64    `json:"total_rate"`
+	Tolerance     float64    `json:"tolerance"`
+	Bench         *benchRes  `json:"bench,omitempty"`
+	PartBench     *partBench `json:"part_bench,omitempty"`
 }
 
 func fetchBytes(url string) ([]byte, error) {
@@ -130,7 +138,7 @@ func main() {
 			i++
 			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
-			"--noMip", "--refMip0", "--mipBias", "--oldRef":
+			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++
@@ -254,65 +262,117 @@ func check(width, height int, tol float64, corrupt, requireGPU, benchRun, noLigh
 	if opts.ablate["--exactSpans"] {
 		render.PerspSubdivStep = 1 // the reference exact per pixel: what the 8-pixel steps cost
 	}
-	for i, view := range w.Views() {
-		ref, _ := render.NewFrameBuffer(width, height)
-		var err error
-		switch {
-		case opts.ablate["--oldRef"]:
-			// the reference of v0.6.1: per-pixel lightmap, full-size texture
-			err = w.DrawLightmapped(ref, cm, view)
-		case opts.ablate["--refMip0"]:
-			err = w.DrawSoftwareMip(ref, cm, view, 0)
-		default:
-			err = w.DrawSoftware(ref, cm, view)
+	gr.NoAnimate = opts.ablate["--noAnimate"]
+	// --anim: the light styles and '+' texture frames of several times (the
+	// runner's: worldview.LightStyleValue and the miptex chains), on both
+	// sides; otherwise the resting world once.
+	// The views are the ones that look at animated faces from close by
+	// (worldview.AnimatedViews): the fixed views show too little of them.
+	times := []float32{-1}
+	views := w.Views()
+	if opts.ablate["--anim"] {
+		times = times[:0]
+		for k := 0; k < 8; k++ {
+			times = append(times, 0.05+0.37*float32(k))
 		}
-		if err != nil {
-			v.Detail = err.Error()
+		views = w.AnimatedViews(8)
+		if len(views) == 0 {
+			v.Detail = "no animated face with a view"
 			return v
 		}
-		if err := gr.Draw(view); err != nil {
-			v.Detail = fmt.Sprintf("draw view %d: %v", i, err)
-			return v
+	}
+	for ti, tm := range times {
+		if tm >= 0 {
+			w.Anim = w.AnimationAt(tm)
 		}
-		got, err := gr.Readback(ctx)
-		if err != nil {
-			v.Detail = fmt.Sprintf("readback view %d: %v", i, err)
-			return v
-		}
-		st := viewStat{View: i, Pixels: width * height}
-		at := func(x, y int) byte { return ref.Pixels[y*ref.Pitch+x] }
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				g := got[y*width+x]
-				if g != worldview.ClearIndex {
-					st.Drawn++
+		for vi, view := range views {
+			i := ti*len(views) + vi
+			ref, _ := render.NewFrameBuffer(width, height)
+			if tm >= 0 {
+				// How much the animation moves the picture: the reference at
+				// rest against the reference at time tm.
+				anim := w.Anim
+				w.Anim = worldview.Animation{}
+				rest, _ := render.NewFrameBuffer(width, height)
+				if err := w.DrawSoftware(rest, cm, view); err != nil {
+					v.Detail = err.Error()
+					return v
 				}
-				if g == at(x, y) {
-					continue
+				w.Anim = anim
+				if err := w.DrawSoftware(ref, cm, view); err != nil {
+					v.Detail = err.Error()
+					return v
 				}
-				st.Differ++
-				// Explained: the GPU's index is the reference's at one of the
-				// eight neighbours, i.e. a one-pixel shift of the same image
-				// (rasterization rules, sampling position). Unexplained is
-				// what a shift cannot account for: wrong texel, wrong light.
-				explained := false
-				for dy := -1; dy <= 1 && !explained; dy++ {
-					for dx := -1; dx <= 1 && !explained; dx++ {
-						nx, ny := x+dx, y+dy
-						explained = nx >= 0 && ny >= 0 && nx < width && ny < height && at(nx, ny) == g
+				for k := range ref.Pixels {
+					if ref.Pixels[k] != rest.Pixels[k] {
+						v.Moved++
 					}
 				}
-				if !explained {
-					st.Interior++
+			}
+			var err error
+			switch {
+			case opts.ablate["--oldRef"]:
+				// the reference of v0.6.1: per-pixel lightmap, full-size texture
+				err = w.DrawLightmapped(ref, cm, view)
+			case opts.ablate["--refMip0"]:
+				err = w.DrawSoftwareMip(ref, cm, view, 0)
+			default:
+				err = w.DrawSoftware(ref, cm, view)
+			}
+			if err != nil {
+				v.Detail = err.Error()
+				return v
+			}
+			if err := gr.Draw(view); err != nil {
+				v.Detail = fmt.Sprintf("draw view %d: %v", i, err)
+				return v
+			}
+			got, err := gr.Readback(ctx)
+			if err != nil {
+				v.Detail = fmt.Sprintf("readback view %d: %v", i, err)
+				return v
+			}
+			st := viewStat{View: i, Pixels: width * height}
+			at := func(x, y int) byte { return ref.Pixels[y*ref.Pitch+x] }
+			for y := 0; y < height; y++ {
+				for x := 0; x < width; x++ {
+					g := got[y*width+x]
+					if g != worldview.ClearIndex {
+						st.Drawn++
+					}
+					if g == at(x, y) {
+						continue
+					}
+					st.Differ++
+					// Explained: the GPU's index is the reference's at one of the
+					// eight neighbours, i.e. a one-pixel shift of the same image
+					// (rasterization rules, sampling position). Unexplained is
+					// what a shift cannot account for: wrong texel, wrong light.
+					explained := false
+					for dy := -1; dy <= 1 && !explained; dy++ {
+						for dx := -1; dx <= 1 && !explained; dx++ {
+							nx, ny := x+dx, y+dy
+							explained = nx >= 0 && ny >= 0 && nx < width && ny < height && at(nx, ny) == g
+						}
+					}
+					if !explained {
+						st.Interior++
+					}
 				}
 			}
+			st.Rate = float64(st.Differ) / float64(st.Pixels)
+			if tm < 0 {
+				v.Views = append(v.Views, st)
+			}
+			v.Pixels += st.Pixels
+			v.Differ += st.Differ
+			v.Interior += st.Interior
+			v.Frames++
+			v.Uploaded += gr.Uploaded
+			v.UploadedBytes += gr.UploadedBytes
+			v.MaxFrameBytes = max(v.MaxFrameBytes, gr.UploadedBytes)
+			fmt.Fprintf(os.Stderr, "worldcheck: view %d (t %.2f): %d differ (%d interior) of %d, %d surfaces uploaded (%d bytes)\n", i, tm, st.Differ, st.Interior, st.Pixels, gr.Uploaded, gr.UploadedBytes)
 		}
-		st.Rate = float64(st.Differ) / float64(st.Pixels)
-		v.Views = append(v.Views, st)
-		v.Pixels += st.Pixels
-		v.Differ += st.Differ
-		v.Interior += st.Interior
-		fmt.Fprintf(os.Stderr, "worldcheck: view %d: %d differ (%d interior) of %d\n", i, st.Differ, st.Interior, st.Pixels)
 	}
 	v.TotalRate = float64(v.Differ) / float64(v.Pixels)
 	v.InteriorRate = float64(v.Interior) / float64(v.Pixels)
@@ -351,10 +411,18 @@ func bench(ctx context.Context, w *worldview.World, gr *gpuworld.Renderer, cm *r
 	views := w.Views()
 	fb, _ := render.NewFrameBuffer(width, height)
 	const passes = 8
+	tick := 0
 	var sw, gc, gw, en, cold []float64
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	for p := 0; p < passes+1; p++ { // the first pass warms up
 		for _, view := range views {
+			if opts.ablate["--anim"] {
+				// the light styles and '+' frames of a game at 60 frames per
+				// second (so more of them move between two visits of a view than
+				// for a camera that stands still)
+				w.Anim = w.AnimationAt(float32(tick) / 60)
+				tick++
+			}
 			e0 := time.Now()
 			_ = w.DrawEngine(fb, view)
 			e1 := time.Now()

@@ -303,8 +303,8 @@ reference of exactly that content, `cmd/quake-worldref` dumps its frames, and
 measured in v0.9.0's back-to-front order, 0.006 % in the earlier forward order
 once the shader reproduced the reference's 8-pixel sub-spans and left-edge
 coverage, 1.52 % before). They need the shareware `pak0.pak`, which is never in the
-repository: point `QUAKE_PAK` at it. Dynamic lights and
-animated lightstyles are later steps. Figures and where the two differ:
+repository: point `QUAKE_PAK` at it. Dynamic lights are a later step; the light
+styles and the `+` textures move on the GPU since v0.18.0 (below). Figures and where the two differ:
 [docs/webgpu-world/](docs/webgpu-world/).
 
 `render/gpuworld` also builds for `GOOS=wasip1` (quake level 2), on a remote
@@ -392,6 +392,19 @@ and as Quake's edge sorter shows it (the first face the walk emits wins a pixel,
 `r_edge.c`); before, far faces won overlaps
 ([#74](https://github.com/go-quake1/engine/issues/74)). Since v0.7.1 the GPU's CPU
 time for the mip choice is 0.205 ms against 0.280 ms (v0.6.1: 0.180 ms).
+
+**The GPU world animates** (v0.18.0, [#106](https://github.com/go-quake1/engine/issues/106)
+item 6): `worldview.World.Anim` carries the light styles (`d_lightstylevalue`) and the `+`
+texture frames (`R_TextureAnimation`) of the frame, and `gpuworld` re-bakes, per
+frame, only the atlas rectangles of the faces it draws whose styles or texture
+frame differ from what they were baked with, then uploads them with one
+`WriteTexture` each, within a 4 MiB budget per frame. At 60 frames per second on e1m1
+that is 4 to 8 KB a frame on average (a frame in about eight uploads 40 to 330 KB,
+the rest nothing). `quake-worldcheck --anim` on a real GPU: 0 of 4,096,000 pixels
+unexplained over 64 frames of animated views; a GPU that keeps its baked atlas fails at
+7.17 %. The GPU follows the CPU path's animation (the 11 default styles; the server's
+`lightstyle` is not wired on either). See
+[docs/webgpu-world/2026-11-16-light-styles-textures.md](docs/webgpu-world/2026-11-16-light-styles-textures.md).
 
 Not ported: the clipping of triangles that cross the near plane
 (`r_aclip.c`: they are dropped), and dynamic lights.

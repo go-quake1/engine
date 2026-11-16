@@ -61,6 +61,9 @@ func (g *gameWorld) Close() { g.gd.Close() }
 // DrawWorld implements runner.WorldDrawer.
 func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error {
 	g.wv.FOV = fov
+	// The light styles and '+' texture frames of cl.time, as the CPU world draws
+	// them: the renderer re-bakes and uploads the surfaces that moved.
+	g.wv.Anim = g.wv.AnimationAt(t)
 	t0 := time.Now()
 	frame, err := g.gd.Draw(worldview.View{Origin: origin, Angles: angles})
 	if err != nil {
