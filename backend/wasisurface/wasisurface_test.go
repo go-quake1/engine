@@ -222,4 +222,7 @@ func TestPollInputMouse(t *testing.T) {
 	if _, err := New(640, 400, nil, nil).WithMouse(nil, &fakeButtons{err: boom}, nil).PollInput(); !errors.Is(err, boom) {
 		t.Errorf("button error = %v", err)
 	}
+	if _, err := New(640, 400, nil, nil).WithMouse(nil, nil, &fakeButtons{err: boom}).PollInput(); !errors.Is(err, boom) {
+		t.Errorf("button-up error = %v", err)
+	}
 }
