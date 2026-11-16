@@ -563,7 +563,7 @@ func registerSpawnTimeBuiltins(vm *progs.VM, h *enginehost.Host) error {
 	vm.RegisterBuiltin(progs.BuiltinEPrint, noop)
 	vm.RegisterBuiltin(progs.BuiltinWalkMove, noop)
 	vm.RegisterBuiltin(progs.BuiltinDropToFloor, noop)
-	vm.RegisterBuiltin(progs.BuiltinLightStyle, noop)
+	vm.RegisterBuiltin(progs.BuiltinLightStyle, enginehost.BuiltinLightStyle(h))
 	vm.RegisterBuiltin(progs.BuiltinCheckBottom, noop)
 	vm.RegisterBuiltin(progs.BuiltinPointContents, noop)
 	vm.RegisterBuiltin(progs.BuiltinAim, noop)

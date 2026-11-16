@@ -32,6 +32,9 @@ type gameWorld struct {
 	wv *worldview.World
 	gd gpuDrawer
 	w  int
+	// styles is d_lightstylevalue from the server's light styles (nil: the
+	// default table of worldview.AnimationAt).
+	styles func(style byte) int
 
 	times gpuTimes // per frame, for the --frames phase line
 }
@@ -70,12 +73,19 @@ func (g *gameWorld) SetDLights(lights *[client.MaxDLights]client.DLight, now flo
 	g.wv.Now = now
 }
 
+// SetLightStyles implements runner.LightStyler: the light styles the server
+// sent, which the frame's animation uses in place of the default table.
+func (g *gameWorld) SetLightStyles(value func(style byte) int) { g.styles = value }
+
 // DrawWorld implements runner.WorldDrawer.
 func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error {
 	g.wv.FOV = fov
 	// The light styles and '+' texture frames of cl.time, as the CPU world draws
 	// them: the renderer re-bakes and uploads the surfaces that moved.
 	g.wv.Anim = g.wv.AnimationAt(t)
+	if g.styles != nil {
+		g.wv.Anim.Style = g.styles
+	}
 	t0 := time.Now()
 	frame, err := g.gd.Draw(worldview.View{Origin: origin, Angles: angles})
 	if err != nil {

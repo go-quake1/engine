@@ -89,6 +89,14 @@ type DynamicLighter interface {
 	SetDLights(lights *[client.MaxDLights]client.DLight, now float32)
 }
 
+// LightStyler is implemented by a [WorldDrawer] that animates its surfaces with
+// the light styles the server sent (svc_lightstyle, R_AnimateLight): the runner
+// calls SetLightStyles, with d_lightstylevalue[style] at the frame's time, before
+// DrawWorld.
+type LightStyler interface {
+	SetLightStyles(value func(style byte) int)
+}
+
 // setupRenderer loads the BSP, builds the mark/walk contexts + synthetic
 // texture + identity colormap, anchors the camera origin, and installs
 // runner.Pre2DDraw as a closure that rasterizes one frame per call.
@@ -591,7 +599,7 @@ func setupRenderer(opts setupRendererOpts) error {
 		}
 		worldSurf.pushDlights(&runner.Client.DLights, dlNow)
 		// d_lightstylevalue at cl.time (R_AnimateLight).
-		styleAt := func(s byte) int { return lightStyleBrightness(s, turbTimeSec) }
+		styleAt := func(s byte) int { return lightStyleOf(runner.Client, s, turbTimeSec) }
 		// Painter's algorithm: WalkWorld emits faces FRONT-to-BACK
 		// (designed for a span buffer where the first-touch wins). The
 		// lightmapped rasterizer below has no span/Z buffer -- it
@@ -696,7 +704,7 @@ func setupRenderer(opts setupRendererOpts) error {
 					if err != nil {
 						continue
 					}
-					plane := buildLightmapPlane(lmInfo, lightingLump, turbTimeSec, &lmPlaneScratch, &lmAccumScratch)
+					plane := buildLightmapPlaneAt(lmInfo, lightingLump, styleAt, &lmPlaneScratch, &lmAccumScratch)
 					_ = render.FillPerspectiveLightmappedPolygon(fb, tex, &cm, lverts, plane, lmInfo.Width, lmInfo.Height)
 				}
 			}
@@ -704,6 +712,9 @@ func setupRenderer(opts setupRendererOpts) error {
 
 		gpuLit := false
 		if wd := opts.worldDraw; wd != nil {
+			if ls, ok := wd.(LightStyler); ok {
+				ls.SetLightStyles(styleAt)
+			}
 			if dl, ok := wd.(DynamicLighter); ok {
 				dl.SetDLights(&runner.Client.DLights, dlNow)
 			}
@@ -831,7 +842,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				Lerp:         lerp,
 				DLights:      aliasDLights(dlScratch[:0], es.Origin, &runner.Client.DLights, now),
 			}
-			light := lightSampler.LightPointOr(es.Origin, func(s byte) int { return lightStyleBrightness(s, now) }, render.AliasStandInLight)
+			light := lightSampler.LightPointOr(es.Origin, func(s byte) int { return lightStyleOf(runner.Client, s, now) }, render.AliasStandInLight)
 			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, am, skin, ent); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit modelIdx=%d from=%d to=%d lerp=%v err: %v",
@@ -966,7 +977,7 @@ func setupRenderer(opts setupRendererOpts) error {
 				Lerp:         0,
 				DLights:      aliasDLights(dlScratch[:0], seg.Origin, &runner.Client.DLights, now),
 			}
-			light := lightSampler.LightPointOr(seg.Origin, func(s byte) int { return lightStyleBrightness(s, now) }, render.AliasStandInLight)
+			light := lightSampler.LightPointOr(seg.Origin, func(s byte) int { return lightStyleOf(runner.Client, s, now) }, render.AliasStandInLight)
 			if err := render.DrawAliasInterpQuake(fb, rd, &cm, light, false, bm, bskin, ent); err != nil {
 				if frame%60 == 0 {
 					logf("DrawAliasInterpLit(bolt kind=%d) err: %v", seg.Kind, err)
@@ -1112,6 +1123,22 @@ func lightStyleBrightness(style byte, t float32) int { return worldview.LightSty
 // allocations at a 900x700 world, and GC is the dominant frame-jank source in
 // the js/wasm target.
 func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte, t float32, planeScratch *[]byte, accumScratch *[]int) []byte {
+	return buildLightmapPlaneAt(info, lighting, func(s byte) int { return lightStyleBrightness(s, t) }, planeScratch, accumScratch)
+}
+
+// lightStyleOf is d_lightstylevalue[style] at time t for the client: the styles
+// the server sent (svc_lightstyle, R_AnimateLight) once it has sent any, the
+// default table before that (a scene with no server).
+func lightStyleOf(cl *client.State, style byte, t float32) int {
+	if cl != nil && cl.HaveLightStyles {
+		return cl.LightStyleValue(style, t)
+	}
+	return lightStyleBrightness(style, t)
+}
+
+// buildLightmapPlaneAt is buildLightmapPlane with the value of each style given
+// by styleAt.
+func buildLightmapPlaneAt(info bsprender.LightmapInfo, lighting []byte, styleAt func(byte) int, planeScratch *[]byte, accumScratch *[]int) []byte {
 	pix := info.Width * info.Height
 	if cap(*planeScratch) < pix {
 		*planeScratch = make([]byte, pix)
@@ -1147,7 +1174,7 @@ func buildLightmapPlane(info bsprender.LightmapInfo, lighting []byte, t float32,
 		if layerOff+pix > len(lighting) {
 			break
 		}
-		scale := lightStyleBrightness(info.Styles[s], t)
+		scale := styleAt(info.Styles[s])
 		for j := 0; j < pix; j++ {
 			accum[j] += int(lighting[layerOff+j]) * scale >> 8
 		}

@@ -179,6 +179,10 @@ type State struct {
 	ModelPrecache []string
 	SoundPrecache []string
 	LightStyles   [MaxLightStyles]LightStyle
+	// HaveLightStyles is set by the first svc_lightstyle: until then a renderer
+	// that has no server to learn them from (synthetic scenes) keeps its own
+	// default table.
+	HaveLightStyles bool
 
 	// Per-frame visual state. DLights[i].Die == 0 means the slot
 	// is free; NumVisEdicts is the count of entities the decoder

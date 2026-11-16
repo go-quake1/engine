@@ -145,6 +145,9 @@ func Apply(state *State, msg Decoded, nowSec float32) error {
 	case DecodedCDTrack:
 		applyCDTrack(state, m)
 		return nil
+	case DecodedLightStyle:
+		applyLightStyle(state, m)
+		return nil
 	case DecodedNop,
 		DecodedPrint,
 		DecodedStuffText,

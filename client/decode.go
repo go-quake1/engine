@@ -118,6 +118,13 @@ type DecodedCDTrack struct {
 	LoopTrack int // 0..255; track to switch to when Track reaches EOF
 }
 
+// DecodedLightStyle carries svc_lightstyle: the style number and its animation
+// string (reference/NQ/cl_parse.c:1053-1061).
+type DecodedLightStyle struct {
+	Style int
+	Map   string
+}
+
 // DecodedCenterPrint carries the svc_centerprint payload (the
 // "you got the shotgun" / intermission banner the server pushes
 // for the renderer to overlay horizontally-centered at ~40% of
@@ -267,6 +274,7 @@ func (DecodedFinale) isDecoded()        {}
 func (DecodedIntermission) isDecoded()  {}
 func (DecodedCutscene) isDecoded()      {}
 func (DecodedCDTrack) isDecoded()       {}
+func (DecodedLightStyle) isDecoded()    {}
 func (DecodedCenterPrint) isDecoded()   {}
 func (DecodedUpdateName) isDecoded()    {}
 func (DecodedUpdateColors) isDecoded()  {}
@@ -376,6 +384,8 @@ func (sr *SvcReader) Next(proto int) (Decoded, error) {
 		return sr.decodeTempEntity()
 	case protocol.SvcCDTrack:
 		return sr.decodeCDTrack()
+	case protocol.SvcLightStyle:
+		return sr.decodeLightStyle()
 	}
 	return nil, fmt.Errorf("%w: cmd=%d", ErrUnknownSvc, cmd)
 }
@@ -490,6 +500,27 @@ func (sr *SvcReader) decodeCDTrack() (Decoded, error) {
 		return nil, ErrCorruptMessage
 	}
 	return DecodedCDTrack{Track: track, LoopTrack: loopTrack}, nil
+}
+
+// ErrLightStyleRange is returned for an svc_lightstyle whose style is not below
+// MaxLightStyles: the C client's Sys_Error("svc_lightstyle > MAX_LIGHTSTYLES").
+var ErrLightStyleRange = errors.New("client: svc_lightstyle > MAX_LIGHTSTYLES")
+
+// decodeLightStyle reads the style byte and the animation string
+// (cl_parse.c:1054-1057).
+func (sr *SvcReader) decodeLightStyle() (Decoded, error) {
+	style := sr.R.ReadU8()
+	if sr.R.Bad() {
+		return nil, ErrCorruptMessage
+	}
+	if style >= MaxLightStyles {
+		return nil, fmt.Errorf("%w: %d", ErrLightStyleRange, style)
+	}
+	text := sr.R.ReadString()
+	if sr.R.Bad() {
+		return nil, ErrCorruptMessage
+	}
+	return DecodedLightStyle{Style: style, Map: text}, nil
 }
 
 // decodeParticle reads the 11-byte svc_particle body (cmd byte
