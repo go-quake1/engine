@@ -114,6 +114,7 @@ func RootCmd() *cobra.Command {
 	var w, h, worldref, frames int
 	var gpuWorld, gpuCheck, cpuWorld, corruptSkins bool
 	var minEnts int
+	var gpuEntities bool
 	c := &cobra.Command{
 		Use:           "quake-wctr",
 		Short:         "Quake in a wasmcontainers playground container: the game on a wasi-gfx surface, from the main menu",
@@ -152,7 +153,7 @@ func RootCmd() *cobra.Command {
 				}
 				return runWorldref(cmd.OutOrStdout(), p, slug, worldref, w, h, gpuWorld, frames)
 			}
-			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck, auto: !cpuWorld, corruptSkins: corruptSkins, minGPUEntities: minEnts})
+			return runGameWith(cmd.OutOrStdout(), cmd.ErrOrStderr(), p, mapSlug, w, h, frames, gameOpts{gpuWorld: gpuWorld, check: gpuCheck, auto: !cpuWorld, corruptSkins: corruptSkins, minGPUEntities: minEnts, gpuEntities: gpuEntities})
 		},
 	}
 	fl := c.Flags()
@@ -163,6 +164,7 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
 	fl.BoolVar(&corruptSkins, "corrupt-gpu-skins", false, "with --gpuworld-check: the planted defect of the entity check, the GPU draws the alias entities with every skin index shifted by 16, which the check must fail")
+	fl.BoolVar(&gpuEntities, "gpu-entities", false, "with the GPU world, draw the alias entities on the GPU too, in a layer of their own (off by default: the device was lost on the macOS CI lane at the first frame with entities; the CPU draws them)")
 	fl.IntVar(&minEnts, "min-gpu-entities", 0, "the fewest alias entities in a frame for which the GPU draws them (0: 3; the entity layer costs a second pass and read-back, so a frame with fewer keeps them on the CPU; --gpuworld-check uses 1)")
 	fl.BoolVar(&cpuWorld, "cpuworld", false, "in the game loop, draw the world on the CPU even when a GPU is granted (by default the GPU draws it, and the CPU when none is granted)")
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
@@ -343,6 +345,7 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		default:
 			defer gw.Close()
 			gw.corrupt = g.corruptSkins
+			gw.entities = g.gpuEntities
 			so.MinGPUEntities = g.minGPUEntities
 			so.WorldDraw = gw
 			if g.check {

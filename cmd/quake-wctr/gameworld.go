@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -26,6 +27,8 @@ type gameOpts struct {
 	// corruptSkins is the planted defect of the entity check (--corrupt-gpu-skins):
 	// the GPU draws the entities with every skin index shifted by 16.
 	corruptSkins bool
+	// gpuEntities (--gpu-entities) lets the GPU draw the alias entities.
+	gpuEntities bool
 	// minGPUEntities is runner.SetupOpts.MinGPUEntities (0: its default).
 	minGPUEntities int
 }
@@ -48,6 +51,7 @@ type gameWorld struct {
 	// entity layer; swap, with the planted defect, maps a model to the copy whose
 	// skins are shifted; entCount and entFrames are the entities drawn and the
 	// frames they were drawn in, for the check's summary.
+	entities            bool // --gpu-entities
 	ld                  layerDrawer
 	ents                []worldview.AliasEnt
 	layer               []byte
@@ -55,6 +59,14 @@ type gameWorld struct {
 	corrupt             bool
 	entCount, entFrames int
 }
+
+// errEntitiesOff is why the GPU draws no alias entity by default: on the
+// playground's macOS CI lane (Chromium and Firefox) the device was lost at the first
+// frame with GPU entities ("webgpu: object destroyed": the host destroys the device of a
+// container that overruns its turn, or something in the entity pass), which also
+// took the GPU world down, while the Apple M4 Max runs it for 120 frames. Until that
+// is understood the entity layer is opt-in (--gpu-entities).
+var errEntitiesOff = errors.New("off by default, pass --gpu-entities")
 
 // layerDrawer is a [gpuDrawer] that also draws alias entities into a layer of
 // their own, in the same submit and read-back (gpuworld.Renderer.DrawReadLayers).
@@ -67,6 +79,9 @@ type layerDrawer interface {
 // (--corrupt-gpu-skins) the GPU gets copies of the models whose skins have every
 // palette index shifted by 16 while the CPU keeps the true ones.
 func (g *gameWorld) SetAliasModels(models []*worldview.AliasModel) error {
+	if !g.entities {
+		return errEntitiesOff
+	}
 	ld, ok := g.gd.(layerDrawer)
 	if !ok {
 		return fmt.Errorf("this GPU drawer has no entity layer")
