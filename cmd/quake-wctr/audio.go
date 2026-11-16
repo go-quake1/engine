@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/backend/wasisurface"
+	"github.com/go-quake1/engine/runloop"
 	"github.com/go-quake1/engine/sound"
 )
 
@@ -78,7 +79,12 @@ func (f fixedChunk) AudioStats() wasisurface.AudioStats { return f.stats() }
 // of the game's time, so "with them" is 1.00 (a little above: the lead the
 // first tic prefills) whatever the speed of the machine: a ratio under 1 with
 // "with them" at 1.00 is a game below real time, not a mixer that under-produces.
-func writeAudioStats(out io.Writer, be backend.Backend, el time.Duration, frames, dropped, stalls int) {
+//
+// "Prepaid" is the mix the output's queue already held when the allowance for
+// slow frames shrank (offered + dropped + prepaid is the game's time plus what is
+// still queued), and the line ends with the tic lengths the ratio is read
+// against: the tics over 0.1, 0.2, 0.35 and 0.5 s, and the longest.
+func writeAudioStats(out io.Writer, be backend.Backend, el time.Duration, frames int, r *runloop.Runner) {
 	s, ok := be.(audioStatser)
 	if !ok || el <= 0 {
 		return
@@ -89,6 +95,7 @@ func writeAudioStats(out io.Writer, be backend.Backend, el time.Duration, frames
 	if st.Silent {
 		state = "silent"
 	}
-	fmt.Fprintf(out, "audio: %s, %d mix frames offered, %d accepted, in %.2f s: real-time ratio %.3f; %.1f frames a second, %d mix frames dropped in %d stalled tics, ratio with them %.3f\n",
-		state, st.Offered, st.Accepted, el.Seconds(), float64(st.Offered)/total, float64(frames)/el.Seconds(), dropped, stalls, float64(st.Offered+dropped)/total)
+	fmt.Fprintf(out, "audio: %s, %d mix frames offered, %d accepted, in %.2f s: real-time ratio %.3f; %.1f frames a second, %d mix frames dropped in %d stalled tics, %d prepaid by the queue, ratio with them %.3f; tics over 0.1 0.2 0.35 0.5 s: %d %d %d %d, longest %.3f s\n",
+		state, st.Offered, st.Accepted, el.Seconds(), float64(st.Offered)/total, float64(frames)/el.Seconds(), r.MixDropped, r.MixStalls, r.MixPrepaid,
+		float64(st.Offered+r.MixDropped+r.MixPrepaid)/total, r.MixTicsOver[0], r.MixTicsOver[1], r.MixTicsOver[2], r.MixTicsOver[3], r.MixLongest)
 }

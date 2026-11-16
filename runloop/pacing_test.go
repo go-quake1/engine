@@ -5,6 +5,7 @@ package runloop
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/go-quake1/engine/backend"
@@ -256,6 +257,12 @@ func TestMixerPacing_StallsAccountForTheRatio(t *testing.T) {
 		if err := r.RunFrame(float32(dt), float32(now)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// The tic lengths are counted against the bounds: the stalls are the only
+	// tics over 0.1 s (the 0.2 s one is 0.2 s in float32, a hair over the bound),
+	// none reaches 0.35 s, and the longest is the 0.35 s one.
+	if r.MixTicsOver[0] != 2 || r.MixTicsOver[2] != 0 || r.MixTicsOver[3] != 0 || math.Abs(r.MixLongest-0.35) > 1e-6 {
+		t.Errorf("tics over %v s: %v, longest %v; want 2 over 0.1, none over 0.35, longest 0.35", MixTicBounds, r.MixTicsOver, r.MixLongest)
 	}
 	if r.MixStalls != 2 {
 		t.Errorf("%d stalled tics, want 2 (0.35 s and 0.2 s against a mix-ahead of %.1f s)", r.MixStalls, MixAhead)

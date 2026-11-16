@@ -156,6 +156,16 @@ type Runner struct {
 	// under-producing.
 	MixDropped, MixStalls int
 
+	// MixPrepaid is the mix frames a tic owed that the queue already held (the
+	// allowance shrank while the queue was full): with offered and dropped they
+	// account for the game's time, up to what is still queued. MixTicsOver
+	// counts the tics longer than 0.1, 0.2, 0.35 and 0.5 s (MixTicBounds), and
+	// MixLongest is the longest tic: the distribution a ratio and an underrun
+	// count are read against.
+	MixPrepaid  int
+	MixTicsOver [len(MixTicBounds)]int
+	MixLongest  float64
+
 	// Compose configuration.
 	BackgroundIdx  byte    // palette fill for Compose2D
 	NotifyLifetime float32 // seconds a notify row stays visible
@@ -725,6 +735,9 @@ const (
 	mixSlowCap    = 0.35 // seconds: a longer tic is a stall, not a slow frame
 )
 
+// MixTicBounds are the tic lengths (seconds) Runner.MixTicsOver counts.
+var MixTicBounds = [...]float64{0.1, 0.2, 0.35, 0.5}
+
 // paceAudio paints and queues what the clock owes the output, tyrquake's
 // S_Update_ (snd_dma.c): never more than "ahead" of what the output has played,
 // where ahead is MixAhead, or more (up to MixAheadMax) when recent tics were
@@ -766,6 +779,12 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 		ahead = min(want, limit)
 	}
 	lead *= ahead / base
+	for i, b := range MixTicBounds {
+		if float64(dt) > b {
+			r.MixTicsOver[i]++
+		}
+	}
+	r.MixLongest = math.Max(r.MixLongest, float64(dt))
 	// Stalls (a level loading, a tab in the background) are not slow frames.
 	r.mixSlow = math.Max(math.Min(float64(dt), mixSlowCap), r.mixSlow*math.Exp(-float64(dt)/mixSlowDecay))
 	maxAhead := int(float64(ahead) * rate)
@@ -787,7 +806,9 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 	// allowance of a slow spell was forgotten while the queue was still full): it
 	// is neither owed later nor a stall.
 	prepaid := false
+	var excess int
 	if room := maxAhead - queued; want > room {
+		excess = want - max(room, 0)
 		want, prepaid = room, true
 	}
 	painted := 0
@@ -817,6 +838,7 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 	if r.mixOwed -= float64(painted); r.mixOwed < 0 || prepaid {
 		r.mixOwed = 0
 	}
+	r.MixPrepaid += excess
 	return nil
 }
 
