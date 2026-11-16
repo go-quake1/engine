@@ -92,6 +92,13 @@ type World struct {
 	Anim   Animation
 	chains *MiptexChains
 
+	// DLights is cl_dlights and Now cl.time: a light that has not died (Die >=
+	// Now) and has a radius lights the surfaces [World.Visible] marks for it
+	// (R_PushDlights); the zero value has none.
+	DLights [render.MaxDLights]render.DLight
+	Now     float32
+	dtree   bsprender.DLightTree
+
 	// Lights is R_LightPoint's sampler over the map's lightmaps.
 	Lights *bsprender.LightSampler
 
@@ -235,6 +242,7 @@ func New(bsp []byte) (*World, error) {
 			Surf: render.SurfaceFace{Desc: desc}, MipAdjust: render.MipAdjust(fv.UVAxisS, fv.UVAxisT), MipTex: mi, BaseTex: surfTex[mi]}
 	}
 	w.HaveLightData = len(light) > 0
+	w.dtree = bsprender.NewDLightTree(bm)
 	w.walk = bsprender.NewWalkContext(bm)
 	w.mark = bsprender.NewMarkContext(bm)
 	if w.Lights, err = bsprender.NewLightSampler(bm); err != nil {
@@ -308,6 +316,7 @@ func (w *World) Visible(v View, width, height int) ([]int, error) {
 		FovX: w.FOV, FovY: w.FOV,
 	}
 	w.frame++
+	w.pushDlights()
 	w.visSpecial = w.visSpecial[:0]
 	leaf := w.BM.PointInLeaf(v.Origin)
 	if leaf <= 0 {
@@ -330,6 +339,31 @@ func (w *World) Visible(v View, width, height int) ([]int, error) {
 		}
 	}
 	return out, nil
+}
+
+// pushDlights is R_PushDlights for the frame [World.Visible] prepares: every
+// live light marks the faces it reaches (R_MarkLights), the surface's
+// dlightbits starting afresh when it was last marked in another frame.
+func (w *World) pushDlights() {
+	frame := w.frame
+	bsprender.PushDlights(w.dtree, w.DLights[:], w.Now, func(face int, bit uint32) {
+		if face < 0 || face >= len(w.Faces) || w.Faces[face] == nil {
+			return
+		}
+		d := &w.Faces[face].Surf.Desc
+		if d.DLightFrame != frame {
+			d.DLightBits = 0
+			d.DLightFrame = frame
+		}
+		d.DLightBits |= bit
+	})
+}
+
+// LightEnv sets the dynamic lights and the frame count (r_framecount) of the
+// frame the last [World.Visible] prepared in env, for the surfaces it marked.
+func (w *World) LightEnv(env *render.SurfaceEnv) {
+	env.DLights = w.DLights[:]
+	env.FrameCount = w.frame
 }
 
 // StyleAdj is d_lightstylevalue[surface->styles[0..3]]: the light styles of the
@@ -408,6 +442,7 @@ func (w *World) drawFaces(fb *render.FrameBuffer, cm *render.ColorMap, faces []i
 	w.cache.SetupFrame()
 	w.cache.Thrash = false
 	env := &render.SurfaceEnv{Colormap: cm, HaveLightData: w.HaveLightData}
+	w.LightEnv(env)
 	view := w.rd.SetupView()
 	mv := NewMipView(fb.Width, fb.Height, w.FOV)
 	var cv [render.MaxPolyVerts]render.CachedVertex
