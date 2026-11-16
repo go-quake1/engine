@@ -140,6 +140,16 @@ jobs:
 
       - run: go version
 
+      - name: test render/gpuworld (wasip1, under wazero)
+        env:
+          GOOS: wasip1
+          GOARCH: wasm
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0
+          printf '#!/bin/sh\nexec "%s/bin/wazero" run -mount=/:/ "$@"\n' "$RUNNER_TEMP" > "$RUNNER_TEMP/wasmexec"
+          chmod +x "$RUNNER_TEMP/wasmexec"
+          go test -count=1 -exec "$RUNNER_TEMP/wasmexec" -run TestHandlesOutliveACollection -v ./render/gpuworld/
+
       - name: build backend/wasm (js/wasm)
         env:
           GOOS: js

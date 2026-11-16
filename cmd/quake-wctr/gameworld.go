@@ -60,13 +60,8 @@ type gameWorld struct {
 	entCount, entFrames int
 }
 
-// errEntitiesOff is why the GPU draws no alias entity by default: on the
-// playground's macOS CI lane (Chromium and Firefox) the device was lost at the first
-// frame with GPU entities ("webgpu: object destroyed": the host destroys the device of a
-// container that overruns its turn, or something in the entity pass), which also
-// took the GPU world down, while the Apple M4 Max runs it for 120 frames. Until that
-// is understood the entity layer is opt-in (--gpu-entities).
-var errEntitiesOff = errors.New("off by default, pass --gpu-entities")
+// errEntitiesOff is why the GPU draws no alias entity: --gpu-entities=false.
+var errEntitiesOff = errors.New("--gpu-entities=false")
 
 // layerDrawer is a [gpuDrawer] that also draws alias entities into a layer of
 // their own, in the same submit and read-back (gpuworld.Renderer.DrawReadLayers).

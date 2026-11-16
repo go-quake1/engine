@@ -164,7 +164,7 @@ func RootCmd() *cobra.Command {
 	fl.IntVar(&worldref, "worldref", 0, "draw fixed view N (the last is the player start), print its hashes and present it, instead of playing")
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
 	fl.BoolVar(&corruptSkins, "corrupt-gpu-skins", false, "with --gpuworld-check: the planted defect of the entity check, the GPU draws the alias entities with every skin index shifted by 16, which the check must fail")
-	fl.BoolVar(&gpuEntities, "gpu-entities", false, "with the GPU world, draw the alias entities on the GPU too, in a layer of their own (off by default: the device was lost on the macOS CI lane at the first frame with entities; the CPU draws them)")
+	fl.BoolVar(&gpuEntities, "gpu-entities", true, "with the GPU world, draw the alias entities on the GPU too, in a layer of their own (--gpu-entities=false: the CPU draws them)")
 	fl.IntVar(&minEnts, "min-gpu-entities", 0, "the fewest alias entities in a frame for which the GPU draws them (0: 3; the entity layer costs a second pass and read-back, so a frame with fewer keeps them on the CPU; --gpuworld-check uses 1)")
 	fl.BoolVar(&cpuWorld, "cpuworld", false, "in the game loop, draw the world on the CPU even when a GPU is granted (by default the GPU draws it, and the CPU when none is granted)")
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")

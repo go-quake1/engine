@@ -106,6 +106,7 @@ func (r *Renderer) newSpecial(geo *Special, entry, label, code string) (*special
 		Primitive: webgpu.PrimitiveState{Topology: webgpu.PrimitiveTopologyTriangleList, CullMode: webgpu.CullModeNone},
 		Fragment:  &webgpu.FragmentState{Module: mod, EntryPoint: entry, Targets: []webgpu.ColorTargetState{{Format: webgpu.TextureFormatR8Uint}}},
 	})
+	r.hold(tex, bgl, pl, mod)
 	return s, err
 }
 

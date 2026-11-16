@@ -102,9 +102,12 @@ func TestGPUEntities(t *testing.T) {
 
 var errTest = errors.New("the device refuses the models")
 
-// TestGPUEntitiesAreOptIn: by default the CPU draws the alias entities and the log
-// says why (the entity layer lost the device on the macOS CI lane).
-func TestGPUEntitiesAreOptIn(t *testing.T) {
+// TestGPUEntitiesAreTheDefault: --gpu-entities is on unless it is given false;
+// with it false the CPU draws the alias entities and the log says why.
+func TestGPUEntitiesAreTheDefault(t *testing.T) {
+	if f := RootCmd().Flags().Lookup("gpu-entities"); f == nil || f.DefValue != "true" {
+		t.Errorf("--gpu-entities: %+v", f)
+	}
 	var m []*worldview.AliasModel
 	var s [][]worldview.AliasEnt
 	withSurface(t, &fakePresenter{}, false, new(int))
@@ -118,7 +121,7 @@ func TestGPUEntitiesAreOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m != nil || !strings.Contains(errOut.String(), "off by default, pass --gpu-entities") {
+	if m != nil || !strings.Contains(errOut.String(), "--gpu-entities=false") {
 		t.Errorf("models given to the device: %v; log %q", m, errOut.String())
 	}
 }

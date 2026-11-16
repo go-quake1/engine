@@ -1,10 +1,16 @@
 # The alias entities on the GPU in the game loop (engine#122)
 
-**Status (v0.27.0): opt-in, `--gpu-entities`.** On the playground's macOS CI lane (Chromium and
-Firefox) the device was lost at the first frame with GPU entities (`webgpu: object destroyed`,
-which also ends the GPU world), in v0.24.0 and again with the pipeline warmed in v0.25.0; the
-Apple M4 Max runs it. The cause is not found, so the CPU draws the entities by default. The
-rest of this page describes the path as built and measured on the M4 Max.
+**Status: on by default (`--gpu-entities=false` leaves the entities to the CPU).** On the
+playground's macOS CI lane (Chromium and Firefox) the device was lost at the first frame with GPU
+entities, which also ended the GPU world. The lost reason (logged since v0.28.0) was
+`wasi_webgpu_batch: submit: refused: batch: message refused: CREATE 12`: a remote device frees a
+handle's id when the Go object is garbage collected without destroying the host object, so a
+handle that only a local variable held (shader modules, layouts, the textures and buffers a bind
+group names) gave its id to the next object created, and the host refused that creation of a live
+id. The slower lane let a collection run before the first frame with entities; the M4 Max did
+not. The fix keeps every handle of the renderer alive (`Renderer.hold`) and creates the read-back
+buffers up front; `TestHandlesOutliveACollection` (wasip1) is red without it. The rest of this
+page describes the path as built and measured on the M4 Max.
 
 Until v0.24.0 `quake-wctr` drew every alias model (monsters, items, the player's weapon pickups)
 with the software pass, whatever the world was drawn with: `gpuworld.Renderer.DrawEntities` existed and
