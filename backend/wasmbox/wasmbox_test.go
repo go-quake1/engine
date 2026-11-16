@@ -153,6 +153,33 @@ func TestQueueAudio_nilAudio(t *testing.T) {
 	}
 }
 
+// queuedAudio is a fakeAudio that reports its queue, as RingAudio does.
+type queuedAudio struct {
+	fakeAudio
+	queued int
+}
+
+func (q *queuedAudio) QueuedFrames() int { return q.queued }
+
+// The Backend paces the mixer through backend.QueuedAudio: it reports its
+// device's queue, and 0 for a device that cannot say or none at all.
+func TestQueuedFrames(t *testing.T) {
+	var _ backend.QueuedAudio = (*Backend)(nil)
+	s := newFakeSurface(320, 240)
+	b, _ := New(s, nil, nil, nil)
+	if n := b.QueuedFrames(); n != 0 {
+		t.Errorf("no device: %d", n)
+	}
+	b, _ = New(s, nil, &fakeAudio{rate: 48000}, nil)
+	if n := b.QueuedFrames(); n != 0 {
+		t.Errorf("a device that cannot say: %d", n)
+	}
+	b, _ = New(s, nil, &queuedAudio{queued: 777}, nil)
+	if n := b.QueuedFrames(); n != 777 {
+		t.Errorf("device queue not reported: %d", n)
+	}
+}
+
 func TestQueueAudio_ok(t *testing.T) {
 	s := newFakeSurface(320, 240)
 	au := &fakeAudio{rate: 48000}

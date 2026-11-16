@@ -168,6 +168,20 @@ func (b *Backend) QueueAudio(samples []sound.StereoSample) error {
 	return nil
 }
 
+// queuedFramer is what an AudioDevice may add to report its queue (WebAudio does).
+type queuedFramer interface{ QueuedFrames() int }
+
+// QueuedFrames implements backend.QueuedAudio: the mix frames the audio device
+// still has to play, so the runloop paces the mixer like tyrquake's S_Update
+// instead of painting a fixed chunk a tic. A device that cannot say (and a nil
+// one) reports 0.
+func (b *Backend) QueuedFrames() int {
+	if q, ok := b.Audio.(queuedFramer); ok {
+		return q.QueuedFrames()
+	}
+	return 0
+}
+
 // SampleRate returns the audio device's preferred rate. Defaults to
 // 44100 Hz when no Audio device is wired up (matches the most common
 // WebAudio default).

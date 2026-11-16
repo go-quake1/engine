@@ -159,6 +159,8 @@ func RootCmd() *cobra.Command {
 	fl.BoolVar(&gpuWorld, "gpuworld", false, "with --worldref: also draw the view on the GPU (render/gpuworld on the batch device), compare it with the software frame at worldcheck's tolerance and present the GPU frame")
 	fl.BoolVar(&cpuWorld, "cpuworld", false, "in the game loop, draw the world on the CPU even when a GPU is granted (by default the GPU draws it, and the CPU when none is granted)")
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
+	fl.BoolVar(&fixedMixer, "fixed-mixer", false, "paint a fixed 512 mix frames every tic instead of pacing the mixer to the sound output's queue (what the game did before the pacing; for measuring the real-time ratio)")
+	_ = fl.MarkHidden("fixed-mixer")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
 	return c
 }
@@ -339,6 +341,8 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		}
 	}
 	be := wasisurface.New(w, h, gs.Down, gs.Up).WithMouse(gs.Motion, gs.ButtonDown, gs.ButtonUp)
+	closeAudio := attachAudio(be, errOut)
+	defer closeAudio()
 	so.Backend = be
 	r, err := runner.Setup(so)
 	if err != nil {
@@ -356,7 +360,7 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 	if gw, ok := so.WorldDraw.(*gameWorld); ok {
 		gt = &gw.times
 	}
-	if err := loop(out, r, be, frames, gt); err != nil {
+	if err := loop(out, r, mixerBackend(be), frames, gt); err != nil {
 		return err
 	}
 	if stats != nil {
@@ -383,7 +387,7 @@ func (q *quitObserver) PollInput() (backend.InputSnapshot, error) {
 // it can stop after a number of frames and time them.
 func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *gpuTimes) error {
 	obs := &quitObserver{Backend: be}
-	r.Backend = obs
+	r.Backend = backend.ForwardQueue(obs, be)
 	start := time.Now()
 	if frames > 0 {
 		// Time the frame's stages (the --frames run prints them below).
@@ -404,6 +408,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 	}
 	el := time.Since(start)
 	fmt.Fprintf(out, "%d frames in %v: %.2f ms per frame\n", frames, el.Round(time.Millisecond), el.Seconds()*1000/float64(frames))
+	writeAudioStats(out, be, el)
 	writePhases(out, r.Timer.Samples(), gt)
 	return nil
 }

@@ -66,6 +66,10 @@ func (a *RingAudio) WritePCM(samples []sound.StereoSample) error {
 	return nil
 }
 
+// QueuedFrames is the number of mix frames written and not yet played: the
+// ring's fill, in the unit the runloop paces the mixer in.
+func (a *RingAudio) QueuedFrames() int { return a.w.Buffered() }
+
 // SampleRate is the rate the engine mixes at (the ring carries it unchanged).
 func (a *RingAudio) SampleRate() int { return engineMixerRate }
 

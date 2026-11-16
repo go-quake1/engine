@@ -13,8 +13,10 @@
 // carries nothing. Input: the surface's key-down and key-up streams, read
 // without blocking once per frame, through MapKey; with WithMouse its
 // relative motion (mouse-look) and button streams, which the page feeds
-// while the pointer is locked to the pane. Audio: backend.NoAudio;
-// the playground has no audio path for a wasip1 guest.
+// while the pointer is locked to the pane. Audio (audio.go): the mix goes to
+// an AudioOut, in the playground the host module wctr_audio_out of a container
+// run with --audio, and without one it is dropped (the game runs silent). The
+// backend reports its queue, so the runloop paces the mixer.
 //
 // The package itself needs no wasip1 build tag: it talks to the streams
 // through the small KeyPoller interface, which a native test fakes.
@@ -61,9 +63,16 @@ type Backend struct {
 
 	motion               MotionPoller
 	buttonDown, buttonUp ButtonPoller
-}
 
-var _ backend.Backend = (*Backend)(nil)
+	// Sound (audio.go): the output, nil for silence, the scratch the mix is
+	// converted into, and the queue as the last write left it.
+	out       AudioOut
+	pcm       []float32
+	queued    float64
+	queuedAt0 time.Time
+	offered   int
+	accepted  int
+}
 
 // New returns a backend for a w x h frame whose keys come from down and
 // up (either may be nil for no keys of that kind).
