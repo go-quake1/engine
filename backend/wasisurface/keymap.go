@@ -13,8 +13,9 @@ import "github.com/go-quake1/engine/backend"
 // Backend.PollInput.
 //
 // The table mirrors backend/wasmbox.MapDOMKey, label for label, so the two
-// backends feed the engine the same keys. The surface carries no pointer
-// button in a pointer event, so there is no Mouse1 / Mouse2 here.
+// backends feed the engine the same keys. The mouse buttons are not keys on
+// the surface: they come from its button streams (Backend.WithMouse), so
+// there is no Mouse1 / Mouse2 here.
 func MapKey(label string) (backend.KeyCode, bool) {
 	switch label {
 	case "escape":

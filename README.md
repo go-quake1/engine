@@ -151,18 +151,29 @@ cache.
 From v0.10.0, `cmd/quake-wctr` is the engine as a wasip1 guest. It draws every
 frame with the software renderer and presents it on a `wasi-gfx:surface`: the
 8-bit frame and its palette go to the GPU as storage buffers, and a loop-free
-WGSL shader looks up the colours (`render/wasipresent`). Keys come from the
-surface (`backend/wasisurface`). There is no audio yet, and `SkipMenu` boots
-straight into e1m1.
+WGSL shader looks up the colours (`render/wasipresent`). Keys, the mouse
+buttons and relative mouse motion come from the surface
+(`backend/wasisurface`, over go-wasmcontainers/gpu v0.14.0's surface
+extension). There is no audio yet.
 
 The [go-wasmcontainers playground](https://go-wasmcontainers.github.io/playground/)
 has a `quake` image that runs it in a container on a GPU:
 
 ```sh
-wctr run --rm --gpu -m 512m quake
+wctr run --rm --gpu -m 512m quake            # the main menu
+wctr run --rm --gpu -m 512m quake --map e1m1 # skip the menu: e1m1 from the first tic
 ```
 
-That plays e1m1 of LibreQuake. Its data is
+**The default is the main menu**, as in the browser build. Single Player, New
+Game and a skill (Enter, or a click, on each) start the `start` hub of
+LibreQuake, whose portals change level (`changelevel`); Escape opens the menu
+again. `--map NAME` skips the menu and starts on that map. The game asks the
+page for the **pointer lock**: the first click on the pane locks the mouse (the
+click only grabs it, so it does not also press a menu row), the mouse then
+looks around and the left button fires (right is `Mouse2`), and Escape
+releases it, as the browser does (a second Escape opens the menu). The
+bindings are the browser build's (`backend/wasmbox`): `MouseButtonCode` and
+`MapDOMKey`. The data is
 [go-quake1/freepak](https://github.com/go-quake1/freepak) v0.2.0, a sovereign
 pak0 with no id Software bytes. The image is GPL-3.0-or-later and names its
 source in `/usr/share/doc/quake/copyright`.
