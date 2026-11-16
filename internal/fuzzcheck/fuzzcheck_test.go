@@ -95,6 +95,12 @@ func TestWriteSeedRefusesAWindowsName(t *testing.T) {
 // came out: a seed corpus file named "nul".
 func TestRepositoryNamesBuildAModuleZip(t *testing.T) {
 	root := filepath.Join("..", "..")
+	// Test binaries run under QEMU start in the host's directory, not the
+	// package's: ../.. is then not the module (the walk crawled /proc on the
+	// first run), and there is nothing of the module to check.
+	if mod, err := os.ReadFile(filepath.Join(root, "go.mod")); err != nil || !strings.HasPrefix(string(mod), "module github.com/go-quake1/engine\n") {
+		t.Skip("the working directory is not inside the module (run under an emulator?)")
+	}
 	n := 0
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
