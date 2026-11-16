@@ -385,6 +385,10 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 // memStats is --memstats.
 var memStats bool
 
+// yield is what the frame loop calls once per frame (runtime.Gosched; a test
+// replaces it to count the calls).
+var yield = runtime.Gosched
+
 // quitObserver reports whether a poll carried QuitRequested.
 type quitObserver struct {
 	backend.Backend
@@ -423,7 +427,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		// presents blocks in the browser): without a yield the collector's
 		// background workers never run, the heap grows by the frame's garbage
 		// until -m is hit, and the container dies "out of memory" (playground#56).
-		runtime.Gosched()
+		yield()
 		if memStats && n%60 == 0 {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
