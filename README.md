@@ -347,7 +347,7 @@ the alias triangles are clipped since v0.21.0 (below). Since v0.22.0 `quake-wctr
 the world on the GPU by default when one is granted (`--cpuworld` forces the CPU), the
 server's `lightstyle` messages are wired, `TE_EXPLOSION2` makes its light, entities are lit
 by the dynamic lights and the surface uploads are coalesced. With `--gpu-entities` (v0.24.0; **off by
-default** since v0.26.0, because on the playground's macOS CI lane, in Chromium and Firefox, the
+default** since v0.27.0, because on the playground's macOS CI lane, in Chromium and Firefox, the
 device was lost at the first frame with GPU entities, which also took the GPU world down, while
 the Apple M4 Max runs 120 frames: the cause is not found) the alias entities are drawn on the GPU
 too, in a layer of their own composited after the CPU's sky and water (far models, models with
