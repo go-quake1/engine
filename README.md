@@ -251,7 +251,10 @@ time, then a `phases over K-1 frames:` line with where it goes, in ms per frame
 software world pass), `gpu-ms` and `copy-ms` (the GPU submit with its read-back, and
 the copy into the frame buffer), `models-ms`, `composite-ms` (the 2D layers),
 `present-ms`, `wait-ms` (between the end of one frame and the start of the next)
-and `frame-ms` (frame to frame).
+and `frame-ms` (frame to frame), then `gpu-max-ms`, the longest GPU submit of the run
+(the first frame, which creates the pipelines, included): the host destroys the device
+of a container whose submit overruns its turn (500 ms for a frame that only streams
+commands, 2 s for one that creates objects).
 
 ## Streaming assets from an OCI registry
 

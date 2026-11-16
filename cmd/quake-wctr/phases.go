@@ -64,13 +64,16 @@ func writePhases(out io.Writer, samples []render.FrameSample, gpu *gpuTimes) {
 		return
 	}
 	sum := render.Summarize(samples[1:])
-	var g, c float64
+	var g, c, gmax float64
 	if gpu != nil {
 		g, c = meanMS(tail(gpu.gpu)), meanMS(tail(gpu.copy))
+		for _, d := range gpu.gpu {
+			gmax = max(gmax, ms(d))
+		}
 	}
 	st := func(s render.Stage) float64 { return sum.Stages[s].Mean }
 	wait := max(sum.Interval.Mean-sum.Work.Mean, 0)
-	fmt.Fprintf(out, "phases over %d frames: sim-ms=%.3f world-ms=%.3f gpu-ms=%.3f copy-ms=%.3f models-ms=%.3f composite-ms=%.3f present-ms=%.3f wait-ms=%.3f frame-ms=%.3f\n",
+	fmt.Fprintf(out, "phases over %d frames: sim-ms=%.3f world-ms=%.3f gpu-ms=%.3f copy-ms=%.3f models-ms=%.3f composite-ms=%.3f present-ms=%.3f wait-ms=%.3f frame-ms=%.3f gpu-max-ms=%.3f\n",
 		sum.Frames, st(render.StageSim), max(st(render.StageWorld)-g-c, 0), g, c,
-		st(render.StageModels), st(render.Stage2D), st(render.StagePresent), wait, sum.Interval.Mean)
+		st(render.StageModels), st(render.Stage2D), st(render.StagePresent), wait, sum.Interval.Mean, gmax)
 }
