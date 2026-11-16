@@ -29,12 +29,16 @@ func streamWrite(stream, ptr, frames uint32, out unsafe.Pointer) uint32
 //go:wasmimport wctr_audio_out stream_close
 func streamClose(stream uint32) uint32
 
-// The stream: 11025 Hz stereo (the mixer's rate; the page resamples), 1024
-// frames of ring (93 ms), as backend/wasmbox's ring.
+// The stream: 11025 Hz stereo (the mixer's rate; the page resamples), 8192
+// frames of ring (743 ms). The ring must hold what the mixer runs ahead:
+// runloop.MixAheadMax is 0.5 s (5512 frames) when frames are slow. At 1024
+// frames (93 ms), less than the 0.1 s mix-ahead, the host refused the end of
+// every write at a few frames a second (playground#63: 6 % of the mix lost,
+// 204 underruns in 66 s at 14 frames a second).
 const (
 	audioRate     = 11025
 	audioChannels = 2
-	audioCapacity = 1024
+	audioCapacity = 8192
 )
 
 var audioErrno = map[uint32]string{1: "invalid argument", 2: "denied: run the container with --audio", 3: "unsupported: this host has no audio output",
@@ -67,7 +71,7 @@ func (s *wctrStream) Write(pcm []float32) (accepted, queued int, err error) {
 		return 0, 0, nil
 	}
 	// The mixer paints at most MixBufferStereoFrames (512) a batch; the ring
-	// holds 1024, and a bigger write is TooLarge.
+	// holds audioCapacity, and a bigger write is TooLarge.
 	if frames > audioCapacity {
 		frames = audioCapacity
 	}

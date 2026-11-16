@@ -6,6 +6,7 @@ package runloop
 
 import (
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/go-quake1/engine/backend"
@@ -143,7 +144,9 @@ type Runner struct {
 	// the most the mixer runs ahead of the output, and how much it keeps
 	// queued. mixOwed is the clock's debt in mix frames, kept between tics.
 	MixAhead, MixLead float32
+	MixAheadMax       float32 // 0 means MixAheadMax: how far slow frames let the mixer run ahead
 	mixOwed           float64
+	mixSlow           float64 // the slowest recent tic, in seconds (see paceAudio)
 
 	// MixDropped is the mix frames the clock owed that a stalled tic (longer
 	// than MixAhead) did not pay back, MixStalls the number of such tics: with
@@ -711,50 +714,81 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 const (
 	MixAhead = 0.1
 	MixLead  = 0.05
+
+	// MixAheadMax is how far the mixer runs ahead when frames are slow: the
+	// price of a game below 10 frames a second is a sound that lags by up to this
+	// much, instead of one that breaks up at every tic longer than MixAhead.
+	MixAheadMax = 0.5
+
+	mixSlowFactor = 1.5  // ahead = this times the slowest recent tic
+	mixSlowDecay  = 2.0  // seconds: the slowest tic is forgotten with this time constant
+	mixSlowCap    = 0.35 // seconds: a longer tic is a stall, not a slow frame
 )
 
 // paceAudio paints and queues what the clock owes the output, tyrquake's
-// S_Update_ (snd_dma.c): never more than MixAhead ahead of what the output has
-// played. Each tic it paints
+// S_Update_ (snd_dma.c): never more than "ahead" of what the output has played,
+// where ahead is MixAhead, or more (up to MixAheadMax) when recent tics were
+// slow enough to outlast it. Each tic it paints
 //
-//	min(MixAhead*rate - queued, max(owed, MixLead*rate - queued))
+//	min(ahead*rate - queued, max(owed, lead*rate - queued))
 //
 // frames, where owed is dt * rate accumulated since the last paint (capped at
-// MixAhead*rate: a stalled tic is not a debt to burst out), in batches of at
+// ahead*rate: a stalled tic is not a debt to burst out), in batches of at
 // most len(MixBuffer). In the steady state that is dt*rate a tic, so sounds
 // are consumed in real time; MixLead only refills after the output ran low (the
 // first tic, a stall), and MixAhead only caps. rate is the mix rate, 11025
 // frames a second, whatever rate the backend resamples to.
 func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 	const rate = sound.DefaultSampleRate
-	ahead := r.MixAhead
-	if ahead <= 0 {
-		ahead = MixAhead
+	base := r.MixAhead
+	if base <= 0 {
+		base = MixAhead
 	}
 	lead := r.MixLead
 	if lead <= 0 {
 		lead = MixLead
 	}
-	if lead > ahead {
-		lead = ahead
+	if lead > base {
+		lead = base
 	}
+	// A tic longer than what the output has queued is heard as a gap: the mixer
+	// keeps ahead what the slowest recent tic needs (mixSlowFactor of it, forgotten
+	// with a time constant of mixSlowDecay), between MixAhead (the game at full
+	// speed: tyrquake's 0.1 s) and MixAheadMax, and the lead grows with it. Only
+	// the tics BEFORE this one count: a stall cannot be prepared for, and it is
+	// not paid back in a burst.
+	limit := r.MixAheadMax
+	if limit <= 0 {
+		limit = MixAheadMax
+	}
+	ahead := base
+	if want := float32(mixSlowFactor * r.mixSlow); want > ahead {
+		ahead = min(want, limit)
+	}
+	lead *= ahead / base
+	// Stalls (a level loading, a tab in the background) are not slow frames.
+	r.mixSlow = math.Max(math.Min(float64(dt), mixSlowCap), r.mixSlow*math.Exp(-float64(dt)/mixSlowDecay))
 	maxAhead := int(float64(ahead) * rate)
+	queued := qa.QueuedFrames()
+	if queued < 0 {
+		queued = 0
+	}
 	r.mixOwed += float64(dt) * rate
 	if r.mixOwed > float64(maxAhead) {
 		r.MixDropped += int(r.mixOwed) - maxAhead
 		r.MixStalls++
 		r.mixOwed = float64(maxAhead)
 	}
-	queued := qa.QueuedFrames()
-	if queued < 0 {
-		queued = 0
-	}
 	want := int(r.mixOwed)
 	if refill := int(float64(lead)*rate) - queued; refill > want {
 		want = refill
 	}
+	// What does not fit under the allowance is already paid for by the queue (the
+	// allowance of a slow spell was forgotten while the queue was still full): it
+	// is neither owed later nor a stall.
+	prepaid := false
 	if room := maxAhead - queued; want > room {
-		want = room
+		want, prepaid = room, true
 	}
 	painted := 0
 	for want > 0 {
@@ -780,7 +814,7 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 		painted += n
 		want -= n
 	}
-	if r.mixOwed -= float64(painted); r.mixOwed < 0 {
+	if r.mixOwed -= float64(painted); r.mixOwed < 0 || prepaid {
 		r.mixOwed = 0
 	}
 	return nil
