@@ -435,6 +435,10 @@ func Setup(opts SetupOpts) (*runloop.Runner, error) {
 			if explosionSprite != nil {
 				tempSpritePool.Spawn(origin, now, 0)
 			}
+		case protocol.TEExplosion2:
+			// the colour-mapped explosion (CL_ParseTEnt): its particles need the
+			// colour range the sink does not carry; its light is TE_EXPLOSION's.
+			explosionDLight(&clientState.DLights, origin, now)
 		case protocol.TELavaSplash:
 			render.LavaSplash(particlePool, origin, now, particleRNG)
 		case protocol.TETeleport:

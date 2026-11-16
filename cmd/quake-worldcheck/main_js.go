@@ -141,7 +141,7 @@ func main() {
 			i++
 			opts.mapSlug = args[i]
 		case "--flatSkin", "--flatLight", "--noLerp", "--noWeapon", "--noScroll", "--exactSpans", "--standInLight", "--wrongLight", "--noFar", "--wrongWalk",
-			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip":
+			"--noMip", "--refMip0", "--mipBias", "--oldRef", "--anim", "--noAnimate", "--dlights", "--noDlights", "--nearplane", "--noAliasClip", "--noAliasDLights":
 			opts.ablate[args[i]] = true
 		case "--width":
 			i++

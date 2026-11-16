@@ -88,6 +88,27 @@ func TestWrongWalkFails(t *testing.T) {
 	}
 }
 
+// TestAliasDLightsMatch: with a muzzle flash, a rocket and its explosion around
+// each of the 16 alias views (--dlights), the dynamic-light term of
+// R_AliasSetupLighting is on the reference's entities and on the GPU's, and the
+// GPU still matches.
+func TestAliasDLightsMatch(t *testing.T) {
+	v := runInBrowser(t, "--part", "alias", "--dlights", "--tolerance", aliasTolerance)
+	if v.Check != "PASS" || v.Pixels == 0 {
+		t.Fatalf("verdict %+v", v)
+	}
+}
+
+// TestNoAliasDLightsFails is the planted negative of that term: the GPU lights
+// the entities without the dynamic lights (--noAliasDLights) while the
+// reference has them, and the comparison must fail.
+func TestNoAliasDLightsFails(t *testing.T) {
+	v := runInBrowser(t, "--part", "alias", "--dlights", "--tolerance", aliasTolerance, "--noAliasDLights")
+	if v.Check != "FAIL" || !strings.Contains(v.Detail, "unexplained mismatch") {
+		t.Fatalf("a GPU without the entity dynamic lights was not caught: %+v", v)
+	}
+}
+
 type partBenchRes struct {
 	Frames            int     `json:"frames"`
 	EngineFrameMS     float64 `json:"engine_frame_ms"`

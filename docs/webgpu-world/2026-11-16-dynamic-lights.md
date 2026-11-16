@@ -28,10 +28,9 @@ effects at 656 to 737) and `NQ/cl_tent.c` (`TE_EXPLOSION` 206).
   first dead slot, else slot 0), `CL_DecayLights`, the muzzle flash (200 + `rand & 31`
   units, minlight 32, 0.1 s, 18 forward and 16 up of the entity), the bright (400 + ...)
   and dim (200 + ...) lights, red and blue, the rocket's light (200 units, 0.01 s) and
-  the light of `TE_EXPLOSION` (350 units, 0.5 s, decaying 300 a second). Not made: the
-  light of `TE_EXPLOSION2` (the runner does not handle that temp entity at all), and the
-  lighting of entities from the lights (`R_AliasSetupLighting`'s dlight loop: the alias
-  path still passes no lights).
+  the light of `TE_EXPLOSION` (350 units, 0.5 s, decaying 300 a second). Made
+  afterwards, in `2026-11-16-alias-dlights.md`: the light of `TE_EXPLOSION2` and the
+  lighting of entities from the lights (`R_AliasSetupLighting`'s dlight loop).
 
 Tests are pinned on values worked from the source and not produced by the code: the
 light grids of `AddDynamicLights` on a 3 x 2 sample surface (a light over the middle, to

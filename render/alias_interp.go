@@ -22,6 +22,9 @@ type AliasEntityInterp struct {
 	AliasEntity          // Origin/AngleYaw/.../FrameIdx (the "from" frame) / SkinIdx
 	FrameIdxNext int     // destination frame
 	Lerp         float32 // [0, 1] -- 0 = use FrameIdx; 1 = use FrameIdxNext
+	// DLights are the levels the dynamic lights add to the entity's ambient
+	// light in R_AliasSetupLighting ([AliasDLightLevels]); nil for none.
+	DLights []int
 }
 
 // DrawAliasInterp is DrawAlias with per-vertex linear interpolation

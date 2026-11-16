@@ -121,6 +121,24 @@ func near(a, b float32) bool {
 	return d > -1e-3 && d < 1e-3
 }
 
+// TestAliasDLights: R_AliasSetupLighting's dynamic-light term over cl_dlights:
+// an explosion (350, at the entity: level 350), a muzzle flash 100 units away
+// (220 - 100 = 120), a light that has died (skipped) and one out of reach.
+func TestAliasDLights(t *testing.T) {
+	var l [client.MaxDLights]client.DLight
+	l[0] = client.DLight{Origin: [3]float32{5, 5, 5}, Radius: 350, Die: 20.5}
+	l[3] = client.DLight{Origin: [3]float32{105, 5, 5}, Radius: 220, Die: 20.1}
+	l[4] = client.DLight{Origin: [3]float32{5, 5, 5}, Radius: 999, Die: 19.9}
+	l[5] = client.DLight{Origin: [3]float32{500, 5, 5}, Radius: 100, Die: 30}
+	got := aliasDLights(nil, [3]float32{5, 5, 5}, &l, 20)
+	if len(got) != 2 || got[0] != 350 || got[1] != 120 {
+		t.Errorf("levels %v, want [350 120]", got)
+	}
+	if got := aliasDLights(nil, [3]float32{5, 5, 5}, &[client.MaxDLights]client.DLight{}, 20); len(got) != 0 {
+		t.Errorf("no lights: %v", got)
+	}
+}
+
 func TestExplosionDLight(t *testing.T) {
 	var l [client.MaxDLights]client.DLight
 	explosionDLight(&l, [3]float32{1, 2, 3}, 20)

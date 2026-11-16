@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/go-quake1/engine/client"
+	"github.com/go-quake1/engine/render"
 )
 
 // The entity effect bits of the update message (reference/common/include/model.h
@@ -112,6 +113,22 @@ func explosionDLight(lights *[client.MaxDLights]client.DLight, origin [3]float32
 	l.Radius = 350
 	l.Die = now + 0.5
 	l.Decay = 300
+}
+
+// aliasDLights is the dynamic-light term of R_AliasSetupLighting for an entity
+// at origin: the levels (radius - distance, when positive) of the lights that
+// have not died ([render.AliasDLightLevels]), appended to buf.
+func aliasDLights(buf []int, origin [3]float32, lights *[client.MaxDLights]client.DLight, now float32) []int {
+	for i := range lights {
+		l := &lights[i]
+		if l.Die < now {
+			continue
+		}
+		if level := render.AliasDLightLevel(origin, l.Origin, l.Radius); level > 0 {
+			buf = append(buf, level)
+		}
+	}
+	return buf
 }
 
 // angleForward is the forward vector of AngleVectors(angles): pitch, yaw, roll
