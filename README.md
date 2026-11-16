@@ -38,7 +38,7 @@ module at a time, with parity tests against the upstream C behaviour.
 | `progs` (QuakeC VM — 65 opcodes + edicts + parser + 9 math builtins) | done (100% cov) |
 | `server` (host + sv_world + sv_main + sv_phys + sv_user) | pending |
 | `client` + soft renderer (`r_*`, `d_*`, `cl_*`) | pending |
-| `sound` (snd_dma + snd_mem + snd_mix) | pending |
+| `sound` (snd_dma + snd_mem + snd_mix): the channel pool, `Paint` (snd_mix), spatialisation, the WAV loader; the runloop paces the mixer like `S_Update` for a backend that reports its queue (`backend.QueuedAudio`) | done |
 | 64 remaining QuakeC builtins (need sv_world for traceline/findradius/...) | pending |
 | `backend/tamago/` virtio adapters | pending (mirrors godoom shape) |
 | `embedpak/` shareware loader | pending |
@@ -141,6 +141,18 @@ that do not fit are dropped, never blocking the game loop. `WebAudio` stays as t
 fallback when the ring is refused. wasmbox's `test/probe-audio.mjs` checks it in
 headless Chromium against the real client, with a planted negative.
 
+**The mixer is paced.** The runloop used to paint a fixed 512 mix frames every
+tic, whatever its length: 2.79 times real time at 60 tics a second (6.7 at 144),
+so sounds were consumed that much too fast and the ring dropped the excess. A
+backend that reports its queue (`backend.QueuedAudio`: `backend/wasm`,
+`backend/wasmbox` and `backend/wasisurface` do) is now paced like tyrquake's
+`S_Update`: each tic paints what the clock owes (`dt * 11025` frames), never more
+than 0.1 s ahead of what the output has played (`_snd_mixahead`), and keeps 0.05 s
+queued so that a late tic does not starve it. The real-time ratio, in mix frames
+offered per second of game time over 11025, is 1.00 on every tic length
+(`runloop/pacing_test.go`; it was 2.79, 6.69 and 2.70 on the 60 Hz, 144 Hz and
+irregular runs). A backend without the interface keeps the fixed chunk.
+
 `task wasm`
 chains both. The single-step build is large (~180 MB; the Go runtime
 ships the full stdlib in wasm builds); first-load is a one-shot
@@ -154,7 +166,17 @@ frame with the software renderer and presents it on a `wasi-gfx:surface`: the
 WGSL shader looks up the colours (`render/wasipresent`). Keys, the mouse
 buttons and relative mouse motion come from the surface
 (`backend/wasisurface`, over go-wasmcontainers/gpu v0.14.0's surface
-extension). There is no audio yet.
+extension). **Sound** goes through the host module `wctr_audio_out` of
+go-wasmcontainers/engine (design: its `docs/audio-design.md`): the backend opens
+one stream, 11025 Hz stereo, converts the mix to float32 and writes it once a
+tic, and the host's answer is the queue the pacing reads. It is opt-in per
+container, like the GPU: `wctr run --rm --gpu --audio -m 512m quake`. Without
+`--audio` (the host answers *denied*), on native `wctr` (*unsupported*), or in a
+build without the `wctraudio` tag (nothing imports the module, so a host without
+it still runs the game), the game plays silent and raises nothing; it prints
+`QUAKE: sound on` or `QUAKE: sound off: <why>`. Click the page once, as for any
+sound in a browser; until then the stream is *waiting* and the host discards the
+mix. `--frames N` also prints `audio: ... real-time ratio`.
 
 The [go-wasmcontainers playground](https://go-wasmcontainers.github.io/playground/)
 has a `quake` image that runs it in a container on a GPU:
