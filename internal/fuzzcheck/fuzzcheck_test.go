@@ -64,3 +64,55 @@ func TestWriteSeed(t *testing.T) {
 		t.Error("a seed written under a file")
 	}
 }
+
+func TestBadPathElement(t *testing.T) {
+	for name, want := range map[string]bool{
+		"nul": true, "NUL": true, "Nul.txt": true, "con": true, "prn": true, "aux": true,
+		"com1": true, "COM9": true, "lpt1": true, "LPT9.x": true,
+		"nul-byte": false, "null": false, "com0": false, "com10": false, "lpt": false, "console": false,
+		"valid": false, "a.b": false, "": true, "a:b": true, "a?": true, "a*b": true, "a|b": true,
+		"a<b": true, "a>b": true, `a"b`: true, `a\b`: true,
+	} {
+		if got := BadPathElement(name); got != want {
+			t.Errorf("BadPathElement(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestWriteSeedRefusesAWindowsName(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteSeed(dir, "FuzzX", "nul", []byte("x")); err == nil {
+		t.Error("a seed named nul was written")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "FuzzX", "nul")); err == nil {
+		t.Error("the refused seed exists")
+	}
+}
+
+// TestRepositoryNamesBuildAModuleZip walks the whole module: a file or a
+// directory whose name Windows cannot hold makes `go get` of every release
+// containing it fail ("malformed file path"), which is how v0.17.0 to v0.19.0
+// came out: a seed corpus file named "nul".
+func TestRepositoryNamesBuildAModuleZip(t *testing.T) {
+	root := filepath.Join("..", "..")
+	n := 0
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		n++
+		if p != root && BadPathElement(d.Name()) {
+			t.Errorf("%s: not a name a Go module can hold on Windows", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 100 {
+		t.Errorf("walked %d files: the walk did not reach the module", n)
+	}
+}
