@@ -85,5 +85,9 @@ func BenchmarkAliasPass(b *testing.B) {
 		b.ReportMetric(v.B.GPUPartWallMS, "gpu-alias-wall-ms")
 		b.ReportMetric(v.B.GPUFrameWallMS, "gpu-frame-wall-ms")
 		b.ReportMetric(v.B.GPUFrameWallP95MS, "gpu-frame-wall-p95-ms")
+		b.ReportMetric(v.B.GPUWorldWallMS, "gpu-world-wall-ms")
+		b.ReportMetric(v.B.GPUFloorWallMS, "gpu-floor-wall-ms")
+		b.ReportMetric(v.B.GPUWorldCPUMS, "gpu-world-cpu-ms")
+		b.ReportMetric(v.B.GPUFrameCPUMS, "gpu-frame-cpu-ms")
 	}
 }

@@ -484,6 +484,10 @@ near plane or the frame: 286 of 173,271 alias pixels unexplained (0.17 %, tolera
 the 16 ordinary alias views are unchanged (346 unexplained of about 50,000, as before); a GPU
 that drops those triangles fails at 6.33 %. See
 [docs/webgpu-world/2026-11-16-alias-clip.md](docs/webgpu-world/2026-11-16-alias-clip.md).
+The GPU alias pass alone (0.97 ms to idle) is not slower than the CPU's (0.59 ms) where it
+counts: 0.68 ms of it is the floor of a submit and a wait, and in the frame the entities add less
+than 0.1 ms to the world's pass while the CPU's 0.59 ms is not spent
+([docs/webgpu-world/2026-11-16-alias-pass-cost.md](docs/webgpu-world/2026-11-16-alias-pass-cost.md)).
 
 `render.FrameTimer` records where each frame's time goes: `sim`,
 `world`, `models`, `2d` and `present`, plus the frame interval. The

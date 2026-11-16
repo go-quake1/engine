@@ -118,6 +118,9 @@ type partBenchRes struct {
 	GPUFrameWallMS    float64 `json:"gpu_frame_wall_ms"`
 	GPUFrameWallP95MS float64 `json:"gpu_frame_wall_p95_ms"`
 	GPUPartWallMS     float64 `json:"gpu_part_wall_ms"`
+	GPUFloorWallMS    float64 `json:"gpu_floor_wall_ms"`
+	GPUWorldCPUMS     float64 `json:"gpu_world_cpu_ms"`
+	GPUFrameCPUMS     float64 `json:"gpu_frame_cpu_ms"`
 }
 
 // benchPart runs QUAKE_BENCH_ROUNDS browser runs of a part at 1280x800 (a
