@@ -25,6 +25,7 @@ import (
 	enginesound "github.com/go-quake1/engine/sound"
 	enginespr "github.com/go-quake1/engine/spr"
 	"github.com/go-quake1/engine/vfs"
+	"github.com/go-quake1/engine/worldview"
 )
 
 // faceFrontFacing reports whether a one-sided world face on the given plane
@@ -1047,58 +1048,12 @@ func loadColorMapOrFallback(searchPath *vfs.SearchPath, logf func(string, ...any
 	return cm
 }
 
-// defaultLightStyles is tyrquake's R_AnimateLight() built-in table:
-// 11 standard Quake lightstyles indexed by Face.Styles[i]. Each char
-// 'a'..'z' encodes a brightness 0..25; the engine samples it at 10 Hz
-// from cl.time and multiplies by 22 to yield a 0..550 light scale
-// (256 = ~='m', the resting level used by static lights).
-//
-// Style 0 is hard-set "m" (full-bright steady, NOT in this table) by
-// engine convention; this slice holds 1..11.
-//
-// Source: tyrquake's r_light.c R_AnimateLight + the lightstyle string
-// table in NQ/cl_main.c CL_ClearState / S_INIT.
-var defaultLightStyles = [...]string{
-	"m",                       // 0 - normal (steady)
-	"mmnmmommommnonmmonqnmmo", // 1 - FLICKER (torches)
-	"abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba", // 2 - SLOW PULSE
-	"mmmmmaaaaammmmmaaaaaabcdefgabcdefg",                  // 3 - CANDLE 1
-	"mamamamamama",                                        // 4 - FAST STROBE
-	"jklmnopqrstuvwxyzyxwvutsrqponmlkj",                   // 5 - GENTLE PULSE
-	"nmonqnmomnmomomno",                                   // 6 - FLICKER 2
-	"mmmaaaabcdefgmmmmaaaammmaamm",                        // 7 - CANDLE 2
-	"mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa",          // 8 - CANDLE 3
-	"aaaaaaaazzzzzzzz",                                    // 9 - SLOW STROBE
-	"mmamammmmammamamaaamammma",                           // 10 - FLUORESCENT
-	"abcdefghijklmnopqrrqponmlkjihgfedcba",                // 11 - SLOW PULSE 2
-}
-
 // lightStyleBrightness returns the per-style brightness (0..550) at
 // the given time, sampling the style's Anim string at 10 Hz. style 0
 // is the constant full-bright. Unknown / out-of-range styles fall
 // back to the static-style brightness 256 so a face with a style not
 // in the default table still renders.
-func lightStyleBrightness(style byte, t float32) int {
-	if style == 0 {
-		return 264 // 'm' = 12, * 22 = 264
-	}
-	if int(style) >= len(defaultLightStyles) {
-		return 256
-	}
-	anim := defaultLightStyles[style]
-	if anim == "" {
-		return 256
-	}
-	idx := int(t*10) % len(anim)
-	if idx < 0 {
-		idx += len(anim)
-	}
-	ch := anim[idx]
-	if ch < 'a' || ch > 'z' {
-		return 256
-	}
-	return int(ch-'a') * 22
-}
+func lightStyleBrightness(style byte, t float32) int { return worldview.LightStyleValue(style, t) }
 
 // buildLightmapPlane assembles the per-face W*H lightmap byte plane
 // the lightmapped rasterizer samples from. tyrquake equivalent:

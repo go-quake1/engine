@@ -1,7 +1,7 @@
 // Copyright (c) 2026 the go-quake1/engine authors.
 // SPDX-License-Identifier: BSD-3-Clause
 
-package runner
+package worldview
 
 import "testing"
 

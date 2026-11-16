@@ -66,6 +66,11 @@ type Face struct {
 	Radius float32
 	// MipAdjust is texinfo->mipadjust.
 	MipAdjust float32
+	// MipTex is the face's miptex slot, and BaseTex its texture as the map
+	// gives it (Surf.Desc.Texture is the one the last frame drew: an
+	// animated '+' texture changes it).
+	MipTex  int
+	BaseTex *render.SurfaceTexture
 }
 
 // ErrNoMap is returned by [LoadMap] when the pak has no such map.
@@ -77,6 +82,15 @@ type World struct {
 	File  *bspfile.File
 	Faces []*Face // by face index; nil for faces that are not drawn
 	FOV   float32
+
+	// Tex and TexNames are the map's miptexes by slot (nil and empty for a
+	// slot that did not decode).
+	Tex      []*render.SurfaceTexture
+	TexNames []string
+	// Anim is what moves: the light styles and the '+' texture frames the
+	// next frame draws with (the zero value is the resting world).
+	Anim   Animation
+	chains *MiptexChains
 
 	// Lights is R_LightPoint's sampler over the map's lightmaps.
 	Lights *bsprender.LightSampler
@@ -170,7 +184,7 @@ func New(bsp []byte) (*World, error) {
 	}
 	light := file.Lighting()
 	special := make([]*SpecialFace, len(nf))
-	w := &World{BM: bm, File: file, FOV: DefaultFOV, Faces: make([]*Face, len(nf)), Special: special}
+	w := &World{BM: bm, File: file, FOV: DefaultFOV, Faces: make([]*Face, len(nf)), Special: special, Tex: surfTex, TexNames: names}
 	for i := range nf {
 		mi, ok, _ := bm.FaceMipTexIdx(i)
 		if !ok || mi < 0 || mi >= len(pics) || pics[mi] == nil {
@@ -218,7 +232,7 @@ func New(bsp []byte) (*World, error) {
 		}
 		rad *= 1.0001 // rounding: the sphere must hold every vertex
 		w.Faces[i] = &Face{Idx: i, Tex: pics[mi], Verts: fv, Info: info, Light: plane, Pts: pts, Centre: ctr, Radius: rad,
-			Surf: render.SurfaceFace{Desc: desc}, MipAdjust: render.MipAdjust(fv.UVAxisS, fv.UVAxisT)}
+			Surf: render.SurfaceFace{Desc: desc}, MipAdjust: render.MipAdjust(fv.UVAxisS, fv.UVAxisT), MipTex: mi, BaseTex: surfTex[mi]}
 	}
 	w.HaveLightData = len(light) > 0
 	w.walk = bsprender.NewWalkContext(bm)
@@ -407,7 +421,8 @@ func (w *World) drawFaces(fb *render.FrameBuffer, cm *render.ColorMap, faces []i
 		if mip < 0 {
 			mip = mv.Level(view, f)
 		}
-		adj := StyleAdj(f.Surf.Desc.Styles)
+		adj, tex := w.SurfaceState(f)
+		f.Surf.Desc.Texture = tex // an animated texture is a changed texture to D_CacheSurface
 		had := f.Surf.Spot(mip)
 		blk, err := w.cache.Cache(&f.Surf, mip, adj, env)
 		if err != nil {

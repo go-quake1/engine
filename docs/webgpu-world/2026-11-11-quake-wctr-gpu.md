@@ -41,8 +41,9 @@ frame (one submit, read-back in it). What is composited where:
 - CPU, over it, in the software pass's own order: sky and water faces (the GPU renderer
   draws the engine's polygon sky, not Quake's dome, so they stay on the CPU), the entities
   (alias models, beams, sprites), the particles, the view model, the status bar, the menu.
-- Not reproduced on the GPU: light styles other than their resting value and the animation
-  of `+` textures (the atlas is baked once); the CPU path animates both.
+- Light styles and the animation of `+` textures: not reproduced up to v0.17.0 (the atlas
+  was baked once); since v0.18.0 the GPU re-bakes and uploads what moved, see
+  [2026-11-16-light-styles-textures.md](2026-11-16-light-styles-textures.md).
 
 The device is opened and the atlases uploaded once, before the first frame. The map is
 fixed for a run of `quake-wctr`, so there is no level change to rebuild for. The surfaces are in two
