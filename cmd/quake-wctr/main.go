@@ -39,6 +39,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -161,6 +162,8 @@ func RootCmd() *cobra.Command {
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
 	fl.BoolVar(&fixedMixer, "fixed-mixer", false, "paint a fixed 512 mix frames every tic instead of pacing the mixer to the sound output's queue (what the game did before the pacing; for measuring the real-time ratio)")
 	_ = fl.MarkHidden("fixed-mixer")
+	fl.BoolVar(&memStats, "memstats", false, "print the Go heap (live, in use, system, GC count) every 60 frames, to find a leak")
+	_ = fl.MarkHidden("memstats")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
 	return c
 }
@@ -369,6 +372,9 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 	return nil
 }
 
+// memStats is --memstats.
+var memStats bool
+
 // quitObserver reports whether a poll carried QuitRequested.
 type quitObserver struct {
 	backend.Backend
@@ -402,6 +408,16 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		}
 		if obs.quit {
 			return nil
+		}
+		// A wasm guest has one P and the frame never sleeps (the host call that
+		// presents blocks in the browser): without a yield the collector's
+		// background workers never run, the heap grows by the frame's garbage
+		// until -m is hit, and the container dies "out of memory" (playground#56).
+		runtime.Gosched()
+		if memStats && n%60 == 0 {
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			fmt.Fprintf(out, "memstats frame %d: alloc %d KiB, inuse %d KiB, sys %d KiB, gcs %d\n", n, m.HeapAlloc>>10, m.HeapInuse>>10, m.Sys>>10, m.NumGC)
 		}
 		dt = max(float32(now-last), runloop.MinFrameTime)
 		last = now
