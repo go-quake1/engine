@@ -79,4 +79,29 @@ check caught it.
 Native: the entity records carry stride 3 and the model's first corner, or `FanStride` for
 an entity that is clipped (needs `QUAKE_PAK`).
 
-PERF_SECTION
+## Alias pass, before and after
+
+`abbench --max-load 8`, 7 rounds alternating a clean clone of v0.20.0 and this change
+(`BenchmarkAliasPass`: the engine's software alias pass and the GPU one alternating frame by
+frame on the 16 alias views at 1280x800), Apple M4 Max. The weapon, partly behind the near
+plane in every view, is clipped in this change, so every ordinary view has a clipped entity.
+
+| ordinary alias views | v0.20.0 | this change | |
+|---|---|---|---|
+| GPU alias pass alone, wall to idle (ms) | 0.945 ± 3 % | 1.015 ± 5 % | +7.4 % (p = 0.001) |
+| GPU world + alias, wall to idle (ms) | 1.220 ± 3 % | 1.275 ± 7 % | +4.5 % (p = 0.002) |
+| same, p95 (ms) | 1.510 | 1.680 | +11 % (p = 0.001) |
+| software alias pass (ms) | 0.605 | 0.600 | ~ |
+
+The GPU pays for the fan: an entity that is clipped draws 18 vertices for each triangle
+instead of 3, each recomputing the clip. The software pass is not slower on the same views.
+
+With the camera at the near plane of each target (`--nearplane`, this change on both sides,
+the ordinary views as the baseline): the GPU alias pass alone 0.875 to 0.990 ms (+13 %, p =
+0.016), the frame 1.125 to 1.285 ms (+14 %), p95 1.635 to 1.960 ms (+20 %), and the software
+alias pass 0.585 to 1.200 ms (+105 %: the models fill the frame, so there are more pixels
+to draw). As in v0.20.0 the GPU alias pass alone is slower than the CPU one at this size
+(1.0 ms against 0.6 ms: the GPU time has a floor of about half a millisecond); that gap is not
+new, and this change widens it by 0.07 ms on the ordinary views. Fewer vertex invocations for
+the clipped entities (a fan of the polygon's size, or the clip run once for the three corners)
+is the way to close it and is not done here.
