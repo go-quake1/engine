@@ -38,7 +38,8 @@ func TestWriteSlowTics(t *testing.T) {
 	}
 	gpu.gpu[2], gpu.copy[2] = 200*time.Millisecond, 50*time.Millisecond
 	p := &frameProbe{GC: []int{0, 0, 2, 0, 0}, GCPause: []time.Duration{0, 0, 3 * time.Millisecond, 0, 0},
-		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}, Steps: []int{1, 0, 3, 0, 1}}
+		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}, Steps: []int{1, 0, 3, 0, 1},
+		Yield: []time.Duration{0, 0, 15 * time.Millisecond, 0, 0}, ProbeCost: []time.Duration{0, 0, 2 * time.Millisecond, 0, 0}}
 
 	var out bytes.Buffer
 	writeSlowTics(&out, samples, gpu, p)
@@ -46,7 +47,7 @@ func TestWriteSlowTics(t *testing.T) {
 	if n := strings.Count(got, "slowtic frame="); n != 1 {
 		t.Fatalf("%d slow-tic lines, want 1:\n%s", n, got)
 	}
-	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
+	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 yield=15.00 probe=2.00 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
 		"slowtics: 1 over 100 ms, 400 ms in all; share of that time: sim 5% world 12% gpu 50% copy 12%"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -74,7 +75,7 @@ func TestReportWindow(t *testing.T) {
 		r.Timer.Mark(render.StageSim)
 		r.Timer.End()
 		gpu.add(time.Millisecond, 0)
-		p.frame()
+		p.frame(0)
 	}
 	var out bytes.Buffer
 	reportWindow(&out, r, gpu, p)
@@ -95,12 +96,15 @@ func TestFrameProbe(t *testing.T) {
 	w := &fakeWriteTimer{}
 	steps := 0
 	p := newFrameProbe(w, func() int { return steps })
-	p.frame()
+	p.frame(time.Millisecond)
 	steps = 3
 	w.d = 7 * time.Millisecond
 	runtime.GC()
-	p.frame()
-	p.frame()
+	p.frame(0)
+	p.frame(0)
+	if p.Yield[0] != time.Millisecond || len(p.ProbeCost) != 3 || p.ProbeCost[1] <= 0 {
+		t.Errorf("yield %v and probe cost %v per frame", p.Yield, p.ProbeCost)
+	}
 	if len(p.GC) != 3 || p.GC[0] != 0 || p.GC[1] < 1 || p.GC[2] != 0 {
 		t.Errorf("collector cycles per frame %v, want 0, at least 1, 0", p.GC)
 	}
@@ -112,9 +116,47 @@ func TestFrameProbe(t *testing.T) {
 	}
 	if q := newFrameProbe(nil, nil); q.steps != nil {
 		t.Error("no step source must stay nil")
-	} else if q.frame(); q.Steps[0] != 0 {
+	} else if q.frame(0); q.Steps[0] != 0 {
 		t.Errorf("no step source: %v", q.Steps)
 	}
 	var nilProbe *frameProbe
-	nilProbe.frame() // no --frames: no probe, no panic
+	nilProbe.frame(0) // no --frames: no probe, no panic
+}
+
+type fakeWriteLog struct {
+	at time.Time
+	q  int
+}
+
+func (f *fakeWriteLog) LastWrite() (time.Time, int, bool) { return f.at, f.q, !f.at.IsZero() }
+
+// A gap between two writes longer than what the first left queued is a dry run:
+// 80 ms of audio queued and a 250 ms gap is 170 ms short; the 40 ms gap on 80 ms
+// is bridged, and a frame with no write (the same time again) is not a write.
+func TestWriteAudioGaps(t *testing.T) {
+	l := &fakeWriteLog{}
+	p := &frameProbe{wl: l}
+	base := time.Unix(1000, 0)
+	for _, w := range []struct {
+		after time.Duration
+		q     int
+	}{{0, 882}, {40 * time.Millisecond, 882}, {40 * time.Millisecond, 882}, {290 * time.Millisecond, 441}} { // 80 ms, 80 ms, (no write), 40 ms
+		l.at, l.q = base.Add(w.after), w.q
+		p.frame(0)
+	}
+	var out bytes.Buffer
+	writeAudioGaps(&out, p)
+	got := out.String()
+	if n := strings.Count(got, "audiogap frame="); n != 1 || !strings.Contains(got, "audiogap frame=3 gap-ms=250.0 queued-ms=80.0 short-ms=170.0") {
+		t.Errorf("the dry gaps:\n%s", got)
+	}
+	if !strings.Contains(got, "audiogaps: 1 of 2 writes ran dry, 170 ms short in all, worst 170.0 ms, median queue before a dry gap 80.0 ms; writes more than 50 100 200 ms after the one before: 1 1 1") {
+		t.Errorf("the summary:\n%s", got)
+	}
+	out.Reset()
+	writeAudioGaps(&out, &frameProbe{}) // a backend that does not log its writes: nothing
+	writeAudioGaps(&out, nil)
+	if out.Len() != 0 {
+		t.Errorf("no write log, yet %q", out.String())
+	}
 }

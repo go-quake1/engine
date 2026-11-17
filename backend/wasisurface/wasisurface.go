@@ -73,6 +73,8 @@ type Backend struct {
 	offered   int
 	accepted  int
 	writeTime time.Duration // host time of the sound writes since TakeWriteTime
+	lastAt    time.Time     // when the last sound write returned
+	lastQ     int           // the frames the host said were queued after it
 }
 
 // New returns a backend for a w x h frame whose keys come from down and

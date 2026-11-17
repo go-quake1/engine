@@ -124,6 +124,22 @@ func TestTakeWriteTime(t *testing.T) {
 	}
 }
 
+// LastWrite is the time of the last write and what the host said was queued.
+func TestLastWrite(t *testing.T) {
+	clock := time.Unix(1000, 0)
+	out := &fakeOut{clock: &clock, last: clock, cap: 1024}
+	b := newAudioBackend(out, &clock)
+	if _, _, ok := b.LastWrite(); ok {
+		t.Error("a write before any write")
+	}
+	before := time.Now()
+	b.QueueAudio(make([]sound.StereoSample, 300))
+	at, q, ok := b.LastWrite()
+	if !ok || q != 300 || at.Before(before) || time.Since(at) > time.Minute {
+		t.Errorf("LastWrite = %v, %d, %v", at, q, ok)
+	}
+}
+
 // QueuedFrames follows the clock between writes, never below 0, and never
 // asks the host (one call a tic).
 func TestQueuedFramesFollowsTheClock(t *testing.T) {
