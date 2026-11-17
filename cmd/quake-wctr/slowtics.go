@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-quake1/engine/render"
+	"github.com/go-quake1/engine/runloop"
 )
 
 // slowTicBound is the tic length (seconds) over which a frame is reported with
@@ -98,6 +99,25 @@ func (p *frameProbe) frame() {
 		n = p.steps()
 	}
 	p.Steps = append(p.Steps, n)
+}
+
+// reset forgets the frames read so far (the next window starts empty).
+func (p *frameProbe) reset() {
+	if p == nil {
+		return
+	}
+	p.GC, p.GCPause, p.AudioWrite, p.Steps = p.GC[:0], p.GCPause[:0], p.AudioWrite[:0], p.Steps[:0]
+}
+
+// reportWindow prints the slow tics of the frames since the last report and
+// starts a new window: the timer, the probe and the GPU times are emptied.
+func reportWindow(out io.Writer, r *runloop.Runner, gpu *gpuTimes, p *frameProbe) {
+	writeSlowTics(out, r.Timer.Samples(), gpu, p)
+	r.Timer.Reset()
+	p.reset()
+	if gpu != nil {
+		gpu.gpu, gpu.copy = gpu.gpu[:0], gpu.copy[:0]
+	}
 }
 
 // writeSlowTics prints one line for every frame whose wall time (the interval
