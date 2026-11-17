@@ -418,7 +418,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 	}
 	var probe *frameProbe // nil without --frames: its methods below are guarded
 	if frames > 0 {
-		probe = newFrameProbe(be)
+		probe = newFrameProbe(be, func() int { return r.LastSimSteps })
 	}
 	last := be.Now()
 	dt := runloop.MinFrameTime

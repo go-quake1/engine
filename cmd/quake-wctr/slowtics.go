@@ -33,10 +33,15 @@ type frameProbe struct {
 	GC         []int           // collector cycles that finished during the frame
 	GCPause    []time.Duration // pause time added during the frame
 	AudioWrite []time.Duration // stream_write time during the frame
+	Steps      []int           // fixed server ticks the frame ran (the runner's LastSimSteps)
+
+	steps func() int
 }
 
-func newFrameProbe(be any) *frameProbe {
-	p := &frameProbe{}
+// newFrameProbe probes be (an audioWriteTimer, or not) and steps, the runner's
+// count of server ticks in its last frame (nil: not recorded).
+func newFrameProbe(be any, steps func() int) *frameProbe {
+	p := &frameProbe{steps: steps}
 	p.samples[0].Name = "/gc/cycles/total:gc-cycles"
 	p.samples[1].Name = "/gc/pauses:seconds"
 	p.samples[2].Name = "/sched/pauses/total/gc:seconds"
@@ -88,6 +93,11 @@ func (p *frameProbe) frame() {
 		w = p.wt.TakeWriteTime()
 	}
 	p.AudioWrite = append(p.AudioWrite, w)
+	n := 0
+	if p.steps != nil {
+		n = p.steps()
+	}
+	p.Steps = append(p.Steps, n)
 }
 
 // writeSlowTics prints one line for every frame whose wall time (the interval
@@ -134,8 +144,12 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 		outside := max(s.Interval-s.Work, 0)
 		world := max(s.Stages[render.StageWorld]-g.Seconds()-c.Seconds(), 0)
 		w, gp := p.AudioWrite[i].Seconds(), p.GCPause[i].Seconds()
-		fmt.Fprintf(out, "slowtic frame=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
-			i, s.Interval*1e3, s.Stages[render.StageSim]*1e3, world*1e3, ms(g), ms(c), s.Stages[render.StageModels]*1e3, s.Stages[render.Stage2D]*1e3,
+		steps := 0
+		if i < len(p.Steps) {
+			steps = p.Steps[i]
+		}
+		fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
+			i, steps, s.Interval*1e3, s.Stages[render.StageSim]*1e3, world*1e3, ms(g), ms(c), s.Stages[render.StageModels]*1e3, s.Stages[render.Stage2D]*1e3,
 			s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, w*1e3, p.GC[i], gp*1e3)
 		n++
 		tot.iv += s.Interval
