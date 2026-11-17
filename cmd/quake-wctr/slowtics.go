@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"runtime/metrics"
+	"slices"
 	"time"
 
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/runloop"
+	"github.com/go-quake1/engine/sound"
 )
 
 // slowTicBound is the tic length (seconds) over which a frame is reported with
@@ -21,6 +23,12 @@ const slowTicBound = 0.1
 // audioWriteTimer is a backend that times its sound writes (the host call
 // stream_write): TakeWriteTime returns the time spent since the last call.
 type audioWriteTimer interface{ TakeWriteTime() time.Duration }
+
+// audioWriteLog is a backend that says when its last sound write returned and
+// what the host reported queued after it.
+type audioWriteLog interface {
+	LastWrite() (at time.Time, queued int, ok bool)
+}
 
 // frameProbe records, per frame, what the frame's stages do not say: the Go
 // collector's cycles and pauses and the time of the sound write. Its readings
@@ -35,8 +43,13 @@ type frameProbe struct {
 	GCPause    []time.Duration // pause time added during the frame
 	AudioWrite []time.Duration // stream_write time during the frame
 	Steps      []int           // fixed server ticks the frame ran (the runner's LastSimSteps)
+	Yield      []time.Duration // the loop's yield (runtime.Gosched) after the frame
+	ProbeCost  []time.Duration // what this probe's own reading cost
+	WriteAt    []time.Time     // when the frame's last sound write returned (zero: none yet)
+	Queued     []int           // the frames the host said were queued after it
 
 	steps func() int
+	wl    audioWriteLog
 }
 
 // newFrameProbe probes be (an audioWriteTimer, or not) and steps, the runner's
@@ -47,6 +60,7 @@ func newFrameProbe(be any, steps func() int) *frameProbe {
 	p.samples[1].Name = "/gc/pauses:seconds"
 	p.samples[2].Name = "/sched/pauses/total/gc:seconds"
 	p.wt, _ = be.(audioWriteTimer)
+	p.wl, _ = be.(audioWriteLog)
 	p.read() // the baseline
 	return p
 }
@@ -80,11 +94,20 @@ func (p *frameProbe) read() (cycles uint64, pause float64) {
 	return cycles, pause
 }
 
-// frame is called after each RunFrame.
-func (p *frameProbe) frame() {
+// frame is called after each RunFrame and its yield, which took yield.
+func (p *frameProbe) frame(yield time.Duration) {
 	if p == nil {
 		return
 	}
+	t0 := time.Now()
+	defer func() { p.ProbeCost = append(p.ProbeCost, time.Since(t0)) }()
+	p.Yield = append(p.Yield, yield)
+	var at time.Time
+	var q int
+	if p.wl != nil {
+		at, q, _ = p.wl.LastWrite()
+	}
+	p.WriteAt, p.Queued = append(p.WriteAt, at), append(p.Queued, q)
 	c, ps := p.read()
 	p.GC = append(p.GC, int(c-p.gcCycles))
 	p.GCPause = append(p.GCPause, time.Duration((ps-p.gcPause)*float64(time.Second)))
@@ -107,12 +130,72 @@ func (p *frameProbe) reset() {
 		return
 	}
 	p.GC, p.GCPause, p.AudioWrite, p.Steps = p.GC[:0], p.GCPause[:0], p.AudioWrite[:0], p.Steps[:0]
+	p.Yield, p.ProbeCost, p.WriteAt, p.Queued = p.Yield[:0], p.ProbeCost[:0], p.WriteAt[:0], p.Queued[:0]
+}
+
+// at returns s[i] or the zero value past its end (a probe filled by hand).
+func at[T any](s []T, i int) T {
+	var z T
+	if i >= 0 && i < len(s) {
+		return s[i]
+	}
+	return z
+}
+
+// writeAudioGaps says, for each sound write, whether the output could bridge the
+// time since the one before it on what that one left queued: the gap between two
+// writes against the frames queued after the first. A gap longer than its queue is
+// a run-dry (an underrun the listener hears), and the line gives the gap, the
+// queue and the shortfall, so a stall's length can be read against the audio's
+// depth. The summary counts the dry gaps and the writes over 50, 100 and 200 ms.
+func writeAudioGaps(out io.Writer, p *frameProbe) {
+	if p == nil || p.wl == nil {
+		return
+	}
+	var prevAt time.Time
+	var prevQ int
+	var writes, dry int
+	var worst, total float64
+	var over [3]int
+	var queues []float64
+	for j := range p.WriteAt {
+		now := p.WriteAt[j]
+		if now.IsZero() || now.Equal(prevAt) { // no write in this frame
+			continue
+		}
+		if !prevAt.IsZero() {
+			writes++
+			gap := now.Sub(prevAt).Seconds()
+			for i, b := range [3]float64{0.05, 0.1, 0.2} {
+				if gap > b {
+					over[i]++
+				}
+			}
+			held := float64(prevQ) / sound.DefaultSampleRate
+			if short := gap - held; short > 0 {
+				dry++
+				total += short
+				worst = max(worst, short)
+				queues = append(queues, held)
+				fmt.Fprintf(out, "audiogap frame=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f\n", j, gap*1e3, held*1e3, short*1e3)
+			}
+		}
+		prevAt, prevQ = now, p.Queued[j]
+	}
+	slices.Sort(queues)
+	med := 0.0
+	if len(queues) > 0 {
+		med = queues[len(queues)/2]
+	}
+	fmt.Fprintf(out, "audiogaps: %d of %d writes ran dry, %.0f ms short in all, worst %.1f ms, median queue before a dry gap %.1f ms; writes more than 50 100 200 ms after the one before: %d %d %d\n",
+		dry, writes, total*1e3, worst*1e3, med*1e3, over[0], over[1], over[2])
 }
 
 // reportWindow prints the slow tics of the frames since the last report and
 // starts a new window: the timer, the probe and the GPU times are emptied.
 func reportWindow(out io.Writer, r *runloop.Runner, gpu *gpuTimes, p *frameProbe) {
 	writeSlowTics(out, r.Timer.Samples(), gpu, p)
+	writeAudioGaps(out, p)
 	r.Timer.Reset()
 	p.reset()
 	if gpu != nil {
@@ -168,9 +251,9 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 		if i < len(p.Steps) {
 			steps = p.Steps[i]
 		}
-		fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
+		fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f yield=%.2f probe=%.2f audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
 			i, steps, s.Interval*1e3, s.Stages[render.StageSim]*1e3, world*1e3, ms(g), ms(c), s.Stages[render.StageModels]*1e3, s.Stages[render.Stage2D]*1e3,
-			s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, w*1e3, p.GC[i], gp*1e3)
+			s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, ms(at(p.Yield, i)), ms(at(p.ProbeCost, i)), w*1e3, p.GC[i], gp*1e3)
 		n++
 		tot.iv += s.Interval
 		tot.sim += s.Stages[render.StageSim]

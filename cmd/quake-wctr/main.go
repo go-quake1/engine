@@ -444,8 +444,9 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		// presents blocks in the browser): without a yield the collector's
 		// background workers never run, the heap grows by the frame's garbage
 		// until -m is hit, and the container dies "out of memory" (playground#56).
+		ty := time.Now()
 		yield()
-		probe.frame() // after the yield: the collector's work there belongs to this tic's gap
+		probe.frame(time.Since(ty)) // after the yield: the collector's work there belongs to this tic's gap
 		if frames == 0 && slowWindow > 0 && (n+1)%slowWindow == 0 {
 			reportWindow(out, r, gt, probe)
 		}
@@ -462,5 +463,6 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 	writeAudioStats(out, be, el, frames, r)
 	writePhases(out, r.Timer.Samples(), gt)
 	writeSlowTics(out, r.Timer.Samples(), gt, probe)
+	writeAudioGaps(out, probe)
 	return nil
 }

@@ -43,6 +43,13 @@ func (b *Backend) AudioStats() AudioStats {
 	return AudioStats{Offered: b.offered, Accepted: b.accepted, Silent: b.out == nil}
 }
 
+// LastWrite is when the last sound write returned and how many frames the host
+// said were queued after it (ok false before the first write): with the writes
+// before it, the gap the output had to bridge on what it held.
+func (b *Backend) LastWrite() (at time.Time, queued int, ok bool) {
+	return b.lastAt, b.lastQ, !b.lastAt.IsZero()
+}
+
 // TakeWriteTime returns the host time the sound writes (stream_write) took since
 // the last call, and resets it: the per-frame diagnostic of a slow tic.
 func (b *Backend) TakeWriteTime() time.Duration {
@@ -91,6 +98,7 @@ func (b *Backend) QueueAudio(samples []sound.StereoSample) error {
 		return nil
 	}
 	b.accepted += accepted
+	b.lastAt, b.lastQ = time.Now(), queued
 	b.setQueued(float64(queued), now)
 	return nil
 }
