@@ -55,28 +55,58 @@ type frameProbe struct {
 	steps func() int
 	wl    audioWriteLog
 
-	ys      [4]metrics.Sample // collector mark workers (dedicated, fractional, idle), goroutine count
-	pendGC  time.Duration     // the yield just timed (taken by frame)
+	ys      [8]metrics.Sample // what the runtime's own goroutines do (see readYield)
+	pend    yieldReading      // the yield just timed (taken by frame)
 	pendGor int
+
+	// What the runtime's background goroutines did during each frame's yield: the
+	// scavenger's time, the cleanups (runtime.AddCleanup: the GPU handle ids,
+	// whose cleanup sends a DESTROY) and the finalizers run.
+	YieldScav       []time.Duration
+	YieldCleanups   []int
+	YieldFinalizers []int
+	// Cleanups is the cleanups that ran in the whole frame, yield or not.
+	Cleanups     []int
+	cleanupsSeen uint64
+	cleanupsNow  uint64
 }
 
-// readYield returns the collector's background mark time so far (the three
-// worker classes) and the number of goroutines.
-func (p *frameProbe) readYield() (mark float64, goroutines int) {
-	p.ys[0].Name = "/cpu/classes/gc/mark/dedicated:cpu-seconds"
-	p.ys[1].Name = "/cpu/classes/gc/mark/fractional:cpu-seconds"
-	p.ys[2].Name = "/cpu/classes/gc/mark/idle:cpu-seconds"
-	p.ys[3].Name = "/sched/goroutines:goroutines"
+// yieldReading is the runtime's cumulative counters at one moment.
+type yieldReading struct {
+	mark, scav             float64 // collector mark workers, scavenger: cpu-seconds
+	cleanups, finalizers   uint64  // executed so far
+	cleanupsQ, finalizersQ uint64  // queued so far
+}
+
+// readYield reads the runtime's counters for its own goroutines: the collector's
+// mark workers (dedicated and idle classes), the background scavenger, the
+// cleanups and finalizers executed and queued, and the goroutine count.
+func (p *frameProbe) readYield() (r yieldReading, goroutines int) {
+	names := [...]string{
+		"/cpu/classes/gc/mark/dedicated:cpu-seconds", "/cpu/classes/gc/mark/idle:cpu-seconds",
+		"/cpu/classes/scavenge/background:cpu-seconds",
+		"/gc/cleanups/executed:cleanups", "/gc/finalizers/executed:finalizers",
+		"/gc/cleanups/queued:cleanups", "/gc/finalizers/queued:finalizers",
+		"/sched/goroutines:goroutines",
+	}
+	for i, n := range names {
+		p.ys[i].Name = n
+	}
 	metrics.Read(p.ys[:])
-	for _, s := range p.ys[:3] {
-		if s.Value.Kind() == metrics.KindFloat64 {
-			mark += s.Value.Float64()
+	f := func(i int) float64 {
+		if p.ys[i].Value.Kind() == metrics.KindFloat64 {
+			return p.ys[i].Value.Float64()
 		}
+		return 0
 	}
-	if p.ys[3].Value.Kind() == metrics.KindUint64 {
-		goroutines = int(p.ys[3].Value.Uint64())
+	u := func(i int) uint64 {
+		if p.ys[i].Value.Kind() == metrics.KindUint64 {
+			return p.ys[i].Value.Uint64()
+		}
+		return 0
 	}
-	return mark, goroutines
+	r = yieldReading{mark: f(0) + f(1), scav: f(2), cleanups: u(3), finalizers: u(4), cleanupsQ: u(5), finalizersQ: u(6)}
+	return r, int(u(7))
 }
 
 // timeYield runs fn, the loop's yield, and returns how long it took. It notes
@@ -93,7 +123,10 @@ func (p *frameProbe) timeYield(fn func()) time.Duration {
 	fn()
 	d := time.Since(t0)
 	after, gor := p.readYield()
-	p.pendGC, p.pendGor = time.Duration((after-before)*float64(time.Second)), gor
+	p.pend = yieldReading{mark: after.mark - before.mark, scav: after.scav - before.scav,
+		cleanups: after.cleanups - before.cleanups, finalizers: after.finalizers - before.finalizers}
+	p.pendGor = gor
+	p.cleanupsNow = after.cleanups
 	return d
 }
 
@@ -107,6 +140,8 @@ func newFrameProbe(be any, steps func() int) *frameProbe {
 	p.wt, _ = be.(audioWriteTimer)
 	p.wl, _ = be.(audioWriteLog)
 	p.read() // the baseline
+	r, _ := p.readYield()
+	p.cleanupsSeen, p.cleanupsNow = r.cleanups, r.cleanups
 	return p
 }
 
@@ -147,8 +182,14 @@ func (p *frameProbe) frame(yield time.Duration) {
 	t0 := time.Now()
 	defer func() { p.ProbeCost = append(p.ProbeCost, time.Since(t0)) }()
 	p.Yield = append(p.Yield, yield)
-	p.YieldGC, p.Goroutines = append(p.YieldGC, p.pendGC), append(p.Goroutines, p.pendGor)
-	p.pendGC, p.pendGor = 0, 0
+	p.YieldGC = append(p.YieldGC, time.Duration(p.pend.mark*float64(time.Second)))
+	p.Goroutines = append(p.Goroutines, p.pendGor)
+	p.YieldScav = append(p.YieldScav, time.Duration(p.pend.scav*float64(time.Second)))
+	p.YieldCleanups = append(p.YieldCleanups, int(p.pend.cleanups))
+	p.YieldFinalizers = append(p.YieldFinalizers, int(p.pend.finalizers))
+	p.Cleanups = append(p.Cleanups, int(p.cleanupsNow-p.cleanupsSeen))
+	p.cleanupsSeen = p.cleanupsNow
+	p.pend, p.pendGor = yieldReading{}, 0
 	var at time.Time
 	var q int
 	if p.wl != nil {
@@ -179,6 +220,7 @@ func (p *frameProbe) reset() {
 	p.GC, p.GCPause, p.AudioWrite, p.Steps = p.GC[:0], p.GCPause[:0], p.AudioWrite[:0], p.Steps[:0]
 	p.Yield, p.ProbeCost, p.WriteAt, p.Queued = p.Yield[:0], p.ProbeCost[:0], p.WriteAt[:0], p.Queued[:0]
 	p.YieldGC, p.Goroutines = p.YieldGC[:0], p.Goroutines[:0]
+	p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups = p.YieldScav[:0], p.YieldCleanups[:0], p.YieldFinalizers[:0], p.Cleanups[:0]
 }
 
 // at returns s[i] or the zero value past its end (a probe filled by hand).
@@ -296,7 +338,8 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 		}
 	}
 	var n int
-	var tot struct{ iv, sim, world, gpu, copy, models, comp, present, unstaged, outside, write, gc, yield, yieldGC float64 }
+	var tot struct{ iv, sim, world, gpu, copy, models, comp, present, unstaged, outside, write, gc, yield, yieldGC, yieldScav float64 }
+	var cleanups, finalizers, frameCleanups int
 	// A sample's Interval is the wall time from the previous frame's start to its
 	// own: the previous frame's work and the gap after it (the yield, the host's
 	// wait). The tic that lasted that long is therefore the PREVIOUS frame, and
@@ -322,9 +365,9 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 		if i < len(p.Steps) {
 			steps = p.Steps[i]
 		}
-		fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f yield=%.2f probe=%.2f yield-gc=%.2f gor=%d audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
+		fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f yield=%.2f probe=%.2f yield-gc=%.2f gor=%d scav=%.2f cleanups=%d finalizers=%d frame-cleanups=%d audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
 			i, steps, s.Interval*1e3, s.Stages[render.StageSim]*1e3, world*1e3, ms(g), ms(c), s.Stages[render.StageModels]*1e3, s.Stages[render.Stage2D]*1e3,
-			s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, ms(at(p.Yield, i)), ms(at(p.ProbeCost, i)), ms(at(p.YieldGC, i)), at(p.Goroutines, i), w*1e3, p.GC[i], gp*1e3)
+			s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, ms(at(p.Yield, i)), ms(at(p.ProbeCost, i)), ms(at(p.YieldGC, i)), at(p.Goroutines, i), ms(at(p.YieldScav, i)), at(p.YieldCleanups, i), at(p.YieldFinalizers, i), at(p.Cleanups, i), w*1e3, p.GC[i], gp*1e3)
 		n++
 		tot.iv += s.Interval
 		tot.sim += s.Stages[render.StageSim]
@@ -340,6 +383,10 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 		tot.gc += gp
 		tot.yield += at(p.Yield, i).Seconds()
 		tot.yieldGC += min(at(p.YieldGC, i).Seconds(), at(p.Yield, i).Seconds())
+		tot.yieldScav += min(at(p.YieldScav, i).Seconds(), at(p.Yield, i).Seconds())
+		cleanups += at(p.YieldCleanups, i)
+		finalizers += at(p.YieldFinalizers, i)
+		frameCleanups += at(p.Cleanups, i)
 	}
 	if n == 0 {
 		fmt.Fprintf(out, "slowtics: none over %.0f ms in %d frames\n", slowTicBound*1e3, len(samples))
@@ -351,5 +398,12 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 	if tot.yield > 0 {
 		fmt.Fprintf(out, "yieldshare: of the %.0f ms the slow tics spent in the yield, collector background mark %.0f ms (%.0f%%), other goroutines %.0f ms (%.0f%%)\n",
 			tot.yield*1e3, tot.yieldGC*1e3, 100*tot.yieldGC/tot.yield, (tot.yield-tot.yieldGC)*1e3, 100*(tot.yield-tot.yieldGC)/tot.yield)
+		// What the other goroutines were: the scavenger's own time is measured; the
+		// cleanups and finalizers are counted (a cleanup of a GPU handle id sends a
+		// DESTROY into the batch stream, webgpu record.go freeID); what is left is
+		// the sweeper and whatever else the runtime runs.
+		rest := max(tot.yield-tot.yieldGC-tot.yieldScav, 0)
+		fmt.Fprintf(out, "yieldwho: of the other goroutines' %.0f ms: scavenger %.0f ms; %d cleanups and %d finalizers ran in those yields (%d cleanups in the whole frames of the slow tics); sweeper and the rest %.0f ms\n",
+			(tot.yield-tot.yieldGC)*1e3, tot.yieldScav*1e3, cleanups, finalizers, frameCleanups, rest*1e3)
 	}
 }

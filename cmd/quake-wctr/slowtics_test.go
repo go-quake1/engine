@@ -40,7 +40,9 @@ func TestWriteSlowTics(t *testing.T) {
 	p := &frameProbe{GC: []int{0, 0, 2, 0, 0}, GCPause: []time.Duration{0, 0, 3 * time.Millisecond, 0, 0},
 		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}, Steps: []int{1, 0, 3, 0, 1},
 		Yield: []time.Duration{0, 0, 15 * time.Millisecond, 0, 0}, ProbeCost: []time.Duration{0, 0, 2 * time.Millisecond, 0, 0},
-		YieldGC: []time.Duration{0, 0, 6 * time.Millisecond, 0, 0}, Goroutines: []int{3, 3, 7, 3, 3}}
+		YieldGC: []time.Duration{0, 0, 6 * time.Millisecond, 0, 0}, Goroutines: []int{3, 3, 7, 3, 3},
+		YieldScav: []time.Duration{0, 0, 2 * time.Millisecond, 0, 0}, YieldCleanups: []int{0, 0, 40, 0, 0},
+		YieldFinalizers: []int{0, 0, 1, 0, 0}, Cleanups: []int{0, 5, 90, 3, 0}}
 
 	var out bytes.Buffer
 	writeSlowTics(&out, samples, gpu, p)
@@ -48,7 +50,8 @@ func TestWriteSlowTics(t *testing.T) {
 	if n := strings.Count(got, "slowtic frame="); n != 1 {
 		t.Fatalf("%d slow-tic lines, want 1:\n%s", n, got)
 	}
-	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 yield=15.00 probe=2.00 yield-gc=6.00 gor=7 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
+	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 yield=15.00 probe=2.00 yield-gc=6.00 gor=7 scav=2.00 cleanups=40 finalizers=1 frame-cleanups=90 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
+		"yieldwho: of the other goroutines' 9 ms: scavenger 2 ms; 40 cleanups and 1 finalizers ran in those yields (90 cleanups in the whole frames of the slow tics); sweeper and the rest 7 ms",
 		"yieldshare: of the 15 ms the slow tics spent in the yield, collector background mark 6 ms (40%), other goroutines 9 ms (60%)",
 		"slowtics: 1 over 100 ms, 400 ms in all; share of that time: sim 5% world 12% gpu 50% copy 12%"} {
 		if !strings.Contains(got, want) {
@@ -157,6 +160,32 @@ func TestTimeYield(t *testing.T) {
 	p.frame(d)
 	if len(p.YieldGC) != 1 || p.YieldGC[0] < 0 || len(p.Goroutines) != 1 || p.Goroutines[0] < 1 {
 		t.Errorf("yield-gc %v, goroutines %v", p.YieldGC, p.Goroutines)
+	}
+	if len(p.YieldScav) != 1 || len(p.YieldCleanups) != 1 || len(p.YieldFinalizers) != 1 || len(p.Cleanups) != 1 {
+		t.Errorf("scavenger %v, cleanups %v, finalizers %v, frame cleanups %v", p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups)
+	}
+}
+
+// A cleanup (runtime.AddCleanup, as the GPU handle ids use) that runs in the
+// yield is counted in it and in its frame; the counters are the runtime's own.
+func TestYieldCountsCleanups(t *testing.T) {
+	p := newFrameProbe(nil, nil)
+	func() {
+		for i := 0; i < 50; i++ {
+			o := new([64]byte)
+			runtime.AddCleanup(o, func(int) {}, i)
+		}
+	}()
+	d := p.timeYield(func() {
+		runtime.GC() // the objects are unreachable: their cleanups are queued
+		for i := 0; i < 100; i++ {
+			runtime.Gosched() // and run by the cleanup goroutine
+			time.Sleep(time.Millisecond)
+		}
+	})
+	p.frame(d)
+	if p.YieldCleanups[0] < 1 || p.Cleanups[0] < p.YieldCleanups[0] {
+		t.Errorf("cleanups in the yield %v and in the frame %v, want some", p.YieldCleanups, p.Cleanups)
 	}
 	var nilProbe *frameProbe
 	if d := nilProbe.timeYield(func() {}); d < 0 {
