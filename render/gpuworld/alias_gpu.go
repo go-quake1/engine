@@ -67,10 +67,9 @@ func (r *Renderer) EnableAliasLayer() error {
 	}); err != nil {
 		return err
 	}
-	r.hold(tv, mod)
 	r.layered = true
-	// both buffers of the layer's read-back exist before the first frame: a handle
-	// first created after a collection is the one that takes a freed id (see hold)
+	// both buffers of the layer's read-back exist before the first frame, so the
+	// first frame with entities creates no object
 	if err := r.createReadBuffers(); err != nil {
 		return err
 	}
@@ -188,7 +187,6 @@ func (r *Renderer) EnableAlias(set *AliasSet) error {
 		return err
 	}
 	r.alias = a
-	r.hold(skins, sv, poses, corners, bgl, pl, mod)
 	return nil
 }
 

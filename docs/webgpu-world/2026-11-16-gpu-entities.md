@@ -8,8 +8,10 @@ handle's id when the Go object is garbage collected without destroying the host 
 handle that only a local variable held (shader modules, layouts, the textures and buffers a bind
 group names) gave its id to the next object created, and the host refused that creation of a live
 id. The slower lane let a collection run before the first frame with entities; the M4 Max did
-not. The fix keeps every handle of the renderer alive (`Renderer.hold`) and creates the read-back
-buffers up front; `TestHandlesOutliveACollection` (wasip1) is red without it. The rest of this
+not. The defect was in go-gfx/webgpu's remote device, so the fix is there (v0.19.0: the cleanup
+destroys the host object before the id is reused; v0.19.1: a bind group, view or pipeline keeps
+the objects it names alive); the renderer creates the read-back buffers up front, and
+`TestHandlesOutliveACollection` (wasip1) stays as the regression test (red on v0.18.0). The rest of this
 page describes the path as built and measured on the M4 Max.
 
 Until v0.24.0 `quake-wctr` drew every alias model (monsters, items, the player's weapon pickups)

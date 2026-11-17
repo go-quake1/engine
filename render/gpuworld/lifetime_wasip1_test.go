@@ -33,15 +33,15 @@ func (s *liveSink) Destroy(id uint32) error                   { delete(s.live, i
 func (s *liveSink) Submit([]uint32, []byte) error             { return nil }
 func (s *liveSink) SubmitRead([]uint32, []byte, []byte) error { return nil }
 
-// TestHandlesOutliveACollection: a remote device frees the id of a handle when
-// the Go object is garbage collected and does not destroy it on the host, so a
-// handle that only a local variable held (a shader module, a layout, the
-// buffers a bind group names) would hand its id to the next object created while
-// the host still holds the old one, and the host would refuse that creation and
-// lose the device. The entities' layer lost it that way on the playground's CI
-// lane, whose slower frames let a collection run before the first frame with
-// entities. After EnableAlias and EnableAliasLayer and some collections, creating
-// objects must not collide with a live id.
+// TestHandlesOutliveACollection: before go-gfx/webgpu v0.19.0 a remote device
+// freed the id of a handle when the Go object was garbage collected without
+// destroying it on the host, so a handle that only a local variable held (a
+// shader module, a layout, the buffers a bind group names) handed its id to the
+// next object created while the host still held the old one, and the host
+// refused that creation and lost the device. The entities' layer lost it that
+// way on the playground's CI lane, whose slower frames let a collection run
+// before the first frame with entities. After EnableAlias and EnableAliasLayer
+// and some collections, creating objects must not collide with a live id.
 func TestHandlesOutliveACollection(t *testing.T) {
 	sink := &liveSink{live: map[uint32]bool{}}
 	dev := webgpu.NewRemoteDevice(sink, "test", nil)

@@ -42,7 +42,6 @@ type Renderer struct {
 	// The entity layer ([Renderer.EnableAliasLayer]): the alias entities go in a
 	// pass of their own into a second index texture, cleared to EntityClear, so
 	// that the caller composites them over what it draws after the world.
-	kept      []any // see hold
 	layered   bool
 	entTarget *webgpu.Texture
 	entPipe   *webgpu.RenderPipeline
@@ -243,20 +242,8 @@ func New(dev *webgpu.Device, w *worldview.World, cm *render.ColorMap, width, hei
 	if r.readBuf, err = r.readBuffer("world readback"); err != nil {
 		return nil, err
 	}
-	r.hold(surfA, surfLowA, cmT, bgl, pl, views, faceTab, faceVerts, surfTab, mod, tv)
 	return r, nil
 }
-
-// hold keeps GPU handles reachable for as long as the Renderer. A remote device
-// gives each handle an id when it is created and frees the id when the Go
-// object is garbage collected, WITHOUT destroying the object on the host: a
-// handle that is only a local (a shader module, a layout, a buffer that only a
-// bind group names) is collected sooner or later, its id goes to the next object
-// created, and the host refuses that creation ("CREATE 12": the id is still in
-// use) and loses the device. It showed when the first frame with entities created
-// the read-back buffer of their layer after a collection, on a lane slower than
-// the machine it was written on.
-func (r *Renderer) hold(handles ...any) { r.kept = append(r.kept, handles...) }
 
 // readBuffer makes a MAP_READ buffer of one padded frame.
 func (r *Renderer) readBuffer(label string) (*webgpu.Buffer, error) {
@@ -265,7 +252,7 @@ func (r *Renderer) readBuffer(label string) (*webgpu.Buffer, error) {
 }
 
 // createReadBuffers makes the read-back buffers of the world frame and of the
-// entity layer now, not at the first frame that reads them (see hold).
+// entity layer now, not at the first frame that reads them.
 func (r *Renderer) createReadBuffers() (err error) {
 	if r.readBuf == nil {
 		if r.readBuf, err = r.readBuffer("world readback"); err != nil {

@@ -350,8 +350,8 @@ server's `lightstyle` messages are wired, `TE_EXPLOSION2` makes its light, entit
 by the dynamic lights and the surface uploads are coalesced. The alias entities are drawn on the GPU
 too (`--gpu-entities`, on by default; `--gpu-entities=false` leaves them to the CPU; the device
 had been lost on the playground's macOS CI lane because a handle that only a local variable held
-was collected and its id reused while the host still held the object, fixed by keeping every
-handle of the renderer alive), in a layer of their own composited after the CPU's sky and water (far models, models with
+was collected and its id reused while the host still held the object, fixed in go-gfx/webgpu
+v0.19.0 and v0.19.1), in a layer of their own composited after the CPU's sky and water (far models, models with
 animated frame groups and the view model stay on the CPU, as does a frame with fewer than three
 entities): `--gpuworld-check` also compares the pixels the entities change, and a
 planted skin defect (`--corrupt-gpu-skins`) fails it at 85.6 %
