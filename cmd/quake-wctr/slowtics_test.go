@@ -65,6 +65,48 @@ func TestWriteSlowTics(t *testing.T) {
 	}
 }
 
+// --slowtics-brief keeps the summary lines and drops the line of every tic and of
+// every dry write, the yield split and the goroutine dump.
+func TestSlowticsBrief(t *testing.T) {
+	slowBrief = true
+	defer func() { slowBrief = false }()
+	var st [render.NumStages]float64
+	slow := render.FrameSample{Interval: 0.03, Work: 0.38, Stages: st}
+	samples := []render.FrameSample{{Interval: 0.03, Work: 0.03}, slow, {Interval: 0.4, Work: 0.03}}
+	p := &frameProbe{GC: []int{0, 0, 0}, GCPause: make([]time.Duration, 3), AudioWrite: make([]time.Duration, 3), Yield: []time.Duration{0, 15 * time.Millisecond, 0}}
+	var out bytes.Buffer
+	writeSlowTics(&out, samples, nil, p)
+	got := out.String()
+	if strings.Contains(got, "slowtic frame=") || strings.Contains(got, "yieldshare") || strings.Contains(got, "yieldwho") {
+		t.Errorf("a per-tic or yield line in brief mode:\n%s", got)
+	}
+	if !strings.Contains(got, "slowtics: 1 over 100 ms, 400 ms in all") {
+		t.Errorf("no summary line:\n%s", got)
+	}
+	goroutinesDumped = false
+	out.Reset()
+	dumpGoroutines(&out)
+	if out.Len() != 0 {
+		t.Errorf("the goroutine dump in brief mode: %q", out.String())
+	}
+	// A dry write is counted and not listed.
+	l := &fakeWriteLog{}
+	q := &frameProbe{wl: l}
+	base := time.Unix(1000, 0)
+	for _, w := range []struct {
+		after time.Duration
+		q     int
+	}{{0, 882}, {300 * time.Millisecond, 882}} {
+		l.at, l.q = base.Add(w.after), w.q
+		q.frame(0)
+	}
+	out.Reset()
+	writeAudioGaps(&out, q)
+	if strings.Contains(out.String(), "audiogap frame=") || !strings.Contains(out.String(), "audiogaps: 1 of 1 writes ran dry") {
+		t.Errorf("the dry write in brief mode:\n%s", out.String())
+	}
+}
+
 // A game with no --frames reports a window of frames and starts the next one
 // empty: the report names the slow tic, and the timer, the probe and the GPU
 // times are cleared so the next window's indexes line up again.
