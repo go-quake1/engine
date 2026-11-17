@@ -30,11 +30,11 @@ func streamWrite(stream, ptr, frames uint32, out unsafe.Pointer) uint32
 func streamClose(stream uint32) uint32
 
 // The stream: 11025 Hz stereo (the mixer's rate; the page resamples), 8192
-// frames of ring (743 ms). The ring must hold what the mixer runs ahead:
-// runloop.MixAheadMax is 0.5 s (5512 frames) when frames are slow. At 1024
-// frames (93 ms), less than the 0.1 s mix-ahead, the host refused the end of
-// every write at a few frames a second (playground#63: 6 % of the mix lost,
-// 204 underruns in 66 s at 14 frames a second).
+// frames of ring (743 ms). The ring must hold what the mixer runs ahead: the
+// mix-ahead is 0.1 s (1102 frames, runloop.MixAhead, WinQuake's _snd_mixahead),
+// refilled at every update. At 1024 frames (93 ms), less than the mix-ahead, the
+// host refused the end of every write (playground#63: 6 % of the mix lost, 204
+// underruns in 66 s at 14 frames a second).
 const (
 	audioRate     = 11025
 	audioChannels = 2
