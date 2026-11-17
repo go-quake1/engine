@@ -189,6 +189,52 @@ func TestMixerPacing_StallDoesNotBurst(t *testing.T) {
 	}
 }
 
+// The CI shape of go-wasmcontainers/playground#63 at 27 frames a second: 35 ms
+// tics with a spike of 0.1 to 0.3 s about once a second. The queue is kept at
+// the allowance the spikes raise, so the output runs dry on a small fraction of
+// the spikes (only one bigger than 1.5 times the recent biggest escapes); with
+// the allowance off it runs dry on every spike.
+func TestMixerPacing_SpikesDoNotUnderrun(t *testing.T) {
+	var dts []float64
+	seed := uint32(12345)
+	rnd := func() float64 { seed = seed*1664525 + 1013904223; return float64(seed>>8) / float64(1<<24) }
+	spikes := 0
+	for len(dts) < 3000 {
+		for i := 0; i < 20+int(rnd()*20); i++ {
+			dts = append(dts, 0.035)
+		}
+		dts = append(dts, 0.1+0.2*rnd())
+		spikes++
+	}
+	run := func(limit float32) (underruns int) {
+		d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+		r, _ := newRunner(t, d)
+		pool, _ := sound.NewPool(8)
+		r.SoundPool, r.MixBuffer = pool, make([]sound.StereoSample, sound.MixBufferStereoFrames)
+		r.MixAheadMax = limit
+		now := 0.0
+		for k, dt := range dts {
+			d.advance(dt)
+			now += dt
+			if k == 300 {
+				d.underruns = 0
+			}
+			if err := r.RunFrame(float32(dt), float32(now)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return d.underruns
+	}
+	got, control := run(0), run(MixAhead)
+	t.Logf("%d spikes: %d underruns with the allowance, %d without", spikes, got, control)
+	if control < spikes/2 {
+		t.Errorf("the control ran dry only %d times for %d spikes: the test cannot see the defect", control, spikes)
+	}
+	if got*5 > control {
+		t.Errorf("%d underruns with the allowance against %d without: not enough better", got, control)
+	}
+}
+
 // Slow frames must not break the sound up: a tic longer than what the output
 // has queued is a gap the listener hears. The runner of go-wasmcontainers/
 // playground#63 ran Quake at 14 frames a second and its audio underran 204 times
