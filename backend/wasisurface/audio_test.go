@@ -22,6 +22,7 @@ type fakeOut struct {
 	cap     int
 	waiting bool
 	err     error
+	delay   time.Duration // the host call's time
 
 	writes   int
 	pcm      []float32 // everything queued (not the discarded)
@@ -31,6 +32,7 @@ type fakeOut struct {
 
 func (f *fakeOut) Write(pcm []float32) (int, int, error) {
 	f.writes++
+	time.Sleep(f.delay)
 	if f.err != nil {
 		return 0, 0, f.err
 	}
@@ -100,6 +102,25 @@ func TestQueueAudioConvertsAndWritesOnce(t *testing.T) {
 	}
 	if st := b.AudioStats(); st.Offered != 3 || st.Accepted != 3 || st.Silent {
 		t.Errorf("stats %+v", st)
+	}
+}
+
+// TakeWriteTime is the host time of the writes since the last call: the
+// diagnostic of a slow tic (stream_write), taken once.
+func TestTakeWriteTime(t *testing.T) {
+	clock := time.Unix(1000, 0)
+	out := &fakeOut{clock: &clock, last: clock, cap: 1024, delay: 20 * time.Millisecond}
+	b := newAudioBackend(out, &clock)
+	if d := b.TakeWriteTime(); d != 0 {
+		t.Errorf("%v before any write", d)
+	}
+	b.QueueAudio(make([]sound.StereoSample, 10))
+	b.QueueAudio(make([]sound.StereoSample, 10))
+	if d := b.TakeWriteTime(); d < 40*time.Millisecond {
+		t.Errorf("two writes of 20 ms took %v", d)
+	}
+	if d := b.TakeWriteTime(); d != 0 {
+		t.Errorf("%v on the second take: not reset", d)
 	}
 }
 
