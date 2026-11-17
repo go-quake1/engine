@@ -39,7 +39,8 @@ func TestWriteSlowTics(t *testing.T) {
 	gpu.gpu[2], gpu.copy[2] = 200*time.Millisecond, 50*time.Millisecond
 	p := &frameProbe{GC: []int{0, 0, 2, 0, 0}, GCPause: []time.Duration{0, 0, 3 * time.Millisecond, 0, 0},
 		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}, Steps: []int{1, 0, 3, 0, 1},
-		Yield: []time.Duration{0, 0, 15 * time.Millisecond, 0, 0}, ProbeCost: []time.Duration{0, 0, 2 * time.Millisecond, 0, 0}}
+		Yield: []time.Duration{0, 0, 15 * time.Millisecond, 0, 0}, ProbeCost: []time.Duration{0, 0, 2 * time.Millisecond, 0, 0},
+		YieldGC: []time.Duration{0, 0, 6 * time.Millisecond, 0, 0}, Goroutines: []int{3, 3, 7, 3, 3}}
 
 	var out bytes.Buffer
 	writeSlowTics(&out, samples, gpu, p)
@@ -47,7 +48,8 @@ func TestWriteSlowTics(t *testing.T) {
 	if n := strings.Count(got, "slowtic frame="); n != 1 {
 		t.Fatalf("%d slow-tic lines, want 1:\n%s", n, got)
 	}
-	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 yield=15.00 probe=2.00 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
+	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 yield=15.00 probe=2.00 yield-gc=6.00 gor=7 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
+		"yieldshare: of the 15 ms the slow tics spent in the yield, collector background mark 6 ms (40%), other goroutines 9 ms (60%)",
 		"slowtics: 1 over 100 ms, 400 ms in all; share of that time: sim 5% world 12% gpu 50% copy 12%"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -121,6 +123,45 @@ func TestFrameProbe(t *testing.T) {
 	}
 	var nilProbe *frameProbe
 	nilProbe.frame(0) // no --frames: no probe, no panic
+}
+
+// The goroutine dump prints once, each line prefixed, and names this test's own
+// goroutine.
+func TestDumpGoroutines(t *testing.T) {
+	goroutinesDumped = false
+	var out bytes.Buffer
+	dumpGoroutines(&out)
+	first := out.String()
+	if !strings.HasPrefix(first, "goroutines: goroutine profile: total ") || !strings.Contains(first, "TestDumpGoroutines") {
+		t.Errorf("the dump:\n%s", first)
+	}
+	for _, l := range strings.Split(strings.TrimRight(first, "\n"), "\n") {
+		if !strings.HasPrefix(l, "goroutines: ") {
+			t.Errorf("an unprefixed line %q", l)
+		}
+	}
+	dumpGoroutines(&out)
+	if out.String() != first {
+		t.Error("the dump printed twice")
+	}
+}
+
+// timeYield times the yield and notes what ran in it: the goroutines alive, and
+// the collector's mark time (zero here: nothing forces a cycle in a short sleep).
+func TestTimeYield(t *testing.T) {
+	p := newFrameProbe(nil, nil)
+	d := p.timeYield(func() { time.Sleep(5 * time.Millisecond) })
+	if d < 5*time.Millisecond {
+		t.Errorf("the yield took %v, want at least 5 ms", d)
+	}
+	p.frame(d)
+	if len(p.YieldGC) != 1 || p.YieldGC[0] < 0 || len(p.Goroutines) != 1 || p.Goroutines[0] < 1 {
+		t.Errorf("yield-gc %v, goroutines %v", p.YieldGC, p.Goroutines)
+	}
+	var nilProbe *frameProbe
+	if d := nilProbe.timeYield(func() {}); d < 0 {
+		t.Error("a nil probe still times the yield")
+	}
 }
 
 type fakeWriteLog struct {
