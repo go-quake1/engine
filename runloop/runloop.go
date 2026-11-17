@@ -731,7 +731,7 @@ const (
 	MixAheadMax = 0.5
 
 	mixSlowFactor = 1.5  // ahead = this times the slowest recent tic
-	mixSlowDecay  = 2.0  // seconds: the slowest tic is forgotten with this time constant
+	mixSlowDecay  = 6.0  // seconds: the slowest tic is forgotten with this time constant
 	mixSlowCap    = 0.35 // seconds: a longer tic is a stall, not a slow frame
 )
 
@@ -778,7 +778,13 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 	if want := float32(mixSlowFactor * r.mixSlow); want > ahead {
 		ahead = min(want, limit)
 	}
-	lead *= ahead / base
+	// The queue is what covers the next slow tic, so when slow tics are about it
+	// is kept at the allowance, not at the small lead of a game at full speed
+	// (measured on CI at 27 frames a second: the queue sat near 0.05 s while tics
+	// of 0.1 to 0.3 s came about once a second, and the output ran dry on each).
+	if ahead > base {
+		lead = ahead
+	}
 	for i, b := range MixTicBounds {
 		if float64(dt) > b {
 			r.MixTicsOver[i]++
