@@ -98,19 +98,20 @@ func TestRunFrame_FixedTimestepAccumulator(t *testing.T) {
 	r.SimStep = 0.05
 	h := r.Host.(*loopFakeHost)
 
-	// dt = 0.16 -> floor(0.16/0.05) = 3 fixed ticks, 0.01 remainder banked.
-	if err := r.RunFrame(0.16, 1); err != nil {
+	// dt = 0.09 -> floor(0.09/0.05) = 1 fixed tick, 0.04 remainder banked
+	// (0.16 would be 3 ticks, over the reference's two: see maxSimSubsteps).
+	if err := r.RunFrame(0.09, 1); err != nil {
 		t.Fatalf("RunFrame: %v", err)
 	}
-	if h.frames != 3 {
-		t.Fatalf("first frame ticks = %d want 3", h.frames)
+	if h.frames != 1 {
+		t.Fatalf("first frame ticks = %d want 1", h.frames)
 	}
-	// dt = 0.045 -> 0.01 banked + 0.045 = 0.055 -> 1 tick (remainder carried).
+	// dt = 0.045 -> 0.04 banked + 0.045 = 0.085 -> 1 tick (remainder carried).
 	if err := r.RunFrame(0.045, 2); err != nil {
 		t.Fatalf("RunFrame: %v", err)
 	}
-	if h.frames != 4 {
-		t.Fatalf("second frame ticks = %d want 4 (remainder carried)", h.frames)
+	if h.frames != 2 {
+		t.Fatalf("second frame ticks = %d want 2 (remainder carried)", h.frames)
 	}
 }
 
