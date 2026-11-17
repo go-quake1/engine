@@ -43,6 +43,14 @@ func (b *Backend) AudioStats() AudioStats {
 	return AudioStats{Offered: b.offered, Accepted: b.accepted, Silent: b.out == nil}
 }
 
+// TakeWriteTime returns the host time the sound writes (stream_write) took since
+// the last call, and resets it: the per-frame diagnostic of a slow tic.
+func (b *Backend) TakeWriteTime() time.Duration {
+	d := b.writeTime
+	b.writeTime = 0
+	return d
+}
+
 var (
 	_ backend.Backend     = (*Backend)(nil)
 	_ backend.QueuedAudio = (*Backend)(nil)
@@ -73,7 +81,9 @@ func (b *Backend) QueueAudio(samples []sound.StereoSample) error {
 		pcm[2*i] = float32(s.L) / 32768
 		pcm[2*i+1] = float32(s.R) / 32768
 	}
+	t0 := time.Now()
 	accepted, queued, err := b.out.Write(pcm)
+	b.writeTime += time.Since(t0)
 	if err != nil {
 		b.out.Close()
 		b.out = nil

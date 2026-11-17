@@ -416,6 +416,10 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		// Time the frame's stages (the --frames run prints them below).
 		r.Timer, _ = render.NewFrameTimer(func() float64 { return time.Since(start).Seconds() }, frames)
 	}
+	var probe *frameProbe // nil without --frames: its methods below are guarded
+	if frames > 0 {
+		probe = newFrameProbe(be)
+	}
 	last := be.Now()
 	dt := runloop.MinFrameTime
 	for n := 0; frames == 0 || n < frames; n++ {
@@ -423,6 +427,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		if err := r.RunFrame(dt, float32(now)); err != nil {
 			return err
 		}
+		probe.frame()
 		if obs.quit {
 			return nil
 		}
@@ -443,5 +448,6 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 	fmt.Fprintf(out, "%d frames in %v: %.2f ms per frame\n", frames, el.Round(time.Millisecond), el.Seconds()*1000/float64(frames))
 	writeAudioStats(out, be, el, frames, r)
 	writePhases(out, r.Timer.Samples(), gt)
+	writeSlowTics(out, r.Timer.Samples(), gt, probe)
 	return nil
 }
