@@ -6,6 +6,7 @@ package gpuworld
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,11 +18,14 @@ import (
 // of an id that is still live, as go-gfx/webgpu's batch.Context does ("batch:
 // message refused: CREATE 12"), and an id is live until it is destroyed.
 type liveSink struct {
+	mu      sync.Mutex // Destroy also comes from the runtime's cleanup goroutine
 	live    map[uint32]bool
 	refused error
 }
 
 func (s *liveSink) Create(id uint32, _ wire.Kind, _ []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if id == 0 || s.live[id] {
 		s.refused = fmt.Errorf("batch: message refused: CREATE %d", id)
 		return s.refused
@@ -29,7 +33,12 @@ func (s *liveSink) Create(id uint32, _ wire.Kind, _ []byte) error {
 	s.live[id] = true
 	return nil
 }
-func (s *liveSink) Destroy(id uint32) error                   { delete(s.live, id); return nil }
+func (s *liveSink) Destroy(id uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.live, id)
+	return nil
+}
 func (s *liveSink) Submit([]uint32, []byte) error             { return nil }
 func (s *liveSink) SubmitRead([]uint32, []byte, []byte) error { return nil }
 
