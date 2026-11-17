@@ -361,9 +361,14 @@ const DefaultSimStep float32 = 0.05
 // maxSimSubsteps caps how many fixed server ticks a single RunFrame will
 // run to catch up the accumulated wall-clock time. It bounds the per-frame
 // work after a stall so the loop can't spiral (render slower -> more catch-up
-// ticks -> render slower). At the default 0.05s SimStep this is a 0.4s
-// backlog ceiling; time beyond it is dropped (brief slow-motion, never a hang).
-const maxSimSubsteps = 8
+// ticks -> render slower). It is the reference's bound: id's Host_FilterTime
+// (WinQuake/host.c) clamps a frame to 0.1 s ("don't allow really long or short
+// frames") and its FPS_20 Host_ServerFrame runs that in steps of at most 0.05 s,
+// so a frame runs at most two server ticks. Time beyond it is dropped (slow
+// motion, never a hang). The ceiling was 8 ticks (0.4 s): measured on CI at 15 to
+// 20 frames a second, a slow frame was followed by one running 2 to 7 ticks, whose
+// sim stage (up to 214 ms) was the largest share of the tics over 0.1 s.
+const maxSimSubsteps = 2
 
 func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	if r.Host == nil {

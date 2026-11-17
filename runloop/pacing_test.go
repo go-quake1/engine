@@ -235,6 +235,36 @@ func TestMixerPacing_SpikesDoNotUnderrun(t *testing.T) {
 	}
 }
 
+// The reference runs at most two server ticks of 0.05 s in a frame (id's
+// Host_FilterTime clamps the frame to 0.1 s: WinQuake/host.c): a 0.4 s frame, or
+// an 8 s stall, runs two and drops the rest, never the eight it used to.
+func TestSimCatchUpIsTheReferences(t *testing.T) {
+	if maxSimSubsteps != 2 {
+		t.Fatalf("maxSimSubsteps = %d, want 2 (0.1 s of 0.05 s ticks)", maxSimSubsteps)
+	}
+	d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+	r, _ := newRunner(t, d)
+	for _, dt := range []float32{0.12, 0.4, 8} {
+		r.simAccumulator = 0
+		if err := r.RunFrame(dt, 1); err != nil {
+			t.Fatal(err)
+		}
+		if r.LastSimSteps != 2 {
+			t.Errorf("a %v s frame ran %d server ticks, want 2", dt, r.LastSimSteps)
+		}
+		if r.simAccumulator != 0 {
+			t.Errorf("a %v s frame kept %v s of backlog: the excess is dropped", dt, r.simAccumulator)
+		}
+	}
+	// The frame after a slow one is not a catch-up of it.
+	if err := r.RunFrame(0.05, 2); err != nil {
+		t.Fatal(err)
+	}
+	if r.LastSimSteps != 1 {
+		t.Errorf("the next 0.05 s frame ran %d ticks, want 1", r.LastSimSteps)
+	}
+}
+
 // LastSimSteps is how many server ticks the last frame ran: a slow frame's
 // catch-up shows as several, and the cap bounds it.
 func TestLastSimSteps(t *testing.T) {
@@ -243,7 +273,7 @@ func TestLastSimSteps(t *testing.T) {
 	for _, c := range []struct {
 		dt   float32
 		want int
-	}{{0.01, 0}, {0.045, 0}, {0.055, 1}, {0.16, 3}, {10, maxSimSubsteps}} {
+	}{{0.01, 0}, {0.045, 0}, {0.055, 1}, {0.09, 1}, {0.11, 2}, {10, maxSimSubsteps}} {
 		r.simAccumulator = 0
 		if err := r.RunFrame(c.dt, 1); err != nil {
 			t.Fatal(err)
