@@ -170,6 +170,7 @@ func RootCmd() *cobra.Command {
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
 	fl.BoolVar(&fixedMixer, "fixed-mixer", false, "paint a fixed 512 mix frames every tic instead of pacing the mixer to the sound output's queue (what the game did before the pacing; for measuring the real-time ratio)")
 	_ = fl.MarkHidden("fixed-mixer")
+	fl.IntVar(&slowWindow, "slowtics", 0, "in a game without --frames, print where the time of every tic over 0.1 s went (stages, GPU, server ticks, collector, sound write) every N frames, to find what stalls a long session")
 	fl.BoolVar(&memStats, "memstats", false, "print the Go heap (live, in use, system, GC count) every 60 frames, to find a leak")
 	_ = fl.MarkHidden("memstats")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
@@ -388,6 +389,10 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 // memStats is --memstats.
 var memStats bool
 
+// slowWindow is --slowtics: a game with no --frames reports its tics over 0.1 s
+// every slowWindow frames (0: never).
+var slowWindow int
+
 // yield is what the frame loop calls once per frame (runtime.Gosched; a test
 // replaces it to count the calls).
 var yield = runtime.Gosched
@@ -412,12 +417,17 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 	obs := &quitObserver{Backend: be}
 	r.Backend = backend.ForwardQueue(obs, be)
 	start := time.Now()
-	if frames > 0 {
-		// Time the frame's stages (the --frames run prints them below).
-		r.Timer, _ = render.NewFrameTimer(func() float64 { return time.Since(start).Seconds() }, frames)
+	// Time the frame's stages: the --frames run prints them at its end, and a
+	// game without --frames reports every --slowtics frames.
+	window := frames
+	if frames == 0 {
+		window = slowWindow
 	}
-	var probe *frameProbe // nil without --frames: its methods below are guarded
-	if frames > 0 {
+	if window > 0 {
+		r.Timer, _ = render.NewFrameTimer(func() float64 { return time.Since(start).Seconds() }, window)
+	}
+	var probe *frameProbe // nil without either: its methods below are guarded
+	if window > 0 {
 		probe = newFrameProbe(be, func() int { return r.LastSimSteps })
 	}
 	last := be.Now()
@@ -436,6 +446,9 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		// until -m is hit, and the container dies "out of memory" (playground#56).
 		yield()
 		probe.frame() // after the yield: the collector's work there belongs to this tic's gap
+		if frames == 0 && slowWindow > 0 && (n+1)%slowWindow == 0 {
+			reportWindow(out, r, gt, probe)
+		}
 		if memStats && n%60 == 0 {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)

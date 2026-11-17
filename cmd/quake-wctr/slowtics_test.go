@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-quake1/engine/render"
+	"github.com/go-quake1/engine/runloop"
 )
 
 type fakeWriteTimer struct{ d time.Duration }
@@ -56,6 +57,36 @@ func TestWriteSlowTics(t *testing.T) {
 	if !strings.Contains(out.String(), "slowtics: none over 100 ms in 2 frames") {
 		t.Errorf("no slow tic: %q", out.String())
 	}
+}
+
+// A game with no --frames reports a window of frames and starts the next one
+// empty: the report names the slow tic, and the timer, the probe and the GPU
+// times are cleared so the next window's indexes line up again.
+func TestReportWindow(t *testing.T) {
+	now := 0.0
+	r := &runloop.Runner{}
+	r.Timer, _ = render.NewFrameTimer(func() float64 { return now }, 4)
+	gpu := &gpuTimes{}
+	p := newFrameProbe(nil, func() int { return 2 })
+	for _, gap := range []float64{0.03, 0.03, 0.25, 0.03} { // frame 2 lasts 0.25 s
+		r.Timer.Begin()
+		now += gap
+		r.Timer.Mark(render.StageSim)
+		r.Timer.End()
+		gpu.add(time.Millisecond, 0)
+		p.frame()
+	}
+	var out bytes.Buffer
+	reportWindow(&out, r, gpu, p)
+	if !strings.Contains(out.String(), "slowtic frame=2 steps=2 interval-ms=250.0") || !strings.Contains(out.String(), "slowtics: 1 over 100 ms") {
+		t.Errorf("the window's report:\n%s", out.String())
+	}
+	if r.Timer.Len() != 0 || len(p.GC) != 0 || len(p.Steps) != 0 || len(gpu.gpu) != 0 || len(gpu.copy) != 0 {
+		t.Errorf("the next window is not empty: timer %d, probe %d, gpu %d", r.Timer.Len(), len(p.GC), len(gpu.gpu))
+	}
+	var nilProbe *frameProbe
+	nilProbe.reset() // no probe, no panic
+	reportWindow(&out, r, nil, p)
 }
 
 // The probe sees the collector and the sound write: a forced collection shows
