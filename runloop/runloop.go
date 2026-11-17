@@ -162,9 +162,14 @@ type Runner struct {
 	// counts the tics longer than 0.1, 0.2, 0.35 and 0.5 s (MixTicBounds), and
 	// MixLongest is the longest tic: the distribution a ratio and an underrun
 	// count are read against.
-	MixPrepaid  int
-	MixTicsOver [len(MixTicBounds)]int
-	MixLongest  float64
+	MixPrepaid int
+	// LastSimSteps is how many fixed server ticks the last frame ran (0 in a
+	// frame the menu paused or a demo drove): a frame that ran several is the
+	// catch-up of a slow one before it, and its sim stage is that many times a
+	// tick's cost.
+	LastSimSteps int
+	MixTicsOver  [len(MixTicBounds)]int
+	MixLongest   float64
 
 	// Compose configuration.
 	BackgroundIdx  byte    // palette fill for Compose2D
@@ -495,6 +500,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		// The demo drives its own recorded tic cadence; don't carry a
 		// live-sim backlog across a demo interlude.
 		r.simAccumulator = 0
+		r.LastSimSteps = 0
 		if err := r.playDemoTick(); err != nil {
 			return err
 		}
@@ -505,6 +511,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		// the frame rendered. The backlog is capped at maxSimSubsteps*SimStep
 		// before stepping so a long stall (or the very first frame after a
 		// load) can't trigger a spiral-of-death of ever-growing catch-up work
+		// (LastSimSteps records how many ticks this frame ran)
 		// -- excess time is dropped (the game runs slightly slow-motion under
 		// sustained overload rather than locking up).
 		ft := r.SimStep
@@ -520,6 +527,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 			r.simAccumulator -= ft
 			steps++
 		}
+		r.LastSimSteps = steps
 		if steps == maxSimSubsteps {
 			// Hit the catch-up ceiling: drop the remaining backlog so a
 			// sustained overload can't spiral (brief slow-motion instead).
@@ -529,6 +537,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		// Menu up (sim paused): don't bank paused wall-clock, so dismissing
 		// the menu doesn't dump a burst of catch-up ticks.
 		r.simAccumulator = 0
+		r.LastSimSteps = 0
 	}
 
 	// 4) Client tick: drain inbound, send clc_move (post-signon only).

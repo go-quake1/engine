@@ -37,7 +37,7 @@ func TestWriteSlowTics(t *testing.T) {
 	}
 	gpu.gpu[2], gpu.copy[2] = 200*time.Millisecond, 50*time.Millisecond
 	p := &frameProbe{GC: []int{0, 0, 2, 0, 0}, GCPause: []time.Duration{0, 0, 3 * time.Millisecond, 0, 0},
-		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}}
+		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}, Steps: []int{1, 0, 3, 0, 1}}
 
 	var out bytes.Buffer
 	writeSlowTics(&out, samples, gpu, p)
@@ -45,7 +45,7 @@ func TestWriteSlowTics(t *testing.T) {
 	if n := strings.Count(got, "slowtic frame="); n != 1 {
 		t.Fatalf("%d slow-tic lines, want 1:\n%s", n, got)
 	}
-	for _, want := range []string{"slowtic frame=2 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
+	for _, want := range []string{"slowtic frame=2 steps=3 interval-ms=400.0 sim=20.0 world=50.0 gpu=200.0 copy=50.0", "composite=10.0 present=20.0 unstaged=30.0 outside=20.0 audio-write=4.00 gc-cycles=2 gc-pause-ms=3.00",
 		"slowtics: 1 over 100 ms, 400 ms in all; share of that time: sim 5% world 12% gpu 50% copy 12%"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -62,8 +62,10 @@ func TestWriteSlowTics(t *testing.T) {
 // as a cycle in its frame, the write time is taken once.
 func TestFrameProbe(t *testing.T) {
 	w := &fakeWriteTimer{}
-	p := newFrameProbe(w)
+	steps := 0
+	p := newFrameProbe(w, func() int { return steps })
 	p.frame()
+	steps = 3
 	w.d = 7 * time.Millisecond
 	runtime.GC()
 	p.frame()
@@ -73,6 +75,14 @@ func TestFrameProbe(t *testing.T) {
 	}
 	if p.AudioWrite[1] != 7*time.Millisecond || p.AudioWrite[2] != 0 {
 		t.Errorf("sound write time per frame %v", p.AudioWrite)
+	}
+	if len(p.Steps) != 3 || p.Steps[0] != 0 || p.Steps[1] != 3 {
+		t.Errorf("server ticks per frame %v, want 0, 3, 3", p.Steps)
+	}
+	if q := newFrameProbe(nil, nil); q.steps != nil {
+		t.Error("no step source must stay nil")
+	} else if q.frame(); q.Steps[0] != 0 {
+		t.Errorf("no step source: %v", q.Steps)
 	}
 	var nilProbe *frameProbe
 	nilProbe.frame() // no --frames: no probe, no panic

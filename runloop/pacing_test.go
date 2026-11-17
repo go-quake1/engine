@@ -235,6 +235,25 @@ func TestMixerPacing_SpikesDoNotUnderrun(t *testing.T) {
 	}
 }
 
+// LastSimSteps is how many server ticks the last frame ran: a slow frame's
+// catch-up shows as several, and the cap bounds it.
+func TestLastSimSteps(t *testing.T) {
+	d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+	r, _ := newRunner(t, d)
+	for _, c := range []struct {
+		dt   float32
+		want int
+	}{{0.01, 0}, {0.045, 0}, {0.055, 1}, {0.16, 3}, {10, maxSimSubsteps}} {
+		r.simAccumulator = 0
+		if err := r.RunFrame(c.dt, 1); err != nil {
+			t.Fatal(err)
+		}
+		if r.LastSimSteps != c.want {
+			t.Errorf("dt %v: %d server ticks, want %d", c.dt, r.LastSimSteps, c.want)
+		}
+	}
+}
+
 // Slow frames must not break the sound up: a tic longer than what the output
 // has queued is a gap the listener hears. The runner of go-wasmcontainers/
 // playground#63 ran Quake at 14 frames a second and its audio underran 204 times
