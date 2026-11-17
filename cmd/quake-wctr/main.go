@@ -427,7 +427,6 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		if err := r.RunFrame(dt, float32(now)); err != nil {
 			return err
 		}
-		probe.frame()
 		if obs.quit {
 			return nil
 		}
@@ -436,6 +435,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		// background workers never run, the heap grows by the frame's garbage
 		// until -m is hit, and the container dies "out of memory" (playground#56).
 		yield()
+		probe.frame() // after the yield: the collector's work there belongs to this tic's gap
 		if memStats && n%60 == 0 {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
