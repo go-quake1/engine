@@ -113,10 +113,18 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 	}
 	var n int
 	var tot struct{ iv, sim, world, gpu, copy, models, comp, present, unstaged, outside, write, gc float64 }
-	for i, s := range samples {
-		if i == 0 || i >= len(p.GC) || s.Interval <= slowTicBound {
+	// A sample's Interval is the wall time from the previous frame's start to its
+	// own: the previous frame's work and the gap after it (the yield, the host's
+	// wait). The tic that lasted that long is therefore the PREVIOUS frame, and
+	// it is its stages, its GPU times, its collector and write readings that are
+	// reported with it.
+	for k, next := range samples {
+		i := k - 1
+		if i < 0 || i >= len(p.GC) || next.Interval <= slowTicBound {
 			continue
 		}
+		s := samples[i]
+		s.Interval = next.Interval
 		g, c := gpuAt(i)
 		var staged float64
 		for _, v := range s.Stages {

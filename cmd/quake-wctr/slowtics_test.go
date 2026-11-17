@@ -23,18 +23,21 @@ func (f *fakeWriteTimer) TakeWriteTime() time.Duration { d := f.d; f.d = 0; retu
 // present 20, 30 ms unstaged (the audio mix), 20 outside the frame.
 func TestWriteSlowTics(t *testing.T) {
 	var st [render.NumStages]float64
+	// A sample's Interval is the wall time to the NEXT frame's start, as the next
+	// sample records it: frame 2 does the work, frame 3's Interval is its 0.4 s.
 	fast := render.FrameSample{Interval: 0.03, Work: 0.03}
-	slow := render.FrameSample{Interval: 0.4, Work: 0.38}
+	slow := render.FrameSample{Interval: 0.03, Work: 0.38}
 	st[render.StageSim], st[render.StageWorld], st[render.Stage2D], st[render.StagePresent] = 0.02, 0.30, 0.01, 0.02
 	slow.Stages = st
-	samples := []render.FrameSample{fast, fast, slow, fast}
+	after := render.FrameSample{Interval: 0.4, Work: 0.03}
+	samples := []render.FrameSample{fast, fast, slow, after, fast}
 	gpu := &gpuTimes{}
 	for range samples {
 		gpu.add(time.Millisecond, time.Millisecond)
 	}
 	gpu.gpu[2], gpu.copy[2] = 200*time.Millisecond, 50*time.Millisecond
-	p := &frameProbe{GC: []int{0, 0, 2, 0}, GCPause: []time.Duration{0, 0, 3 * time.Millisecond, 0},
-		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0}}
+	p := &frameProbe{GC: []int{0, 0, 2, 0, 0}, GCPause: []time.Duration{0, 0, 3 * time.Millisecond, 0, 0},
+		AudioWrite: []time.Duration{0, 0, 4 * time.Millisecond, 0, 0}}
 
 	var out bytes.Buffer
 	writeSlowTics(&out, samples, gpu, p)
