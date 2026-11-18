@@ -147,6 +147,12 @@ type Runner struct {
 	MixAhead  float32
 	mixAfter  float64
 	mixPrimed bool
+	// NoExtraUpdate is the snd_noextraupdate cvar (snd_dma.c lines 80, 851): set,
+	// ExtraUpdate does nothing ("don't pollute timings").
+	NoExtraUpdate bool
+	// frameNow is the current tic's time (the nowSec of RunFrame) and mixAt the
+	// tic time of the last refill.
+	frameNow, mixAt float64
 
 	// MixDropped is the mix frames of the time a tic outlasted the queue the
 	// update before it had left (the output ran dry for that long), MixStalls the
@@ -365,6 +371,7 @@ const DefaultSimStep float32 = 0.05
 const maxSimSubsteps = 2
 
 func (r *Runner) RunFrame(dt float32, nowSec float32) error {
+	r.frameNow = float64(nowSec)
 	if r.Host == nil {
 		return ErrRunnerNilHost
 	}
@@ -620,6 +627,12 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	// Whatever part of the scene the renderer did not attribute itself
 	// (world / models / 2D) is counted as world.
 	r.Timer.Mark(render.StageWorld)
+	// S_ExtraUpdate where R_RenderView has drawn the world, the entities and the
+	// view model (r_main.c lines 937, 982, 991: "don't let sound get messed up if
+	// going slow").
+	if err := r.ExtraUpdate(); err != nil {
+		return err
+	}
 
 	// 5b) Menu overlay. When the menu is up, Menu.Draw paints the
 	//     full-screen overlay into r.FrameBuffer; Compose2D's
@@ -627,6 +640,11 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	//     survive into the present.
 	if menuActive {
 		if err := r.Menu.Draw(r.FrameBuffer, r.Chars, r.MenuAssets, nowSec); err != nil {
+			return err
+		}
+		// M_Draw ends with S_ExtraUpdate (menu.c line 3132; line 3034 after the
+		// console background).
+		if err := r.ExtraUpdate(); err != nil {
 			return err
 		}
 	}
@@ -675,6 +693,11 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		return err
 	}
 	r.Timer.Mark(render.Stage2D)
+	// The 2D screens end with S_ExtraUpdate too (draw.c lines 850, 868, the screen
+	// fades).
+	if err := r.ExtraUpdate(); err != nil {
+		return err
+	}
 	if err := rend.Resolve(r.FrameBuffer, r.RGBA, ctx.Palette); err != nil {
 		return err
 	}
@@ -757,19 +780,64 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 		}
 	}
 	r.MixLongest = math.Max(r.MixLongest, float64(dt))
-	queued := qa.QueuedFrames() // soundtime: what the output has not played yet
+	return r.refill(qa, ahead)
+}
+
+// ExtraUpdate is WinQuake's S_ExtraUpdate (snd_dma.c lines 844-854):
+//
+//	if (snd_noextraupdate.value) return;   // don't pollute timings
+//	S_Update_();
+//
+// the same refill as the end-of-tic update, to the playback position plus
+// _snd_mixahead, called where the reference calls it, in the middle of a tic
+// that is going slow: R_RenderView after the edge drawing, the view model and
+// the particles (r_main.c lines 937, 982, 991), the edge scan (r_edge.c line
+// 728), the screen fades (draw.c lines 850, 868), the menu (menu.c lines 3034,
+// 3132), and, in this port, wherever a frame waits for the page (the presenter's
+// slices, wasipresent.Presenter.Idle). The first update of a run is the tic's
+// (S_Update_ does nothing before the sound is started).
+func (r *Runner) ExtraUpdate() error {
+	if r.NoExtraUpdate || !r.mixPrimed || r.SoundPool == nil || len(r.MixBuffer) == 0 {
+		return nil
+	}
+	qa, ok := r.Backend.(backend.QueuedAudio)
+	if !ok {
+		return nil
+	}
+	ahead := r.MixAhead
+	if ahead <= 0 {
+		ahead = MixAhead
+	}
+	return r.refill(qa, ahead)
+}
+
+// refill is S_Update_ (snd_dma.c lines 856-): read the playback position
+// (soundtime: the queue is what the output has not played), mix to
+// endtime = soundtime + _snd_mixahead * speed, and remember what is queued.
+//
+// The time since the last refill that outlasted the queue it left is time the
+// output had nothing to play: it is not owed, and it is counted (MixDropped,
+// MixStalls). The time is the game's (frameNow, the tic's), so a refill in the
+// middle of a tic measures from the tic's start.
+func (r *Runner) refill(qa backend.QueuedAudio, ahead float32) error {
+	const rate = sound.DefaultSampleRate
+	queued := qa.QueuedFrames()
 	if queued < 0 {
 		queued = 0
 	}
-	// The time this tic outlasted the queue the update before it left is time the
-	// output had nothing to play: it is not owed, and it is counted.
-	if dry := float64(dt)*rate - r.mixAfter; r.mixPrimed && dry >= 1 {
+	if dry := (r.frameNow-r.mixAt)*rate - r.mixAfter; r.mixPrimed && dry >= 1 {
 		r.MixDropped += int(dry)
 		r.MixStalls++
 	}
-	// S_Update_: endtime = soundtime + _snd_mixahead * speed; paint from
-	// paintedtime to endtime. paintedtime - soundtime is the queue, so every
-	// update refills it to the mix-ahead, whatever the length of the tic.
+	painted, err := r.paint(ahead, queued)
+	r.mixAfter, r.mixAt, r.mixPrimed = float64(queued+painted), r.frameNow, true
+	return err
+}
+
+// paint mixes want = _snd_mixahead*speed - (paintedtime - soundtime) frames, in
+// batches of at most len(MixBuffer); it returns the mix frames painted.
+func (r *Runner) paint(ahead float32, queued int) (int, error) {
+	const rate = sound.DefaultSampleRate
 	want := int(float64(ahead)*rate) - queued
 	painted := 0
 	for want > 0 {
@@ -784,19 +852,18 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 			r.MixBuffer[i] = sound.StereoSample{}
 		}
 		if err := sound.Paint(r.SoundPool, r.MixBuffer, n); err != nil {
-			return err
+			return painted, err
 		}
 		r.tickMusic(r.MixBuffer[:n])
 		if err := r.Backend.QueueAudio(r.MixBuffer[:n]); err != nil {
 			if !errors.Is(err, backend.ErrUnsupported) {
-				return err
+				return painted, err
 			}
 		}
 		painted += n
 		want -= n
 	}
-	r.mixAfter, r.mixPrimed = float64(queued+painted), true
-	return nil
+	return painted, nil
 }
 
 // tickMusic is the per-frame music driver. (Re-)opens the

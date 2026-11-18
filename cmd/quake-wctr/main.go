@@ -374,6 +374,11 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		return err
 	}
 	r.Renderer = rend
+	// While a frame waits for the page's acknowledgement the presenter runs
+	// S_ExtraUpdate (the sound mix refill), in slices, instead of blocking.
+	if idler, ok := gs.Presenter.(interface{ SetIdle(func() error) }); ok {
+		idler.SetIdle(r.ExtraUpdate)
+	}
 	var gt *gpuTimes
 	if gw, ok := so.WorldDraw.(*gameWorld); ok {
 		gt = &gw.times
