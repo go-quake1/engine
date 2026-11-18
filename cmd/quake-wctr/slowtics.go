@@ -267,7 +267,9 @@ func writeAudioGaps(out io.Writer, p *frameProbe) {
 				total += short
 				worst = max(worst, short)
 				queues = append(queues, held)
-				fmt.Fprintf(out, "audiogap frame=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f\n", j, gap*1e3, held*1e3, short*1e3)
+				if !slowBrief {
+					fmt.Fprintf(out, "audiogap frame=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f\n", j, gap*1e3, held*1e3, short*1e3)
+				}
 			}
 		}
 		prevAt, prevQ = now, p.Queued[j]
@@ -285,7 +287,7 @@ func writeAudioGaps(out io.Writer, p *frameProbe) {
 // is (runtime/pprof, grouped by stack): the candidates for what runs while the
 // loop yields. Each line is prefixed "goroutines:" so a log reader can keep it.
 func dumpGoroutines(out io.Writer) {
-	if goroutinesDumped {
+	if goroutinesDumped || slowBrief {
 		return
 	}
 	goroutinesDumped = true
@@ -302,6 +304,13 @@ func dumpGoroutines(out io.Writer) {
 }
 
 var goroutinesDumped bool
+
+// slowBrief is --slowtics-brief: the reports keep their summary lines (the slow
+// tics' count and shares, the dry writes' count and the writes over 50, 100 and
+// 200 ms) and leave out the line of every tic and of every dry write, the yield
+// split and the goroutine dump: a window is then a few hundred bytes, which a
+// terminal pane can show.
+var slowBrief bool
 
 // reportWindow prints the slow tics of the frames since the last report and
 // starts a new window: the timer, the probe and the GPU times are emptied.
@@ -365,9 +374,11 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 		if i < len(p.Steps) {
 			steps = p.Steps[i]
 		}
-		fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f yield=%.2f probe=%.2f yield-gc=%.2f gor=%d scav=%.2f cleanups=%d finalizers=%d frame-cleanups=%d audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
-			i, steps, s.Interval*1e3, s.Stages[render.StageSim]*1e3, world*1e3, ms(g), ms(c), s.Stages[render.StageModels]*1e3, s.Stages[render.Stage2D]*1e3,
-			s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, ms(at(p.Yield, i)), ms(at(p.ProbeCost, i)), ms(at(p.YieldGC, i)), at(p.Goroutines, i), ms(at(p.YieldScav, i)), at(p.YieldCleanups, i), at(p.YieldFinalizers, i), at(p.Cleanups, i), w*1e3, p.GC[i], gp*1e3)
+		if !slowBrief {
+			fmt.Fprintf(out, "slowtic frame=%d steps=%d interval-ms=%.1f sim=%.1f world=%.1f gpu=%.1f copy=%.1f models=%.1f composite=%.1f present=%.1f unstaged=%.1f outside=%.1f yield=%.2f probe=%.2f yield-gc=%.2f gor=%d scav=%.2f cleanups=%d finalizers=%d frame-cleanups=%d audio-write=%.2f gc-cycles=%d gc-pause-ms=%.2f\n",
+				i, steps, s.Interval*1e3, s.Stages[render.StageSim]*1e3, world*1e3, ms(g), ms(c), s.Stages[render.StageModels]*1e3, s.Stages[render.Stage2D]*1e3,
+				s.Stages[render.StagePresent]*1e3, unstaged*1e3, outside*1e3, ms(at(p.Yield, i)), ms(at(p.ProbeCost, i)), ms(at(p.YieldGC, i)), at(p.Goroutines, i), ms(at(p.YieldScav, i)), at(p.YieldCleanups, i), at(p.YieldFinalizers, i), at(p.Cleanups, i), w*1e3, p.GC[i], gp*1e3)
+		}
 		n++
 		tot.iv += s.Interval
 		tot.sim += s.Stages[render.StageSim]
@@ -395,7 +406,7 @@ func writeSlowTics(out io.Writer, samples []render.FrameSample, gpu *gpuTimes, p
 	pc := func(v float64) float64 { return 100 * v / tot.iv }
 	fmt.Fprintf(out, "slowtics: %d over %.0f ms, %.0f ms in all; share of that time: sim %.0f%% world %.0f%% gpu %.0f%% copy %.0f%% models %.0f%% composite %.0f%% present %.0f%% unstaged(audio mix, other) %.0f%% outside(yield, host wait) %.0f%%; of it audio-write %.1f%% gc-pause %.1f%%\n",
 		n, slowTicBound*1e3, tot.iv*1e3, pc(tot.sim), pc(tot.world), pc(tot.gpu), pc(tot.copy), pc(tot.models), pc(tot.comp), pc(tot.present), pc(tot.unstaged), pc(tot.outside), pc(tot.write), pc(tot.gc))
-	if tot.yield > 0 {
+	if tot.yield > 0 && !slowBrief {
 		fmt.Fprintf(out, "yieldshare: of the %.0f ms the slow tics spent in the yield, collector background mark %.0f ms (%.0f%%), other goroutines %.0f ms (%.0f%%)\n",
 			tot.yield*1e3, tot.yieldGC*1e3, 100*tot.yieldGC/tot.yield, (tot.yield-tot.yieldGC)*1e3, 100*(tot.yield-tot.yieldGC)/tot.yield)
 		// What the other goroutines were: the scavenger's own time is measured; the

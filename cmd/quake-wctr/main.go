@@ -171,6 +171,7 @@ func RootCmd() *cobra.Command {
 	fl.BoolVar(&fixedMixer, "fixed-mixer", false, "paint a fixed 512 mix frames every tic instead of pacing the mixer to the sound output's queue (what the game did before the pacing; for measuring the real-time ratio)")
 	_ = fl.MarkHidden("fixed-mixer")
 	fl.IntVar(&slowWindow, "slowtics", 0, "in a game without --frames, print where the time of every tic over 0.1 s went (stages, GPU, server ticks, collector, sound write) every N frames, to find what stalls a long session")
+	fl.BoolVar(&slowBrief, "slowtics-brief", false, "with --slowtics, print only the summary lines of each window (the slow tics' count and shares, the dry sound writes' count), not a line per tic: short enough for a terminal pane")
 	fl.BoolVar(&memStats, "memstats", false, "print the Go heap (live, in use, system, GC count) every 60 frames, to find a leak")
 	_ = fl.MarkHidden("memstats")
 	fl.IntVar(&frames, "frames", 0, "play this many frames, then print the mean frame time (0: until the surface is dropped); with --worldref, redraw the view this many times after a first frame and print the warm-up apart, then the mean, median, min and max per frame (software, or with --gpuworld the GPU frame), present excluded")
