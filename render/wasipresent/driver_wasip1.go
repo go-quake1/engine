@@ -18,7 +18,7 @@ type WasiDriver struct {
 	idx, pal *wasigpu.Buffer
 }
 
-var _ Driver = (*WasiDriver)(nil)
+var _ ReadyDriver = (*WasiDriver)(nil)
 
 // NewDriver returns the driver drawing on s with d.
 func NewDriver(d *wasigpu.Device, s *wasigpu.Surface) *WasiDriver {
@@ -72,6 +72,9 @@ func (w *WasiDriver) WritePalette(data []byte) error { return w.d.Write(w.pal, 0
 func (w *WasiDriver) Draw() error {
 	return w.s.Frame(w.pipe, []*wasigpu.Buffer{w.idx, w.pal}, [4]float64{0, 0, 0, 1}, 3)
 }
+
+// ReadyToPresent implements [ReadyDriver].
+func (w *WasiDriver) ReadyToPresent() (bool, error) { return w.s.ReadyToPresent() }
 
 // Close implements [Driver].
 func (w *WasiDriver) Close() {

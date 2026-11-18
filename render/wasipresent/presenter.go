@@ -6,6 +6,7 @@ package wasipresent
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/go-quake1/engine/render"
 )
@@ -33,6 +34,22 @@ type Driver interface {
 	Close()
 }
 
+// ReadyDriver is a Driver that can say whether Draw would hand its frame over
+// without waiting for the page's acknowledgement of an earlier one
+// (go-wasmcontainers/gpu's context.ready-to-present).
+type ReadyDriver interface {
+	Driver
+	ReadyToPresent() (bool, error)
+}
+
+// Slice is how long a presenter sleeps between two polls of ReadyToPresent, and
+// MaxWait how long it waits in all before drawing anyway (the host gives up on
+// the page's acknowledgement after a second itself, webgpu.AckWait).
+const (
+	Slice   = 2 * time.Millisecond
+	MaxWait = time.Second
+)
+
 // Presenter is a [render.Presenter] over a [Driver]. It rebuilds the
 // pipeline and the buffers when the frame geometry changes, writes the
 // palette only when it changed, and otherwise costs one buffer write and
@@ -47,6 +64,41 @@ type Presenter struct {
 	packed []byte
 	pal    [256]uint32
 	palSet bool
+
+	// idle is what the game does while the page has not acknowledged a frame:
+	// WinQuake's S_ExtraUpdate (SetIdle). sleep is time.Sleep, replaced by a test.
+	idle  func() error
+	sleep func(time.Duration)
+}
+
+// SetIdle sets the work done while a frame waits for the page: Present polls
+// the driver's ReadyToPresent in slices and calls f between them, so a long
+// wait for the page's acknowledgement never leaves the sound mix unfilled
+// (S_ExtraUpdate, snd_dma.c lines 844-854). A driver that cannot say whether it
+// would wait (not a ReadyDriver) never calls f.
+func (p *Presenter) SetIdle(f func() error) { p.idle = f }
+
+// waitReady is the wait of Present for the page, in slices.
+func (p *Presenter) waitReady() error {
+	rd, ok := p.drv.(ReadyDriver)
+	if !ok || p.idle == nil {
+		return nil
+	}
+	sleep := p.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	for waited := time.Duration(0); waited < MaxWait; waited += Slice {
+		ready, err := rd.ReadyToPresent()
+		if err != nil || ready {
+			return err
+		}
+		if err := p.idle(); err != nil {
+			return err
+		}
+		sleep(Slice)
+	}
+	return nil
 }
 
 var _ render.Presenter = (*Presenter)(nil)
@@ -83,6 +135,9 @@ func (p *Presenter) Present(pixels []byte, width, height, pitch int, pal *render
 	}
 	p.packed = PackIndices(p.packed, pixels, pitch, height)
 	if err := p.drv.WriteIndices(p.packed); err != nil {
+		return err
+	}
+	if err := p.waitReady(); err != nil {
 		return err
 	}
 	return p.drv.Draw()
