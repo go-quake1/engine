@@ -69,7 +69,23 @@ type Presenter struct {
 	// WinQuake's S_ExtraUpdate (SetIdle). sleep is time.Sleep, replaced by a test.
 	idle  func() error
 	sleep func(time.Duration)
+	now   func() time.Time // time.Now, replaced by a test
+
+	last PresentStats
 }
+
+// PresentStats is where the time of the last Present went: Wait in the slices
+// that wait for the page (polls, idle work and sleeps), Draw in the driver's
+// Draw (the host's pacing, the GPU commands, the hand-over to the page), and
+// SleepOver the most any one sleep of the wait overshot its slice (a timer that
+// the worker's event loop served late).
+type PresentStats struct {
+	Wait, Draw, SleepOver time.Duration
+	Slices                int
+}
+
+// LastPresent returns the stats of the last Present.
+func (p *Presenter) LastPresent() PresentStats { return p.last }
 
 // SetIdle sets the work done while a frame waits for the page: Present polls
 // the driver's ReadyToPresent in slices and calls f between them, so a long
@@ -84,10 +100,15 @@ func (p *Presenter) waitReady() error {
 	if !ok || p.idle == nil {
 		return nil
 	}
-	sleep := p.sleep
+	sleep, now := p.sleep, p.now
 	if sleep == nil {
 		sleep = time.Sleep
 	}
+	if now == nil {
+		now = time.Now
+	}
+	t0 := now()
+	defer func() { p.last.Wait = now().Sub(t0) }()
 	for waited := time.Duration(0); waited < MaxWait; waited += Slice {
 		ready, err := rd.ReadyToPresent()
 		if err != nil || ready {
@@ -96,7 +117,12 @@ func (p *Presenter) waitReady() error {
 		if err := p.idle(); err != nil {
 			return err
 		}
+		s0 := now()
 		sleep(Slice)
+		p.last.Slices++
+		if over := now().Sub(s0) - Slice; over > p.last.SleepOver {
+			p.last.SleepOver = over
+		}
 	}
 	return nil
 }
@@ -137,10 +163,18 @@ func (p *Presenter) Present(pixels []byte, width, height, pitch int, pal *render
 	if err := p.drv.WriteIndices(p.packed); err != nil {
 		return err
 	}
+	p.last = PresentStats{}
 	if err := p.waitReady(); err != nil {
 		return err
 	}
-	return p.drv.Draw()
+	now := p.now
+	if now == nil {
+		now = time.Now
+	}
+	t0 := now()
+	err := p.drv.Draw()
+	p.last.Draw = now().Sub(t0)
+	return err
 }
 
 // Close drops the driver's GPU objects.
