@@ -43,12 +43,20 @@ type frameProbe struct {
 
 	gcCycles   uint64
 	gcPause    float64
-	GC         []int                     // collector cycles that finished during the frame
-	GCPause    []time.Duration           // pause time added during the frame
-	AudioWrite []time.Duration           // stream_write time during the frame
-	Steps      []int                     // fixed server ticks the frame ran (the runner's LastSimSteps)
-	Yield      []time.Duration           // the loop's yield (runtime.Gosched) after the frame
-	ProbeCost  []time.Duration           // what this probe's own reading cost
+	GC         []int           // collector cycles that finished during the frame
+	GCPause    []time.Duration // pause time added during the frame
+	AudioWrite []time.Duration // stream_write time during the frame
+	Steps      []int           // fixed server ticks the frame ran (the runner's LastSimSteps)
+	Yield      []time.Duration // the loop's yield (runtime.Gosched) after the frame
+	ProbeCost  []time.Duration // what this probe's own reading cost
+	// Per frame, from the presenter (probeHooks): the frame's number, the time of
+	// its present's wait for the page (and the most a sleep of it overshot) and
+	// of its Draw.
+	FrameNos    []int
+	PresentWait []time.Duration
+	PresentOver []time.Duration
+	PresentDraw []time.Duration
+
 	Writes     []wasisurface.WriteRecord // every sound write of the window, in order
 	prevWrite  *wasisurface.WriteRecord  // the last write of the window before
 	YieldGC    []time.Duration           // the collector's background mark time that ran during the yield
@@ -195,6 +203,13 @@ func (p *frameProbe) frame(yield time.Duration) {
 	if p.wl != nil {
 		p.Writes = append(p.Writes, p.wl.TakeWrites()...)
 	}
+	if probeHooks.frameNo != nil {
+		p.FrameNos = append(p.FrameNos, probeHooks.frameNo())
+	}
+	if probeHooks.present != nil {
+		w, o, d := probeHooks.present()
+		p.PresentWait, p.PresentOver, p.PresentDraw = append(p.PresentWait, w), append(p.PresentOver, o), append(p.PresentDraw, d)
+	}
 	c, ps := p.read()
 	p.GC = append(p.GC, int(c-p.gcCycles))
 	p.GCPause = append(p.GCPause, time.Duration((ps-p.gcPause)*float64(time.Second)))
@@ -222,6 +237,7 @@ func (p *frameProbe) reset() {
 		p.prevWrite = &last
 	}
 	p.Yield, p.ProbeCost, p.Writes = p.Yield[:0], p.ProbeCost[:0], p.Writes[:0]
+	p.FrameNos, p.PresentWait, p.PresentOver, p.PresentDraw = p.FrameNos[:0], p.PresentWait[:0], p.PresentOver[:0], p.PresentDraw[:0]
 	p.YieldGC, p.Goroutines = p.YieldGC[:0], p.Goroutines[:0]
 	p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups = p.YieldScav[:0], p.YieldCleanups[:0], p.YieldFinalizers[:0], p.Cleanups[:0]
 }
@@ -233,6 +249,27 @@ func at[T any](s []T, i int) T {
 		return s[i]
 	}
 	return z
+}
+
+// probeHooks are what the frame probe reads besides the backend: the runner's
+// frame number and the presenter's last-present stats (set by runGameWith).
+var probeHooks struct {
+	frameNo func() int
+	present func() (wait, over, draw time.Duration)
+}
+
+// frameDetail says, for the frame with number n of the window, where its present
+// went: "present wait=.. over=.. draw=.. yield=.. gc=.. audio-write=.." (empty
+// when the frame is not in the window or the presenter reports nothing).
+func (p *frameProbe) frameDetail(n int) string {
+	for i, f := range p.FrameNos {
+		if f != n {
+			continue
+		}
+		return fmt.Sprintf(" present-wait-ms=%.1f sleep-over-ms=%.1f draw-ms=%.1f yield-ms=%.1f gc-ms=%.1f audio-write-ms=%.1f",
+			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)))
+	}
+	return ""
 }
 
 // maxDryLines bounds the audiodry lines of a window in the brief report.
@@ -280,8 +317,8 @@ func writeAudioGaps(out io.Writer, p *frameProbe) {
 				queues = append(queues, held)
 				if !slowBrief || lines < maxDryLines {
 					lines++
-					fmt.Fprintf(out, "audiodry unix-ms=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f from=%s#%d to=%s#%d\n",
-						w.Start.UnixMilli(), gap*1e3, held*1e3, short*1e3, prev.Site, prev.Frame, w.Site, w.Frame)
+					fmt.Fprintf(out, "audiodry unix-ms=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f from=%s#%d to=%s#%d%s\n",
+						w.Start.UnixMilli(), gap*1e3, held*1e3, short*1e3, prev.Site, prev.Frame, w.Site, w.Frame, p.frameDetail(w.Frame))
 				}
 			}
 		}

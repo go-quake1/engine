@@ -289,3 +289,22 @@ func TestWriteAudioGaps(t *testing.T) {
 		t.Errorf("no write log, yet %q", out.String())
 	}
 }
+
+// A dry gap's line carries where its frame's present went (the wait for the page,
+// the most a sleep of it overshot, the Draw), looked up by the frame's number.
+func TestAudioDryLineCarriesThePresentOfItsFrame(t *testing.T) {
+	probeHooks.frameNo = func() int { return 7 }
+	probeHooks.present = func() (time.Duration, time.Duration, time.Duration) {
+		return 150 * time.Millisecond, 90 * time.Millisecond, 3 * time.Millisecond
+	}
+	defer func() { probeHooks.frameNo, probeHooks.present = nil, nil }()
+	l := &fakeWriteLog{}
+	p := &frameProbe{wl: l, GC: nil}
+	l.recs = []wasisurface.WriteRecord{wrec(0, 882, "present-wait", 7), wrec(200*time.Millisecond, 882, "tic-end", 7)}
+	p.frame(0)
+	var out bytes.Buffer
+	writeAudioGaps(&out, p)
+	if !strings.Contains(out.String(), "from=present-wait#7 to=tic-end#7 present-wait-ms=150.0 sleep-over-ms=90.0 draw-ms=3.0") {
+		t.Errorf("the dry line:\n%s", out.String())
+	}
+}

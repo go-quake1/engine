@@ -122,3 +122,41 @@ func TestPresentIdleEdges(t *testing.T) {
 		t.Fatalf("poll error: %v, %d draws", err, failPoll.draws)
 	}
 }
+
+// LastPresent says where the last Present's time went: the wait (slices, with
+// the most any sleep overshot) and the driver's Draw.
+func TestLastPresentSplitsTheWaitFromTheDraw(t *testing.T) {
+	drv := &timedDriver{readyDriver: readyDriver{waits: 3}}
+	p, _ := New(drv, 8, 4)
+	clock := time.Unix(1000, 0)
+	p.now = func() time.Time { return clock }
+	drv.clock = &clock
+	sleeps := 0
+	p.sleep = func(d time.Duration) {
+		sleeps++
+		if sleeps == 2 {
+			d += 90 * time.Millisecond // a timer the worker served late
+		}
+		clock = clock.Add(d)
+	}
+	p.SetIdle(func() error { return nil })
+	px, pal := idleFrame()
+	if err := p.Present(px, 8, 4, 8, pal); err != nil {
+		t.Fatal(err)
+	}
+	got := p.LastPresent()
+	if got.Slices != 3 || got.Wait != 96*time.Millisecond || got.SleepOver != 90*time.Millisecond || got.Draw != 7*time.Millisecond {
+		t.Errorf("LastPresent %+v, want 3 slices, wait 96 ms, overshoot 90 ms, draw 7 ms", got)
+	}
+}
+
+// timedDriver is a readyDriver whose Draw takes 7 ms on the test's clock.
+type timedDriver struct {
+	readyDriver
+	clock *time.Time
+}
+
+func (d *timedDriver) Draw() error {
+	*d.clock = d.clock.Add(7 * time.Millisecond)
+	return d.readyDriver.Draw()
+}

@@ -50,6 +50,7 @@ import (
 	"github.com/go-quake1/engine/pak"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/render/gpuworld"
+	"github.com/go-quake1/engine/render/wasipresent"
 	"github.com/go-quake1/engine/render/webgpupresent"
 	"github.com/go-quake1/engine/runloop"
 	"github.com/go-quake1/engine/runner"
@@ -381,6 +382,16 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 	// S_ExtraUpdate (the sound mix refill), in slices, instead of blocking.
 	if idler, ok := gs.Presenter.(interface{ SetIdle(func() error) }); ok {
 		idler.SetIdle(r.ExtraUpdate)
+	}
+	probeHooks.frameNo = func() int { return r.FrameNo }
+	probeHooks.present = nil
+	if pt, ok := gs.Presenter.(interface {
+		LastPresent() wasipresent.PresentStats
+	}); ok {
+		probeHooks.present = func() (time.Duration, time.Duration, time.Duration) {
+			s := pt.LastPresent()
+			return s.Wait, s.SleepOver, s.Draw
+		}
 	}
 	var gt *gpuTimes
 	if gw, ok := so.WorldDraw.(*gameWorld); ok {
