@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-quake1/engine/backend/wasisurface"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/runloop"
 	"github.com/go-quake1/engine/sound"
@@ -26,10 +27,11 @@ const slowTicBound = 0.1
 // stream_write): TakeWriteTime returns the time spent since the last call.
 type audioWriteTimer interface{ TakeWriteTime() time.Duration }
 
-// audioWriteLog is a backend that says when its last sound write returned and
-// what the host reported queued after it.
+// audioWriteLog is a backend that keeps every sound write (when it began and
+// returned, what the host reported queued after it, where in which frame it was
+// made) and hands them over: TakeWrites.
 type audioWriteLog interface {
-	LastWrite() (at time.Time, queued int, ok bool)
+	TakeWrites() []wasisurface.WriteRecord
 }
 
 // frameProbe records, per frame, what the frame's stages do not say: the Go
@@ -41,16 +43,16 @@ type frameProbe struct {
 
 	gcCycles   uint64
 	gcPause    float64
-	GC         []int           // collector cycles that finished during the frame
-	GCPause    []time.Duration // pause time added during the frame
-	AudioWrite []time.Duration // stream_write time during the frame
-	Steps      []int           // fixed server ticks the frame ran (the runner's LastSimSteps)
-	Yield      []time.Duration // the loop's yield (runtime.Gosched) after the frame
-	ProbeCost  []time.Duration // what this probe's own reading cost
-	WriteAt    []time.Time     // when the frame's last sound write returned (zero: none yet)
-	Queued     []int           // the frames the host said were queued after it
-	YieldGC    []time.Duration // the collector's background mark time that ran during the yield
-	Goroutines []int           // goroutines alive after the yield
+	GC         []int                     // collector cycles that finished during the frame
+	GCPause    []time.Duration           // pause time added during the frame
+	AudioWrite []time.Duration           // stream_write time during the frame
+	Steps      []int                     // fixed server ticks the frame ran (the runner's LastSimSteps)
+	Yield      []time.Duration           // the loop's yield (runtime.Gosched) after the frame
+	ProbeCost  []time.Duration           // what this probe's own reading cost
+	Writes     []wasisurface.WriteRecord // every sound write of the window, in order
+	prevWrite  *wasisurface.WriteRecord  // the last write of the window before
+	YieldGC    []time.Duration           // the collector's background mark time that ran during the yield
+	Goroutines []int                     // goroutines alive after the yield
 
 	steps func() int
 	wl    audioWriteLog
@@ -190,12 +192,9 @@ func (p *frameProbe) frame(yield time.Duration) {
 	p.Cleanups = append(p.Cleanups, int(p.cleanupsNow-p.cleanupsSeen))
 	p.cleanupsSeen = p.cleanupsNow
 	p.pend, p.pendGor = yieldReading{}, 0
-	var at time.Time
-	var q int
 	if p.wl != nil {
-		at, q, _ = p.wl.LastWrite()
+		p.Writes = append(p.Writes, p.wl.TakeWrites()...)
 	}
-	p.WriteAt, p.Queued = append(p.WriteAt, at), append(p.Queued, q)
 	c, ps := p.read()
 	p.GC = append(p.GC, int(c-p.gcCycles))
 	p.GCPause = append(p.GCPause, time.Duration((ps-p.gcPause)*float64(time.Second)))
@@ -218,7 +217,11 @@ func (p *frameProbe) reset() {
 		return
 	}
 	p.GC, p.GCPause, p.AudioWrite, p.Steps = p.GC[:0], p.GCPause[:0], p.AudioWrite[:0], p.Steps[:0]
-	p.Yield, p.ProbeCost, p.WriteAt, p.Queued = p.Yield[:0], p.ProbeCost[:0], p.WriteAt[:0], p.Queued[:0]
+	if n := len(p.Writes); n > 0 {
+		last := p.Writes[n-1]
+		p.prevWrite = &last
+	}
+	p.Yield, p.ProbeCost, p.Writes = p.Yield[:0], p.ProbeCost[:0], p.Writes[:0]
 	p.YieldGC, p.Goroutines = p.YieldGC[:0], p.Goroutines[:0]
 	p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups = p.YieldScav[:0], p.YieldCleanups[:0], p.YieldFinalizers[:0], p.Cleanups[:0]
 }
@@ -232,47 +235,57 @@ func at[T any](s []T, i int) T {
 	return z
 }
 
-// writeAudioGaps says, for each sound write, whether the output could bridge the
-// time since the one before it on what that one left queued: the gap between two
-// writes against the frames queued after the first. A gap longer than its queue is
-// a run-dry (an underrun the listener hears), and the line gives the gap, the
-// queue and the shortfall, so a stall's length can be read against the audio's
-// depth. The summary counts the dry gaps and the writes over 50, 100 and 200 ms.
+// maxDryLines bounds the audiodry lines of a window in the brief report.
+const maxDryLines = 16
+
+// writeAudioGaps says, for EVERY sound write of the window (the end-of-tic
+// refill, S_ExtraUpdate's and the present wait's), whether the output could
+// bridge the time since the one before it on what that one left queued: from
+// the return of the earlier write to the start of the next, against the frames
+// queued after the first. A gap longer than its queue is a run-dry (an underrun
+// the listener hears). The line, audiodry, gives the wall-clock time (Unix ms) at
+// which the next write began, the gap, the queue and the shortfall, and where in
+// which frame each of the two writes was made (site#frame), so a run-dry can be
+// matched to a browser underrun by time and to a phase of the frame by its
+// sites. The summary counts the dry gaps and the writes over 50, 100 and 200 ms.
+//
+// The model used to read one write a frame, the last, and so took the gap
+// between two frames' last writes: the writes the present wait and the
+// S_ExtraUpdate sites made between them were invisible, and a tic bridged by
+// them was counted dry.
 func writeAudioGaps(out io.Writer, p *frameProbe) {
 	if p == nil || p.wl == nil {
 		return
 	}
-	var prevAt time.Time
-	var prevQ int
-	var writes, dry int
+	var writes, dry, lines int
 	var worst, total float64
 	var over [3]int
 	var queues []float64
-	for j := range p.WriteAt {
-		now := p.WriteAt[j]
-		if now.IsZero() || now.Equal(prevAt) { // no write in this frame
-			continue
-		}
-		if !prevAt.IsZero() {
+	prev := p.prevWrite
+	for j := range p.Writes {
+		w := p.Writes[j]
+		if prev != nil {
 			writes++
-			gap := now.Sub(prevAt).Seconds()
+			gap := w.Start.Sub(prev.End).Seconds()
 			for i, b := range [3]float64{0.05, 0.1, 0.2} {
 				if gap > b {
 					over[i]++
 				}
 			}
-			held := float64(prevQ) / sound.DefaultSampleRate
+			held := float64(prev.Queued) / sound.DefaultSampleRate
 			if short := gap - held; short > 0 {
 				dry++
 				total += short
 				worst = max(worst, short)
 				queues = append(queues, held)
-				if !slowBrief {
-					fmt.Fprintf(out, "audiogap frame=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f\n", j, gap*1e3, held*1e3, short*1e3)
+				if !slowBrief || lines < maxDryLines {
+					lines++
+					fmt.Fprintf(out, "audiodry unix-ms=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f from=%s#%d to=%s#%d\n",
+						w.Start.UnixMilli(), gap*1e3, held*1e3, short*1e3, prev.Site, prev.Frame, w.Site, w.Frame)
 				}
 			}
 		}
-		prevAt, prevQ = now, p.Queued[j]
+		prev = &p.Writes[j]
 	}
 	slices.Sort(queues)
 	med := 0.0

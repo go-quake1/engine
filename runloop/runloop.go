@@ -153,6 +153,11 @@ type Runner struct {
 	// frameNow is the current tic's time (the nowSec of RunFrame) and mixAt the
 	// tic time of the last refill.
 	frameNow, mixAt float64
+	// MixSite is where in the frame the last mix refill was made ("world",
+	// "menu", "compose", "present-wait", "tic-end") and FrameNo the number of
+	// frames RunFrame has begun: what the sound write log tags each write with.
+	MixSite string
+	FrameNo int
 
 	// MixDropped is the mix frames of the time a tic outlasted the queue the
 	// update before it had left (the output ran dry for that long), MixStalls the
@@ -372,6 +377,7 @@ const maxSimSubsteps = 2
 
 func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	r.frameNow = float64(nowSec)
+	r.FrameNo++
 	if r.Host == nil {
 		return ErrRunnerNilHost
 	}
@@ -630,7 +636,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	// S_ExtraUpdate where R_RenderView has drawn the world, the entities and the
 	// view model (r_main.c lines 937, 982, 991: "don't let sound get messed up if
 	// going slow").
-	if err := r.ExtraUpdate(); err != nil {
+	if err := r.ExtraUpdateAt("world"); err != nil {
 		return err
 	}
 
@@ -644,7 +650,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 		}
 		// M_Draw ends with S_ExtraUpdate (menu.c line 3132; line 3034 after the
 		// console background).
-		if err := r.ExtraUpdate(); err != nil {
+		if err := r.ExtraUpdateAt("menu"); err != nil {
 			return err
 		}
 	}
@@ -695,7 +701,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	r.Timer.Mark(render.Stage2D)
 	// The 2D screens end with S_ExtraUpdate too (draw.c lines 850, 868, the screen
 	// fades).
-	if err := r.ExtraUpdate(); err != nil {
+	if err := r.ExtraUpdateAt("compose"); err != nil {
 		return err
 	}
 	if err := rend.Resolve(r.FrameBuffer, r.RGBA, ctx.Palette); err != nil {
@@ -780,6 +786,7 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 		}
 	}
 	r.MixLongest = math.Max(r.MixLongest, float64(dt))
+	r.MixSite = "tic-end"
 	return r.refill(qa, ahead)
 }
 
@@ -796,7 +803,11 @@ func (r *Runner) paceAudio(qa backend.QueuedAudio, dt float32) error {
 // 3132), and, in this port, wherever a frame waits for the page (the presenter's
 // slices, wasipresent.Presenter.Idle). The first update of a run is the tic's
 // (S_Update_ does nothing before the sound is started).
-func (r *Runner) ExtraUpdate() error {
+func (r *Runner) ExtraUpdate() error { return r.ExtraUpdateAt("present-wait") }
+
+// ExtraUpdateAt is ExtraUpdate from a named place in the frame (MixSite says
+// which one made the last refill, for the sound write log).
+func (r *Runner) ExtraUpdateAt(site string) error {
 	if r.NoExtraUpdate || !r.mixPrimed || r.SoundPool == nil || len(r.MixBuffer) == 0 {
 		return nil
 	}
@@ -808,6 +819,7 @@ func (r *Runner) ExtraUpdate() error {
 	if ahead <= 0 {
 		ahead = MixAhead
 	}
+	r.MixSite = site
 	return r.refill(qa, ahead)
 }
 

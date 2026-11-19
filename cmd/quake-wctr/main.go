@@ -366,6 +366,9 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 	if err != nil {
 		return err
 	}
+	// Each sound write is logged with the place in the frame (the refill site) and
+	// the frame it was made in (slowtics.go: audiodry).
+	be.SetTag(func() (string, int) { return r.MixSite, r.FrameNo })
 	if testRunner != nil {
 		testRunner(r)
 	}

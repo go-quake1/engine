@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-quake1/engine/backend/wasisurface"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/runloop"
 )
@@ -89,21 +90,17 @@ func TestSlowticsBrief(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("the goroutine dump in brief mode: %q", out.String())
 	}
-	// A dry write is counted and not listed.
+	// A dry write is counted, and listed (audiodry) up to maxDryLines.
 	l := &fakeWriteLog{}
 	q := &frameProbe{wl: l}
-	base := time.Unix(1000, 0)
-	for _, w := range []struct {
-		after time.Duration
-		q     int
-	}{{0, 882}, {300 * time.Millisecond, 882}} {
-		l.at, l.q = base.Add(w.after), w.q
-		q.frame(0)
+	for i := 0; i < maxDryLines+4; i++ {
+		l.recs = append(l.recs, wrec(time.Duration(i)*time.Second, 882, "tic-end", i))
 	}
+	q.frame(0)
 	out.Reset()
 	writeAudioGaps(&out, q)
-	if strings.Contains(out.String(), "audiogap frame=") || !strings.Contains(out.String(), "audiogaps: 1 of 1 writes ran dry") {
-		t.Errorf("the dry write in brief mode:\n%s", out.String())
+	if n := strings.Count(out.String(), "audiodry "); n != maxDryLines || !strings.Contains(out.String(), "audiogaps: 19 of 19 writes ran dry") {
+		t.Errorf("%d audiodry lines in brief mode, want %d:\n%s", n, maxDryLines, out.String())
 	}
 }
 
@@ -235,35 +232,55 @@ func TestYieldCountsCleanups(t *testing.T) {
 	}
 }
 
-type fakeWriteLog struct {
-	at time.Time
-	q  int
+type fakeWriteLog struct{ recs []wasisurface.WriteRecord }
+
+func (f *fakeWriteLog) TakeWrites() []wasisurface.WriteRecord {
+	r := f.recs
+	f.recs = nil
+	return r
 }
 
-func (f *fakeWriteLog) LastWrite() (time.Time, int, bool) { return f.at, f.q, !f.at.IsZero() }
+// wrec is a write that began at base+start, took 1 ms, and left q mix frames queued.
+func wrec(start time.Duration, q int, site string, frame int) wasisurface.WriteRecord {
+	base := time.Unix(1000, 0)
+	return wasisurface.WriteRecord{Start: base.Add(start), End: base.Add(start + time.Millisecond), Queued: q, Site: site, Frame: frame}
+}
 
 // A gap between two writes longer than what the first left queued is a dry run:
 // 80 ms of audio queued and a 250 ms gap is 170 ms short; the 40 ms gap on 80 ms
-// is bridged, and a frame with no write (the same time again) is not a write.
+// is bridged.
 func TestWriteAudioGaps(t *testing.T) {
 	l := &fakeWriteLog{}
 	p := &frameProbe{wl: l}
-	base := time.Unix(1000, 0)
-	for _, w := range []struct {
-		after time.Duration
-		q     int
-	}{{0, 882}, {40 * time.Millisecond, 882}, {40 * time.Millisecond, 882}, {290 * time.Millisecond, 441}} { // 80 ms, 80 ms, (no write), 40 ms
-		l.at, l.q = base.Add(w.after), w.q
-		p.frame(0)
+	l.recs = []wasisurface.WriteRecord{
+		wrec(0, 882, "tic-end", 1),
+		wrec(40*time.Millisecond, 882, "tic-end", 2),
+		wrec(330*time.Millisecond, 441, "tic-end", 3), // 289 ms after the return of the last, on 80 ms
 	}
+	p.frame(0)
 	var out bytes.Buffer
 	writeAudioGaps(&out, p)
 	got := out.String()
-	if n := strings.Count(got, "audiogap frame="); n != 1 || !strings.Contains(got, "audiogap frame=3 gap-ms=250.0 queued-ms=80.0 short-ms=170.0") {
+	if n := strings.Count(got, "audiodry "); n != 1 || !strings.Contains(got, "audiodry unix-ms=1000330 gap-ms=289.0 queued-ms=80.0 short-ms=209.0 from=tic-end#2 to=tic-end#3") {
 		t.Errorf("the dry gaps:\n%s", got)
 	}
-	if !strings.Contains(got, "audiogaps: 1 of 2 writes ran dry, 170 ms short in all, worst 170.0 ms, median queue before a dry gap 80.0 ms; writes more than 50 100 200 ms after the one before: 1 1 1") {
+	if !strings.Contains(got, "audiogaps: 1 of 2 writes ran dry, 209 ms short in all, worst 209.0 ms, median queue before a dry gap 80.0 ms; writes more than 50 100 200 ms after the one before: 1 1 1") {
 		t.Errorf("the summary:\n%s", got)
+	}
+	// The old model read the last write of each frame only: here the writes of one
+	// frame (the tic's refill, then S_ExtraUpdate slices of the present wait)
+	// bridge 280 ms on 80 ms of queue, so nothing runs dry.
+	out.Reset()
+	l2 := &fakeWriteLog{}
+	p2 := &frameProbe{wl: l2}
+	l2.recs = []wasisurface.WriteRecord{wrec(0, 882, "tic-end", 1)}
+	for i := 1; i <= 7; i++ {
+		l2.recs = append(l2.recs, wrec(time.Duration(i)*40*time.Millisecond, 882, "present-wait", 2))
+	}
+	p2.frame(0)
+	writeAudioGaps(&out, p2)
+	if strings.Contains(out.String(), "audiodry ") || !strings.Contains(out.String(), "audiogaps: 0 of 7 writes ran dry") {
+		t.Errorf("writes 40 ms apart on an 80 ms queue are not dry:\n%s", out.String())
 	}
 	out.Reset()
 	writeAudioGaps(&out, &frameProbe{}) // a backend that does not log its writes: nothing

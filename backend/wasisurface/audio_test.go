@@ -247,3 +247,36 @@ func TestSilentBackendModelsARealTimeOutput(t *testing.T) {
 		t.Errorf("an empty mix: %v", err)
 	}
 }
+
+// Every write is logged with its queue and the place the game made it at, and
+// TakeWrites hands the log over and empties it; a failed write is not logged.
+func TestWriteLogRecordsEveryWriteWithItsSite(t *testing.T) {
+	clock := time.Unix(1000, 0)
+	out := &fakeOut{clock: &clock, last: clock, cap: 4096}
+	b := newAudioBackend(out, &clock)
+	site, frame := "tic-end", 1
+	b.SetTag(func() (string, int) { return site, frame })
+	mix := make([]sound.StereoSample, 100)
+	for _, s := range []struct {
+		site  string
+		frame int
+	}{{"tic-end", 1}, {"present-wait", 2}, {"present-wait", 2}} {
+		site, frame = s.site, s.frame
+		if err := b.QueueAudio(mix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := b.TakeWrites()
+	if len(got) != 3 || got[1].Site != "present-wait" || got[1].Frame != 2 || got[0].Frames != 100 || got[2].Queued != 300 {
+		t.Fatalf("write log: %+v", got)
+	}
+	if len(b.TakeWrites()) != 0 {
+		t.Error("TakeWrites did not empty the log")
+	}
+	for i := 0; i < 2*maxWriteLog; i++ { // never grows past its bound
+		_ = b.QueueAudio(mix[:1])
+	}
+	if n := len(b.TakeWrites()); n > maxWriteLog {
+		t.Errorf("%d records kept, bound %d", n, maxWriteLog)
+	}
+}
