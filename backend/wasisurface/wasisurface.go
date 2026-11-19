@@ -75,6 +75,9 @@ type Backend struct {
 	writeTime time.Duration // host time of the sound writes since TakeWriteTime
 	lastAt    time.Time     // when the last sound write returned
 	lastQ     int           // the frames the host said were queued after it
+
+	writes []WriteRecord        // every sound write since TakeWrites (audio.go)
+	tag    func() (string, int) // the site and frame number a write is made at
 }
 
 // New returns a backend for a w x h frame whose keys come from down and

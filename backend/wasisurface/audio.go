@@ -50,6 +50,32 @@ func (b *Backend) LastWrite() (at time.Time, queued int, ok bool) {
 	return b.lastAt, b.lastQ, !b.lastAt.IsZero()
 }
 
+// WriteRecord is one sound write: when the call began and returned (wall
+// clock), the frames it carried, the frames the host said were queued after it,
+// and where in which frame the game made it (Tag, see SetTag).
+type WriteRecord struct {
+	Start, End time.Time
+	Frames     int
+	Queued     int
+	Site       string
+	Frame      int
+}
+
+// maxWriteLog bounds the log: a window holds a few hundred writes, and a game
+// nobody drains drops the oldest half rather than growing.
+const maxWriteLog = 8192
+
+// SetTag says where in the game a write is made: f returns a site name and a
+// frame number, read at each write.
+func (b *Backend) SetTag(f func() (site string, frame int)) { b.tag = f }
+
+// TakeWrites returns every sound write since the last call, and empties the log.
+func (b *Backend) TakeWrites() []WriteRecord {
+	w := b.writes
+	b.writes = nil
+	return w
+}
+
 // TakeWriteTime returns the host time the sound writes (stream_write) took since
 // the last call, and resets it: the per-frame diagnostic of a slow tic.
 func (b *Backend) TakeWriteTime() time.Duration {
@@ -91,6 +117,16 @@ func (b *Backend) QueueAudio(samples []sound.StereoSample) error {
 	t0 := time.Now()
 	accepted, queued, err := b.out.Write(pcm)
 	b.writeTime += time.Since(t0)
+	if err == nil {
+		rec := WriteRecord{Start: t0, End: time.Now(), Frames: len(samples), Queued: queued}
+		if b.tag != nil {
+			rec.Site, rec.Frame = b.tag()
+		}
+		if len(b.writes) >= maxWriteLog {
+			b.writes = append(b.writes[:0], b.writes[maxWriteLog/2:]...)
+		}
+		b.writes = append(b.writes, rec)
+	}
 	if err != nil {
 		b.out.Close()
 		b.out = nil
