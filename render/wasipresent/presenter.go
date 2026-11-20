@@ -82,6 +82,18 @@ type Presenter struct {
 type PresentStats struct {
 	Wait, Draw, SleepOver time.Duration
 	Slices                int
+	// Slowest is the longest host call of the Draw (its import name) and how long
+	// it took, when the driver can say (SlowDriver).
+	Slowest    string
+	SlowestFor time.Duration
+}
+
+// SlowDriver is a Driver that times its host calls: ResetSlowest starts a
+// reading, SlowestCall returns the longest call since it.
+type SlowDriver interface {
+	Driver
+	ResetSlowest()
+	SlowestCall() (string, time.Duration)
 }
 
 // LastPresent returns the stats of the last Present.
@@ -171,9 +183,16 @@ func (p *Presenter) Present(pixels []byte, width, height, pitch int, pal *render
 	if now == nil {
 		now = time.Now
 	}
+	sd, timed := p.drv.(SlowDriver)
+	if timed {
+		sd.ResetSlowest()
+	}
 	t0 := now()
 	err := p.drv.Draw()
 	p.last.Draw = now().Sub(t0)
+	if timed {
+		p.last.Slowest, p.last.SlowestFor = sd.SlowestCall()
+	}
 	return err
 }
 
