@@ -56,6 +56,7 @@ type frameProbe struct {
 	PresentWait []time.Duration
 	PresentOver []time.Duration
 	PresentDraw []time.Duration
+	PresentSlow []string // the longest host call of the frame's Draw, "name:ms"
 
 	Writes     []wasisurface.WriteRecord // every sound write of the window, in order
 	prevWrite  *wasisurface.WriteRecord  // the last write of the window before
@@ -209,6 +210,13 @@ func (p *frameProbe) frame(yield time.Duration) {
 	if probeHooks.present != nil {
 		w, o, d := probeHooks.present()
 		p.PresentWait, p.PresentOver, p.PresentDraw = append(p.PresentWait, w), append(p.PresentOver, o), append(p.PresentDraw, d)
+		slow := ""
+		if probeHooks.slowest != nil {
+			if n, sd := probeHooks.slowest(); n != "" {
+				slow = fmt.Sprintf("%s:%.1f", n, ms(sd))
+			}
+		}
+		p.PresentSlow = append(p.PresentSlow, slow)
 	}
 	c, ps := p.read()
 	p.GC = append(p.GC, int(c-p.gcCycles))
@@ -238,6 +246,7 @@ func (p *frameProbe) reset() {
 	}
 	p.Yield, p.ProbeCost, p.Writes = p.Yield[:0], p.ProbeCost[:0], p.Writes[:0]
 	p.FrameNos, p.PresentWait, p.PresentOver, p.PresentDraw = p.FrameNos[:0], p.PresentWait[:0], p.PresentOver[:0], p.PresentDraw[:0]
+	p.PresentSlow = p.PresentSlow[:0]
 	p.YieldGC, p.Goroutines = p.YieldGC[:0], p.Goroutines[:0]
 	p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups = p.YieldScav[:0], p.YieldCleanups[:0], p.YieldFinalizers[:0], p.Cleanups[:0]
 }
@@ -256,6 +265,7 @@ func at[T any](s []T, i int) T {
 var probeHooks struct {
 	frameNo func() int
 	present func() (wait, over, draw time.Duration)
+	slowest func() (call string, d time.Duration) // the longest host call of the last Draw
 }
 
 // frameDetail says, for the frame with number n of the window, where its present
@@ -266,8 +276,12 @@ func (p *frameProbe) frameDetail(n int) string {
 		if f != n {
 			continue
 		}
-		return fmt.Sprintf(" present-wait-ms=%.1f sleep-over-ms=%.1f draw-ms=%.1f yield-ms=%.1f gc-ms=%.1f audio-write-ms=%.1f",
-			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)))
+		slow := at(p.PresentSlow, i)
+		if slow == "" {
+			slow = "-"
+		}
+		return fmt.Sprintf(" present-wait-ms=%.1f sleep-over-ms=%.1f draw-ms=%.1f yield-ms=%.1f gc-ms=%.1f audio-write-ms=%.1f draw-slowest=%s",
+			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)), slow)
 	}
 	return ""
 }

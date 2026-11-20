@@ -160,3 +160,29 @@ func (d *timedDriver) Draw() error {
 	*d.clock = d.clock.Add(7 * time.Millisecond)
 	return d.readyDriver.Draw()
 }
+
+// slowDriver times its host calls: the longest of the Draw is what the stats keep.
+type slowDriver struct {
+	fakeDriver
+	name string
+	d    time.Duration
+}
+
+func (s *slowDriver) ResetSlowest()                        { s.name, s.d = "", 0 }
+func (s *slowDriver) SlowestCall() (string, time.Duration) { return s.name, s.d }
+func (s *slowDriver) Draw() error {
+	s.name, s.d = "[method]context.present", 80*time.Millisecond
+	return s.fakeDriver.Draw()
+}
+
+func TestLastPresentKeepsTheSlowestHostCallOfTheDraw(t *testing.T) {
+	drv := &slowDriver{}
+	p, _ := New(drv, 8, 4)
+	px, pal := idleFrame()
+	if err := p.Present(px, 8, 4, 8, pal); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.LastPresent(); got.Slowest != "[method]context.present" || got.SlowestFor != 80*time.Millisecond {
+		t.Errorf("LastPresent %+v", got)
+	}
+}

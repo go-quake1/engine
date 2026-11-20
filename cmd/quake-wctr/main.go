@@ -392,6 +392,10 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 			s := pt.LastPresent()
 			return s.Wait, s.SleepOver, s.Draw
 		}
+		probeHooks.slowest = func() (string, time.Duration) {
+			s := pt.LastPresent()
+			return s.Slowest, s.SlowestFor
+		}
 	}
 	var gt *gpuTimes
 	if gw, ok := so.WorldDraw.(*gameWorld); ok {

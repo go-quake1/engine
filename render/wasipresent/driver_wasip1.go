@@ -5,7 +5,11 @@
 
 package wasipresent
 
-import "github.com/go-wasmcontainers/gpu/wasigpu"
+import (
+	"time"
+
+	"github.com/go-wasmcontainers/gpu/wasigpu"
+)
 
 // WasiDriver is the [Driver] over a wasigpu device and surface. It only
 // runs in a wasip1 guest on a host that offers wasi:webgpu and
@@ -18,7 +22,10 @@ type WasiDriver struct {
 	idx, pal *wasigpu.Buffer
 }
 
-var _ ReadyDriver = (*WasiDriver)(nil)
+var (
+	_ ReadyDriver = (*WasiDriver)(nil)
+	_ SlowDriver  = (*WasiDriver)(nil)
+)
 
 // NewDriver returns the driver drawing on s with d.
 func NewDriver(d *wasigpu.Device, s *wasigpu.Surface) *WasiDriver {
@@ -72,6 +79,10 @@ func (w *WasiDriver) WritePalette(data []byte) error { return w.d.Write(w.pal, 0
 func (w *WasiDriver) Draw() error {
 	return w.s.Frame(w.pipe, []*wasigpu.Buffer{w.idx, w.pal}, [4]float64{0, 0, 0, 1}, 3)
 }
+
+// ResetSlowest and SlowestCall implement [SlowDriver].
+func (w *WasiDriver) ResetSlowest()                        { wasigpu.ResetSlowest() }
+func (w *WasiDriver) SlowestCall() (string, time.Duration) { return wasigpu.Slowest() }
 
 // ReadyToPresent implements [ReadyDriver].
 func (w *WasiDriver) ReadyToPresent() (bool, error) { return w.s.ReadyToPresent() }
