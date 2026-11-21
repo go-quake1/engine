@@ -91,4 +91,18 @@ func (b *batchWorld) Slowest() (string, time.Duration) { return b.sink.Slowest()
 
 // SetIdle makes a frame's wait for the GPU run f between polls of the host
 // (batchsink.Sink.SetIdle): WinQuake's S_ExtraUpdate inside rendering.
-func (b *batchWorld) SetIdle(f func() error) { b.sink.SetIdle(f) }
+//
+// The frame's own CPU work (the faces' walk and the re-bakes, gpuworld.Geometry.Draws)
+// runs it in slices too: it is where a frame spends its time before the wait.
+func (b *batchWorld) SetIdle(f func() error) {
+	b.sink.SetIdle(f)
+	b.r.SetIdle(f)
+}
+
+// Waited is the time of the last draw spent waiting for the GPU, and the part of
+// it that ran the idle function (waitTimer).
+func (b *batchWorld) Waited() (wait, idle time.Duration) { return b.sink.Waited() }
+
+// Bake is the time of the last draw spent re-baking surfaces and recording
+// their upload (bakeTimer).
+func (b *batchWorld) Bake() (bake, upload time.Duration) { return b.r.BakeTime(), b.r.UploadTime }

@@ -237,7 +237,28 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 			g.last.slowName, g.last.slowFor = n, d
 		}
 	}
+	// How the draw's time splits: the wait for the GPU (where the idle function
+	// feeds the sound) and the program's own work (where nothing does, but the
+	// slices of the faces' walk): the re-bakes and their upload record.
+	if wt, ok := g.gd.(waitTimer); ok {
+		g.last.wait, g.last.idle = wt.Waited()
+	}
+	if bt, ok := g.gd.(bakeTimer); ok {
+		g.last.bake, g.last.upload = bt.Bake()
+	}
 	return nil
+}
+
+// waitTimer is a [gpuDrawer] that says how long its last draw waited for the GPU
+// and how much of it ran the idle function (batchsink.Sink.Waited).
+type waitTimer interface {
+	Waited() (wait, idle time.Duration)
+}
+
+// bakeTimer is a [gpuDrawer] that says what its last draw spent re-baking the
+// surfaces the animation moved and recording their upload.
+type bakeTimer interface {
+	Bake() (bake, upload time.Duration)
 }
 
 // drawTimer is a [gpuDrawer] that times its own host calls (batchsink.Sink).
@@ -248,10 +269,17 @@ type drawTimer interface {
 
 // worldDraw is what the last DrawWorld spent: the submit with its read-back,
 // the copy into the frame buffer, and the longest host call of the two.
+//
+// gpu is the whole of the drawer's call; wait the part of it spent waiting for
+// the GPU and idle the part of that the sound mix ran; bake and upload the part
+// that re-baked surfaces and recorded their upload. gpu - wait is the program's
+// own CPU, which only the slices of the faces' walk reach.
 type worldDraw struct {
-	gpu, copy time.Duration
-	slowName  string
-	slowFor   time.Duration
+	gpu, copy    time.Duration
+	wait, idle   time.Duration
+	bake, upload time.Duration
+	slowName     string
+	slowFor      time.Duration
 }
 
 // hostTimer is what the world draw reads the longest host call from

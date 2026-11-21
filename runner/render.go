@@ -929,6 +929,11 @@ func setupRenderer(opts setupRendererOpts) error {
 
 		worldSurf.endFrame()
 		runner.Timer.Mark(render.StageWorld)
+		// S_ExtraUpdate after the world's faces (r_main.c:937, after R_DrawWorld):
+		// the sky and the water the CPU draws, and the compositing of the GPU's frame.
+		if err := runner.ExtraUpdateAt("world-faces"); err != nil {
+			return err
+		}
 
 		// Per-tic projectile trail emission.
 		trailNow := runner.Client.MsgTime
@@ -993,6 +998,10 @@ func setupRenderer(opts setupRendererOpts) error {
 				haveSample = true
 			}
 			aliasRendered++
+		}
+		// S_ExtraUpdate after the entities (r_main.c:982, after R_DrawEntitiesOnList).
+		if err := runner.ExtraUpdateAt("entities"); err != nil {
+			return err
 		}
 		if frame%60 == 0 {
 			logf("tic %d rendered %d alias entities (interp+lit)", frame, aliasRendered)
@@ -1064,6 +1073,11 @@ func setupRenderer(opts setupRendererOpts) error {
 			if frame%60 == 0 {
 				logf("DrawParticleQuads err: %v", err)
 			}
+		}
+
+		// S_ExtraUpdate after the particles (r_main.c:991, after R_DrawParticles).
+		if err := runner.ExtraUpdateAt("particles"); err != nil {
+			return err
 		}
 
 		spritesDrawn := 0

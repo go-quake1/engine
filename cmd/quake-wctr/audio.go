@@ -50,11 +50,17 @@ func attachAudio(be *wasisurface.Backend, errOut io.Writer) (closeAudio func()) 
 // forwards it.
 type audioStatser interface{ AudioStats() wasisurface.AudioStats }
 
+// testMixer, set by a test, replaces the backend the game loop drives.
+var testMixer func(backend.Backend) backend.Backend
+
 // mixerBackend is the backend the game loop drives: be itself, or with
 // --fixed-mixer a wrapper that hides its queue (a struct embedding the Backend
 // interface promotes only Backend's methods), so the runloop paints the fixed
 // chunk.
 func mixerBackend(be *wasisurface.Backend) backend.Backend {
+	if testMixer != nil {
+		return testMixer(be)
+	}
 	if fixedMixer {
 		return fixedChunk{Backend: be, stats: be.AudioStats}
 	}

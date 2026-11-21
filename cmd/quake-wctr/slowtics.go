@@ -151,7 +151,10 @@ func newFrameProbe(be any, steps func() int) *frameProbe {
 	p.samples[2].Name = "/sched/pauses/total/gc:seconds"
 	p.wt, _ = be.(audioWriteTimer)
 	p.wl, _ = be.(audioWriteLog)
-	p.read() // the baseline
+	// The baseline: the first frame reports the cycles since here, not every
+	// cycle of the process (a process that had collected 44 times reported 44 in
+	// its first frame).
+	p.gcCycles, p.gcPause = p.read()
 	r, _ := p.readYield()
 	p.cleanupsSeen, p.cleanupsNow = r.cleanups, r.cleanups
 	return p
@@ -287,7 +290,8 @@ func worldDetail(d worldDraw, ok bool) string {
 	if d.slowName != "" {
 		slow = fmt.Sprintf("%s:%.1f", d.slowName, ms(d.slowFor))
 	}
-	return fmt.Sprintf(" world-gpu-ms=%.1f world-copy-ms=%.1f world-slowest=%s", ms(d.gpu), ms(d.copy), slow)
+	return fmt.Sprintf(" world-gpu-ms=%.1f world-copy-ms=%.1f world-slowest=%s world-cpu-ms=%.1f world-wait-ms=%.1f world-idle-ms=%.1f world-bake-ms=%.1f world-upload-ms=%.1f",
+		ms(d.gpu), ms(d.copy), slow, ms(d.gpu-d.wait), ms(d.wait), ms(d.idle), ms(d.bake), ms(d.upload))
 }
 
 // frameDetail says, for the frame with number n of the window, where its present
