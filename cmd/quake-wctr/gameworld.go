@@ -78,6 +78,14 @@ func (g *gameWorld) SetIdle(f func() error) {
 	}
 }
 
+// SetIdleAt is SetIdle for the drawer's own CPU work, with the place in the
+// frame given to f (a drawer that cannot say keeps SetIdle's function).
+func (g *gameWorld) SetIdleAt(f func(site string) error) {
+	if is, ok := g.gd.(interface{ SetIdleAt(func(string) error) }); ok {
+		is.SetIdleAt(f)
+	}
+}
+
 // errEntitiesOff is why the GPU draws no alias entity: --gpu-entities=false.
 var errEntitiesOff = errors.New("--gpu-entities=false")
 

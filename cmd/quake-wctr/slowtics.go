@@ -59,6 +59,12 @@ type frameProbe struct {
 	PresentSlow []string // the longest host call of the frame's Draw, "name:ms"
 	WorldDraw   []string // the frame's world draw: " world-gpu-ms=.. world-copy-ms=.. world-slowest=..", "" for none
 
+	// The longest interval between two consecutive refill ATTEMPTS (painted or
+	// not) in each frame, and the sites of its two ends: the span nothing fed the
+	// output in, which is what an underrun is made of.
+	Unfed              []time.Duration
+	UnfedFrom, UnfedTo []string
+
 	Writes     []wasisurface.WriteRecord // every sound write of the window, in order
 	prevWrite  *wasisurface.WriteRecord  // the last write of the window before
 	YieldGC    []time.Duration           // the collector's background mark time that ran during the yield
@@ -227,6 +233,12 @@ func (p *frameProbe) frame(yield time.Duration) {
 		world = probeHooks.world()
 	}
 	p.WorldDraw = append(p.WorldDraw, world)
+	var ud time.Duration
+	var uf, ut string
+	if probeHooks.refillGap != nil {
+		ud, uf, ut = probeHooks.refillGap()
+	}
+	p.Unfed, p.UnfedFrom, p.UnfedTo = append(p.Unfed, ud), append(p.UnfedFrom, uf), append(p.UnfedTo, ut)
 	c, ps := p.read()
 	p.GC = append(p.GC, int(c-p.gcCycles))
 	p.GCPause = append(p.GCPause, time.Duration((ps-p.gcPause)*float64(time.Second)))
@@ -256,6 +268,7 @@ func (p *frameProbe) reset() {
 	p.Yield, p.ProbeCost, p.Writes = p.Yield[:0], p.ProbeCost[:0], p.Writes[:0]
 	p.FrameNos, p.PresentWait, p.PresentOver, p.PresentDraw = p.FrameNos[:0], p.PresentWait[:0], p.PresentOver[:0], p.PresentDraw[:0]
 	p.PresentSlow, p.WorldDraw = p.PresentSlow[:0], p.WorldDraw[:0]
+	p.Unfed, p.UnfedFrom, p.UnfedTo = p.Unfed[:0], p.UnfedFrom[:0], p.UnfedTo[:0]
 	p.YieldGC, p.Goroutines = p.YieldGC[:0], p.Goroutines[:0]
 	p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups = p.YieldScav[:0], p.YieldCleanups[:0], p.YieldFinalizers[:0], p.Cleanups[:0]
 }
@@ -276,6 +289,9 @@ var probeHooks struct {
 	present func() (wait, over, draw time.Duration)
 	slowest func() (call string, d time.Duration) // the longest host call of the last Draw
 	world   func() string                         // the frame's world draw, worldDetail's text ("" for none)
+	// refillGap is the longest interval between two refill attempts since its last
+	// call, with the sites of its ends (runloop.Runner.TakeRefillGap).
+	refillGap func() (d time.Duration, from, to string)
 }
 
 // worldDetail is the audiodry text of a frame's world draw: the span between the
@@ -307,10 +323,17 @@ func (p *frameProbe) frameDetail(n int) string {
 			slow = "-"
 		}
 		return fmt.Sprintf(" present-wait-ms=%.1f sleep-over-ms=%.1f draw-ms=%.1f yield-ms=%.1f gc-ms=%.1f audio-write-ms=%.1f draw-slowest=%s",
-			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)), slow) + at(p.WorldDraw, i)
+			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)), slow) + at(p.WorldDraw, i) +
+			fmt.Sprintf(" unfed-ms=%.1f unfed-from=%s unfed-to=%s", ms(at(p.Unfed, i)), at(p.UnfedFrom, i), at(p.UnfedTo, i))
 	}
 	return ""
 }
+
+// workletQuantum is the shortest ring the page's worklet takes for played out:
+// it counts an underrun when the ring holds less than one render quantum (128
+// frames at 48 kHz, 2.7 ms; wasmbox/audioring audio-worklet.js), not when it is
+// empty.
+const workletQuantum = 0.003
 
 // maxDryLines bounds the audiodry lines of a window in the brief report.
 const maxDryLines = 16
@@ -334,7 +357,7 @@ func writeAudioGaps(out io.Writer, p *frameProbe) {
 	if p == nil || p.wl == nil {
 		return
 	}
-	var writes, dry, lines int
+	var writes, dry, lines, tight, tightLines int
 	var worst, total float64
 	var over [3]int
 	var queues []float64
@@ -360,6 +383,16 @@ func writeAudioGaps(out io.Writer, p *frameProbe) {
 					fmt.Fprintf(out, "audiodry unix-ms=%d gap-ms=%.1f queued-ms=%.1f short-ms=%.1f from=%s#%d to=%s#%d%s\n",
 						w.Start.UnixMilli(), gap*1e3, held*1e3, short*1e3, prev.Site, prev.Frame, w.Site, w.Frame, p.frameDetail(w.Frame))
 				}
+			} else if short > -workletQuantum {
+				// Not dry by the game's measure (the queue outlasted the gap), but the
+				// page counts an underrun when the ring falls under ONE worklet quantum:
+				// a gap that leaves less than that is heard as one.
+				tight++
+				if !slowBrief || tightLines < maxDryLines {
+					tightLines++
+					fmt.Fprintf(out, "audiotight unix-ms=%d gap-ms=%.1f queued-ms=%.1f left-ms=%.1f from=%s#%d to=%s#%d%s\n",
+						w.Start.UnixMilli(), gap*1e3, held*1e3, -short*1e3, prev.Site, prev.Frame, w.Site, w.Frame, p.frameDetail(w.Frame))
+				}
 			}
 		}
 		prev = &p.Writes[j]
@@ -369,8 +402,8 @@ func writeAudioGaps(out io.Writer, p *frameProbe) {
 	if len(queues) > 0 {
 		med = queues[len(queues)/2]
 	}
-	fmt.Fprintf(out, "audiogaps: %d of %d writes ran dry, %.0f ms short in all, worst %.1f ms, median queue before a dry gap %.1f ms; writes more than 50 100 200 ms after the one before: %d %d %d\n",
-		dry, writes, total*1e3, worst*1e3, med*1e3, over[0], over[1], over[2])
+	fmt.Fprintf(out, "audiogaps: %d of %d writes ran dry, %.0f ms short in all, worst %.1f ms, median queue before a dry gap %.1f ms; writes more than 50 100 200 ms after the one before: %d %d %d; %d more left under %.1f ms of queue (a worklet quantum)\n",
+		dry, writes, total*1e3, worst*1e3, med*1e3, over[0], over[1], over[2], tight, workletQuantum*1e3)
 }
 
 // dumpGoroutines prints, once, the goroutines the guest has and where each one

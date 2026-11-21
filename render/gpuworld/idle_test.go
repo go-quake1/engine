@@ -103,7 +103,7 @@ func TestFeedIsDueOnTheClock(t *testing.T) {
 	g.fedAt = now
 	for i := 0; i < 6; i++ {
 		now = now.Add(4 * time.Millisecond)
-		if err := g.Feed(); err != nil {
+		if err := g.Feed(SiteFaces); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,8 +118,22 @@ func TestFeedIsDueOnTheClock(t *testing.T) {
 				t.Errorf("no idle, long overdue: Feed panicked: %v", p)
 			}
 		}()
-		if err := g.Feed(); err != nil {
+		if err := g.Feed(SiteFaces); err != nil {
 			t.Errorf("no idle: %v", err)
 		}
 	}()
+
+	// IdleAt is told the place in the frame, and takes the place of Idle.
+	var sites []string
+	g.Idle = func() error { t.Error("Idle ran with IdleAt set"); return nil }
+	g.IdleAt = func(site string) error { sites = append(sites, site); return nil }
+	for _, s := range []string{SiteWalk, SiteEntities, SiteRecord} {
+		now = now.Add(time.Hour)
+		if err := g.Feed(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sites) != 3 || sites[0] != SiteWalk || sites[1] != SiteEntities || sites[2] != SiteRecord {
+		t.Errorf("IdleAt sites = %v, want walk, entities, record", sites)
+	}
 }

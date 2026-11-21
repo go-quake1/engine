@@ -99,6 +99,11 @@ func (b *batchWorld) SetIdle(f func() error) {
 	b.r.SetIdle(f)
 }
 
+// SetIdleAt makes the frame's CPU work run f with its place in the frame
+// (gpuworld.SiteWalk...), instead of SetIdle's function: the sound write log then
+// names the span a refill came out of.
+func (b *batchWorld) SetIdleAt(f func(site string) error) { b.r.SetIdleAt(f) }
+
 // Waited is the time of the last draw spent waiting for the GPU, and the part of
 // it that ran the idle function (waitTimer).
 func (b *batchWorld) Waited() (wait, idle time.Duration) { return b.sink.Waited() }
