@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/go-quake1/engine/worldview"
 )
 
 // WinQuake calls S_ExtraUpdate inside the edge scan (r_edge.c:728): the frame's
@@ -40,8 +42,17 @@ func TestDrawsRunsIdleBetweenFaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runs != checks {
-		t.Errorf("Idle ran %d times, want once at each of the %d checks (every %d faces of %d) as the clock is always 5 ms on", runs, checks, idleFaces, len(faces))
+	// One more than the checks: the one after the walk (below).
+	if runs != checks+1 {
+		t.Errorf("Idle ran %d times, want once at each of the %d checks (every %d faces of %d) and once after the walk, as the clock is always 5 ms on", runs, checks, idleFaces, len(faces))
+	}
+
+	// The walk's end feeds the sound even when nothing is drawn (r_edge.c:728 is
+	// before the scan, whatever it finds): a view outside the map sees no face.
+	runs = 0
+	out := worldview.View{Origin: [3]float32{1e7, 1e7, 1e7}}
+	if none, err := g.Draws(w, out, 320, 200, nil, Chosen); err != nil || len(none) != 0 || runs != 1 {
+		t.Errorf("a view outside the map: %d draws (%v), Idle ran %d times, want 0 draws and 1 run", len(none), err, runs)
 	}
 
 	// A clock that does not move never makes it due.
@@ -79,4 +90,36 @@ func TestDrawsRunsIdleBetweenFaces(t *testing.T) {
 	if again, err := g.Draws(w, v, 320, 200, nil, Chosen); err != nil || len(again) != len(plain) {
 		t.Errorf("no idle: %d draws (%v), want %d", len(again), err, len(plain))
 	}
+}
+
+// Feed is what the entity loop and the pass recording call between items: it
+// runs Idle once IdleEvery has passed since the last run, and never otherwise.
+func TestFeedIsDueOnTheClock(t *testing.T) {
+	var now time.Time
+	runs := 0
+	g := &Geometry{IdleEvery: 10 * time.Millisecond}
+	g.Clock = func() time.Time { return now }
+	g.Idle = func() error { runs++; return nil }
+	g.fedAt = now
+	for i := 0; i < 6; i++ {
+		now = now.Add(4 * time.Millisecond)
+		if err := g.Feed(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runs != 2 {
+		t.Errorf("24 ms in 4 ms steps with a 10 ms slice: Idle ran %d times, want 2", runs)
+	}
+	g.Idle = nil
+	now = now.Add(time.Hour)
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Errorf("no idle, long overdue: Feed panicked: %v", p)
+			}
+		}()
+		if err := g.Feed(); err != nil {
+			t.Errorf("no idle: %v", err)
+		}
+	}()
 }

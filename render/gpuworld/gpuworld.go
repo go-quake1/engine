@@ -171,6 +171,7 @@ type Geometry struct {
 	// BakeTime is the time the last Draws spent in render.DrawSurface (the CPU
 	// side of the re-bakes, apart from the upload).
 	BakeTime time.Duration
+	fedAt    time.Time // when Idle last ran, or this frame's Draws began
 
 	// Idle, if set, is run by Draws between faces, at most once every IdleEvery
 	// (DefaultIdleEvery when zero): the frame's BSP-side work and re-bakes are the
@@ -446,19 +447,16 @@ type FaceDraw struct {
 // also refuses (every vertex behind the near plane), each with its mip level
 // for this frame.
 func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []FaceDraw, pol MipPolicy) ([]FaceDraw, error) {
-	clock := g.Clock
-	if clock == nil {
-		clock = time.Now
-	}
-	every := g.IdleEvery
-	if every <= 0 {
-		every = DefaultIdleEvery
-	}
-	last := clock() // the last time the program fed its sound: this call's start
+	g.fedAt = g.now() // the last time the program fed its sound: this call's start
 	var idleErr error
 	faces, err := w.Visible(v, width, height)
 	if err != nil {
 		return nil, err
+	}
+	// The BSP walk and the leaf marking are done: R_RenderWorld's end, where
+	// R_ScanEdges calls S_ExtraUpdate (r_edge.c:728).
+	if err := g.Feed(); err != nil {
+		idleErr = err
 	}
 	view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
 	mv := worldview.NewMipView(width, height, w.FOV)
@@ -475,12 +473,9 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 		if g.Count[idx] == 0 {
 			continue
 		}
-		if g.Idle != nil && n%idleFaces == 0 {
-			if now := clock(); now.Sub(last) >= every {
-				if err := g.Idle(); err != nil && idleErr == nil {
-					idleErr = err
-				}
-				last = clock()
+		if n%idleFaces == 0 {
+			if err := g.Feed(); err != nil && idleErr == nil {
+				idleErr = err
 			}
 		}
 		f := w.Faces[idx]
@@ -502,6 +497,32 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 		}
 	}
 	return out, idleErr
+}
+
+func (g *Geometry) now() time.Time {
+	if g.Clock != nil {
+		return g.Clock()
+	}
+	return time.Now()
+}
+
+// Feed runs Idle (the program's S_ExtraUpdate) when IdleEvery has passed since
+// the last time it ran or the frame's Draws began. It reads the clock, so a
+// caller puts it between steps of work, not inside the cheapest loops.
+func (g *Geometry) Feed() error {
+	if g.Idle == nil {
+		return nil
+	}
+	every := g.IdleEvery
+	if every <= 0 {
+		every = DefaultIdleEvery
+	}
+	if g.now().Sub(g.fedAt) < every {
+		return nil
+	}
+	err := g.Idle()
+	g.fedAt = g.now()
+	return err
 }
 
 // DefaultIdleEvery is the time between two runs of Geometry.Idle in a Draws:

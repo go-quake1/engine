@@ -308,8 +308,16 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 	p.SetBindGroup(0, r.group)
 	p.SetVertexBuffer(0, r.vb, 0, 0)
 	p.SetIndexBuffer(r.ib, webgpu.IndexFormatUint32, 0, 0)
+	// Recording the draw calls is the frame's CPU too: the sound is fed between
+	// them. The pass is ended whatever the feed returned.
+	var feedErr error
 	if !r.SkipWorld {
-		for _, d := range r.draws {
+		for i, d := range r.draws {
+			if i%idleFaces == 0 {
+				if err := r.geo.Feed(); err != nil && feedErr == nil {
+					feedErr = err
+				}
+			}
 			p.DrawIndexed(d.Count, 1, d.First, 0, d.Mip)
 		}
 	}
@@ -321,9 +329,11 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 		return err
 	}
 	if r.layered {
-		return r.recordAliasLayer()
+		if err := r.recordAliasLayer(); err != nil {
+			return err
+		}
 	}
-	return nil
+	return feedErr
 }
 
 // BakeTime is the time the last frame spent baking the surfaces it re-baked
