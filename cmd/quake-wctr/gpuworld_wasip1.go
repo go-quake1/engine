@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-gfx/webgpu"
 	"github.com/go-wasmcontainers/gpu/wasigpu/batchsink"
@@ -82,3 +83,12 @@ func (b *batchWorld) lost(err error) error {
 	return err
 }
 func (b *batchWorld) Close() { b.sink.Close() }
+
+// ResetSlowest and Slowest are the sink's longest host call of the frame
+// (drawTimer): the submit crosses through the sink, not the presenter's device.
+func (b *batchWorld) ResetSlowest()                    { b.sink.ResetSlowest() }
+func (b *batchWorld) Slowest() (string, time.Duration) { return b.sink.Slowest() }
+
+// SetIdle makes a frame's wait for the GPU run f between polls of the host
+// (batchsink.Sink.SetIdle): WinQuake's S_ExtraUpdate inside rendering.
+func (b *batchWorld) SetIdle(f func() error) { b.sink.SetIdle(f) }
