@@ -111,7 +111,15 @@ func TestFeedIsDueOnTheClock(t *testing.T) {
 		t.Errorf("24 ms in 4 ms steps with a 10 ms slice: Idle ran %d times, want 2", runs)
 	}
 	g.Idle = nil
-	if err := g.Feed(); err != nil {
-		t.Errorf("no idle: %v", err)
-	}
+	now = now.Add(time.Hour)
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Errorf("no idle, long overdue: Feed panicked: %v", p)
+			}
+		}()
+		if err := g.Feed(); err != nil {
+			t.Errorf("no idle: %v", err)
+		}
+	}()
 }
