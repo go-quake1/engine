@@ -331,3 +331,13 @@ func TestAudioDryLineCarriesThePresentOfItsFrame(t *testing.T) {
 		t.Errorf("the dry line:\n%s", out.String())
 	}
 }
+
+// A frame with no world draw (the menu) adds nothing to the dry line.
+func TestWorldDetailIsEmptyWithoutAWorldDraw(t *testing.T) {
+	if got := worldDetail(worldDraw{}, false); got != "" {
+		t.Errorf("worldDetail = %q", got)
+	}
+	if got := worldDetail(worldDraw{gpu: time.Millisecond}, true); !strings.HasSuffix(got, "world-slowest=-") {
+		t.Errorf("no host call named: %q", got)
+	}
+}

@@ -186,3 +186,24 @@ func TestLastPresentKeepsTheSlowestHostCallOfTheDraw(t *testing.T) {
 		t.Errorf("LastPresent %+v", got)
 	}
 }
+
+// A caller timing a span the Draw does not cover (the world draw) reads the
+// driver's longest call through the presenter, and a driver that cannot time its
+// calls says nothing rather than something stale.
+func TestHostSlowestReadsTheDriversLongestCall(t *testing.T) {
+	drv := &slowDriver{name: "stale", d: time.Second}
+	p, _ := New(drv, 8, 4)
+	p.ResetHostSlowest()
+	if n, d := p.HostSlowest(); n != "" || d != 0 {
+		t.Errorf("after the reset: %q %v", n, d)
+	}
+	drv.name, drv.d = "[method]queue.submit", 30*time.Millisecond
+	if n, d := p.HostSlowest(); n != "[method]queue.submit" || d != 30*time.Millisecond {
+		t.Errorf("HostSlowest = %q %v", n, d)
+	}
+	plain, _ := New(&fakeDriver{}, 8, 4)
+	plain.ResetHostSlowest()
+	if n, d := plain.HostSlowest(); n != "" || d != 0 {
+		t.Errorf("a driver that cannot time: %q %v", n, d)
+	}
+}
