@@ -209,7 +209,13 @@ func (r *Renderer) prepareAlias(ents []worldview.AliasEnt) error {
 	// R_AliasCheckBBox: the entities partly outside the view take r_aclip.c's
 	// clipping (the near plane and the four sides of the frame).
 	rd := &render.RefDef{ViewAngles: r.cur.Angles, ViewOrigin: r.cur.Origin, FovX: r.w.FOV, FovY: r.w.FOV}
+	var feedErr error
 	clip := func(e worldview.AliasEnt) bool {
+		// One entity's classification is the loop of R_DrawEntitiesOnList, where the
+		// program feeds its sound between entities (r_main.c:982).
+		if err := r.geo.Feed(); err != nil && feedErr == nil {
+			feedErr = err
+		}
 		ent := render.AliasEntityInterp{
 			AliasEntity:  render.AliasEntity{Origin: e.Origin, AnglePitch: e.Angles[0], AngleYaw: e.Angles[1], AngleRoll: e.Angles[2], FrameIdx: e.Frame},
 			FrameIdxNext: e.Next, Lerp: e.Lerp,
@@ -221,7 +227,7 @@ func (r *Renderer) prepareAlias(ents []worldview.AliasEnt) error {
 		return err
 	}
 	r.rec.WriteBuffer(a.ents, 0, a.data)
-	return nil
+	return feedErr
 }
 
 // recordAlias draws the prepared entities in the open pass.
