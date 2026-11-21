@@ -65,6 +65,19 @@ type gameWorld struct {
 	entCount, entFrames int
 }
 
+// idleSetter is a [gpuDrawer] whose wait for the GPU can run a function in
+// slices (the batch device's submit_begin / submit_ready polling).
+type idleSetter interface{ SetIdle(f func() error) }
+
+// SetIdle makes the drawer's wait for the GPU run f between polls, when the
+// drawer can (WinQuake calls S_ExtraUpdate inside rendering: r_main.c:937, 982,
+// 991, r_edge.c:728, draw.c:850, 868, gl_rmain.c:961). Another drawer blocks.
+func (g *gameWorld) SetIdle(f func() error) {
+	if is, ok := g.gd.(idleSetter); ok {
+		is.SetIdle(f)
+	}
+}
+
 // errEntitiesOff is why the GPU draws no alias entity: --gpu-entities=false.
 var errEntitiesOff = errors.New("--gpu-entities=false")
 
@@ -179,6 +192,10 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 	if g.slow != nil {
 		g.slow.ResetHostSlowest()
 	}
+	dt, _ := g.gd.(drawTimer)
+	if dt != nil {
+		dt.ResetSlowest()
+	}
 	t0 := time.Now()
 	var frame []byte
 	var err error
@@ -213,7 +230,20 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 	if g.slow != nil {
 		g.last.slowName, g.last.slowFor = g.slow.HostSlowest()
 	}
+	// The frame's own submit crosses through the batch sink, which the
+	// presenter's device does not see: the longer of the two is the draw's.
+	if dt != nil {
+		if n, d := dt.Slowest(); n != "" && d > g.last.slowFor {
+			g.last.slowName, g.last.slowFor = n, d
+		}
+	}
 	return nil
+}
+
+// drawTimer is a [gpuDrawer] that times its own host calls (batchsink.Sink).
+type drawTimer interface {
+	ResetSlowest()
+	Slowest() (string, time.Duration)
 }
 
 // worldDraw is what the last DrawWorld spent: the submit with its read-back,

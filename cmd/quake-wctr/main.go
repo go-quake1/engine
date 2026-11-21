@@ -383,6 +383,11 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 	if idler, ok := gs.Presenter.(interface{ SetIdle(func() error) }); ok {
 		idler.SetIdle(r.ExtraUpdate)
 	}
+	// The world's wait for the GPU does the same (WinQuake calls S_ExtraUpdate
+	// inside rendering); the runner honours snd_noextraupdate.
+	if gw, ok := so.WorldDraw.(*gameWorld); ok {
+		gw.SetIdle(func() error { return r.ExtraUpdateAt("world") })
+	}
 	probeHooks.frameNo = func() int { return r.FrameNo }
 	probeHooks.present = nil
 	if pt, ok := gs.Presenter.(interface {
