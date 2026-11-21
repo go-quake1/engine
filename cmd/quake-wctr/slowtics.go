@@ -57,6 +57,7 @@ type frameProbe struct {
 	PresentOver []time.Duration
 	PresentDraw []time.Duration
 	PresentSlow []string // the longest host call of the frame's Draw, "name:ms"
+	WorldDraw   []string // the frame's world draw: " world-gpu-ms=.. world-copy-ms=.. world-slowest=..", "" for none
 
 	Writes     []wasisurface.WriteRecord // every sound write of the window, in order
 	prevWrite  *wasisurface.WriteRecord  // the last write of the window before
@@ -218,6 +219,11 @@ func (p *frameProbe) frame(yield time.Duration) {
 		}
 		p.PresentSlow = append(p.PresentSlow, slow)
 	}
+	world := ""
+	if probeHooks.world != nil {
+		world = probeHooks.world()
+	}
+	p.WorldDraw = append(p.WorldDraw, world)
 	c, ps := p.read()
 	p.GC = append(p.GC, int(c-p.gcCycles))
 	p.GCPause = append(p.GCPause, time.Duration((ps-p.gcPause)*float64(time.Second)))
@@ -246,7 +252,7 @@ func (p *frameProbe) reset() {
 	}
 	p.Yield, p.ProbeCost, p.Writes = p.Yield[:0], p.ProbeCost[:0], p.Writes[:0]
 	p.FrameNos, p.PresentWait, p.PresentOver, p.PresentDraw = p.FrameNos[:0], p.PresentWait[:0], p.PresentOver[:0], p.PresentDraw[:0]
-	p.PresentSlow = p.PresentSlow[:0]
+	p.PresentSlow, p.WorldDraw = p.PresentSlow[:0], p.WorldDraw[:0]
 	p.YieldGC, p.Goroutines = p.YieldGC[:0], p.Goroutines[:0]
 	p.YieldScav, p.YieldCleanups, p.YieldFinalizers, p.Cleanups = p.YieldScav[:0], p.YieldCleanups[:0], p.YieldFinalizers[:0], p.Cleanups[:0]
 }
@@ -266,6 +272,22 @@ var probeHooks struct {
 	frameNo func() int
 	present func() (wait, over, draw time.Duration)
 	slowest func() (call string, d time.Duration) // the longest host call of the last Draw
+	world   func() string                         // the frame's world draw, worldDetail's text ("" for none)
+}
+
+// worldDetail is the audiodry text of a frame's world draw: the span between the
+// frame's tic-end refill and its "world" refill is the input, the client tick
+// and this draw, so the draw's two parts and its longest host call say whether
+// the GPU's world stage is where a dry gap went.
+func worldDetail(d worldDraw, ok bool) string {
+	if !ok {
+		return ""
+	}
+	slow := "-"
+	if d.slowName != "" {
+		slow = fmt.Sprintf("%s:%.1f", d.slowName, ms(d.slowFor))
+	}
+	return fmt.Sprintf(" world-gpu-ms=%.1f world-copy-ms=%.1f world-slowest=%s", ms(d.gpu), ms(d.copy), slow)
 }
 
 // frameDetail says, for the frame with number n of the window, where its present
@@ -281,7 +303,7 @@ func (p *frameProbe) frameDetail(n int) string {
 			slow = "-"
 		}
 		return fmt.Sprintf(" present-wait-ms=%.1f sleep-over-ms=%.1f draw-ms=%.1f yield-ms=%.1f gc-ms=%.1f audio-write-ms=%.1f draw-slowest=%s",
-			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)), slow)
+			ms(at(p.PresentWait, i)), ms(at(p.PresentOver, i)), ms(at(p.PresentDraw, i)), ms(at(p.Yield, i)), ms(at(p.GCPause, i)), ms(at(p.AudioWrite, i)), slow) + at(p.WorldDraw, i)
 	}
 	return ""
 }
