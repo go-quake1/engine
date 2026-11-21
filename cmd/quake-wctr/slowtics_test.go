@@ -290,6 +290,29 @@ func TestWriteAudioGaps(t *testing.T) {
 	}
 }
 
+// A dry gap that ends at a frame's "world" refill carries that frame's world
+// draw (its two parts and the longest host call): the span from the tic's end to
+// the world refill is otherwise unattributed.
+func TestAudioDryLineCarriesTheWorldDrawOfItsFrame(t *testing.T) {
+	gw := &gameWorld{}
+	gw.last = worldDraw{gpu: 76 * time.Millisecond, copy: 2 * time.Millisecond, slowName: "queue.on-submitted-work-done", slowFor: 70 * time.Millisecond}
+	probeHooks.frameNo = func() int { return 3 }
+	probeHooks.world = func() string { return worldDetail(gw.takeWorldDraw()) }
+	defer func() { probeHooks.frameNo, probeHooks.world = nil, nil }()
+	l := &fakeWriteLog{}
+	p := &frameProbe{wl: l}
+	l.recs = []wasisurface.WriteRecord{wrec(0, 882, "tic-end", 2), wrec(200*time.Millisecond, 882, "world", 3)}
+	p.frame(0)
+	var out bytes.Buffer
+	writeAudioGaps(&out, p)
+	if !strings.Contains(out.String(), "from=tic-end#2 to=world#3") || !strings.Contains(out.String(), " world-gpu-ms=76.0 world-copy-ms=2.0 world-slowest=queue.on-submitted-work-done:70.0") {
+		t.Errorf("the dry line:\n%s", out.String())
+	}
+	if _, ok := gw.takeWorldDraw(); ok {
+		t.Error("the world draw was not forgotten once read")
+	}
+}
+
 // A dry gap's line carries where its frame's present went (the wait for the page,
 // the most a sleep of it overshot, the Draw), looked up by the frame's number.
 func TestAudioDryLineCarriesThePresentOfItsFrame(t *testing.T) {

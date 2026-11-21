@@ -46,6 +46,11 @@ type gameWorld struct {
 
 	times gpuTimes // per frame, for the --frames phase line
 
+	// last is the frame's world draw, read by the frame probe; slow times the
+	// host calls of it (nil: not timed).
+	last worldDraw
+	slow hostTimer
+
 	// The alias entities on the GPU (runner.EntityDrawer): ld is the drawer's
 	// entity layer (nil: none), ents the frame's entities, layer the last frame's
 	// entity layer; swap, with the planted defect, maps a model to the copy whose
@@ -171,6 +176,9 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 	if g.styles != nil {
 		g.wv.Anim.Style = g.styles
 	}
+	if g.slow != nil {
+		g.slow.ResetHostSlowest()
+	}
 	t0 := time.Now()
 	var frame []byte
 	var err error
@@ -199,8 +207,36 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 	for y := 0; y < fb.Height; y++ {
 		copy(fb.Pixels[y*fb.Pitch:y*fb.Pitch+g.w], frame[y*g.w:(y+1)*g.w])
 	}
-	g.times.add(t1.Sub(t0), time.Since(t1))
+	cp := time.Since(t1)
+	g.times.add(t1.Sub(t0), cp)
+	g.last = worldDraw{gpu: t1.Sub(t0), copy: cp}
+	if g.slow != nil {
+		g.last.slowName, g.last.slowFor = g.slow.HostSlowest()
+	}
 	return nil
+}
+
+// worldDraw is what the last DrawWorld spent: the submit with its read-back,
+// the copy into the frame buffer, and the longest host call of the two.
+type worldDraw struct {
+	gpu, copy time.Duration
+	slowName  string
+	slowFor   time.Duration
+}
+
+// hostTimer is what the world draw reads the longest host call from
+// (wasipresent.Presenter).
+type hostTimer interface {
+	ResetHostSlowest()
+	HostSlowest() (string, time.Duration)
+}
+
+// takeWorldDraw returns the world draw of the frame since the last call and
+// forgets it, so a frame with no world draw (the menu) reports none.
+func (g *gameWorld) takeWorldDraw() (worldDraw, bool) {
+	d := g.last
+	g.last = worldDraw{}
+	return d, d != (worldDraw{})
 }
 
 // checkStats accumulates the per-frame comparison of --gpuworld-check.

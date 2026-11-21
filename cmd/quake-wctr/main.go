@@ -398,8 +398,13 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 		}
 	}
 	var gt *gpuTimes
+	probeHooks.world = nil
 	if gw, ok := so.WorldDraw.(*gameWorld); ok {
 		gt = &gw.times
+		if ht, ok := gs.Presenter.(hostTimer); ok {
+			gw.slow = ht
+		}
+		probeHooks.world = func() string { return worldDetail(gw.takeWorldDraw()) }
 	}
 	if err := loop(out, r, mixerBackend(be), frames, gt); err != nil {
 		return err

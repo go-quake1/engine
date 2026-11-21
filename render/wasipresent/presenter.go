@@ -196,6 +196,24 @@ func (p *Presenter) Present(pixels []byte, width, height, pitch int, pal *render
 	return err
 }
 
+// ResetHostSlowest starts a reading of the longest host call, for a caller that
+// times a span of the frame the Draw does not cover (the world draw). A driver
+// that cannot time its calls ignores it.
+func (p *Presenter) ResetHostSlowest() {
+	if sd, ok := p.drv.(SlowDriver); ok {
+		sd.ResetSlowest()
+	}
+}
+
+// HostSlowest is the longest host call since ResetHostSlowest (empty name: the
+// driver cannot say).
+func (p *Presenter) HostSlowest() (string, time.Duration) {
+	if sd, ok := p.drv.(SlowDriver); ok {
+		return sd.SlowestCall()
+	}
+	return "", 0
+}
+
 // Close drops the driver's GPU objects.
 func (p *Presenter) Close() { p.drv.Close() }
 
