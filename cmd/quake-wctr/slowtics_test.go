@@ -137,6 +137,10 @@ func TestReportWindow(t *testing.T) {
 // The probe sees the collector and the sound write: a forced collection shows
 // as a cycle in its frame, the write time is taken once.
 func TestFrameProbe(t *testing.T) {
+	// A process that has collected before the probe exists (every test that ran
+	// earlier, a game that loaded its map) must not report those cycles in the
+	// probe's first frame: the baseline is taken when the probe is made.
+	runtime.GC()
 	w := &fakeWriteTimer{}
 	steps := 0
 	p := newFrameProbe(w, func() int { return steps })
@@ -295,7 +299,8 @@ func TestWriteAudioGaps(t *testing.T) {
 // the world refill is otherwise unattributed.
 func TestAudioDryLineCarriesTheWorldDrawOfItsFrame(t *testing.T) {
 	gw := &gameWorld{}
-	gw.last = worldDraw{gpu: 76 * time.Millisecond, copy: 2 * time.Millisecond, slowName: "queue.on-submitted-work-done", slowFor: 70 * time.Millisecond}
+	gw.last = worldDraw{gpu: 76 * time.Millisecond, copy: 2 * time.Millisecond, wait: 60 * time.Millisecond, idle: 20 * time.Millisecond,
+		bake: 9 * time.Millisecond, upload: 3 * time.Millisecond, slowName: "queue.on-submitted-work-done", slowFor: 70 * time.Millisecond}
 	probeHooks.frameNo = func() int { return 3 }
 	probeHooks.world = func() string { return worldDetail(gw.takeWorldDraw()) }
 	defer func() { probeHooks.frameNo, probeHooks.world = nil, nil }()
@@ -305,7 +310,7 @@ func TestAudioDryLineCarriesTheWorldDrawOfItsFrame(t *testing.T) {
 	p.frame(0)
 	var out bytes.Buffer
 	writeAudioGaps(&out, p)
-	if !strings.Contains(out.String(), "from=tic-end#2 to=world#3") || !strings.Contains(out.String(), " world-gpu-ms=76.0 world-copy-ms=2.0 world-slowest=queue.on-submitted-work-done:70.0") {
+	if !strings.Contains(out.String(), "from=tic-end#2 to=world#3") || !strings.Contains(out.String(), " world-gpu-ms=76.0 world-copy-ms=2.0 world-slowest=queue.on-submitted-work-done:70.0 world-cpu-ms=16.0 world-wait-ms=60.0 world-idle-ms=20.0 world-bake-ms=9.0 world-upload-ms=3.0") {
 		t.Errorf("the dry line:\n%s", out.String())
 	}
 	if _, ok := gw.takeWorldDraw(); ok {
@@ -337,7 +342,7 @@ func TestWorldDetailIsEmptyWithoutAWorldDraw(t *testing.T) {
 	if got := worldDetail(worldDraw{}, false); got != "" {
 		t.Errorf("worldDetail = %q", got)
 	}
-	if got := worldDetail(worldDraw{gpu: time.Millisecond}, true); !strings.HasSuffix(got, "world-slowest=-") {
+	if got := worldDetail(worldDraw{gpu: time.Millisecond}, true); !strings.Contains(got, "world-slowest=- world-cpu-ms=1.0 world-wait-ms=0.0") {
 		t.Errorf("no host call named: %q", got)
 	}
 }

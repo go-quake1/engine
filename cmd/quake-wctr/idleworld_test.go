@@ -8,10 +8,83 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/render"
 	"github.com/go-quake1/engine/runloop"
+	"github.com/go-quake1/engine/sound"
 	"github.com/go-quake1/engine/worldview"
 )
+
+// siteBackend is a queued audio output that is always empty, so that every
+// refill queues a mix, and counts them by the site (Runner.MixSite) that made
+// them.
+type siteBackend struct {
+	backend.Backend
+	r     *runloop.Runner
+	sites map[string]int
+}
+
+func (b *siteBackend) QueuedFrames() int { return 0 }
+func (b *siteBackend) QueueAudio(s []sound.StereoSample) error {
+	b.sites[b.r.MixSite]++
+	return nil
+}
+
+// WinQuake calls S_ExtraUpdate inside rendering, where the frame is CPU-heavy
+// (r_main.c:937 after the world, 982 after the entities, 991 after the
+// particles): a frame of the game must refill the sound at those places, not
+// only after the draw. Before, a frame's refills were its tic-end, "world" and
+// "compose" ones.
+func TestRenderingRefillsTheSoundAtWinQuakesSites(t *testing.T) {
+	p := &fakePresenter{}
+	closes := 0
+	withSurface(t, p, false, &closes)
+	oldTR := testRunner
+	sb := &siteBackend{sites: map[string]int{}}
+	testRunner = func(r *runloop.Runner) { sb.r = r }
+	oldTM := testMixer
+	testMixer = func(be backend.Backend) backend.Backend { sb.Backend = be; return sb }
+	t.Cleanup(func() { testRunner, testMixer = oldTR, oldTM })
+	var out, errOut bytes.Buffer
+	if err := runGameWith(&out, &errOut, realFS(t), "e1m1", 64, 40, 4, gameOpts{}); err != nil {
+		t.Fatalf("%v\n%s", err, errOut.String())
+	}
+	for _, site := range []string{"tic-end", "world", "world-faces", "entities", "particles", "compose"} {
+		if sb.sites[site] == 0 {
+			t.Errorf("no refill at %q over 4 frames: %v", site, sb.sites)
+		}
+	}
+}
+
+// waitedGPU is a drawer that says how its draw split (waitTimer, bakeTimer).
+type waitedGPU struct{ w, h int }
+
+func (g waitedGPU) Draw(worldview.View) ([]byte, error) { return make([]byte, g.w*g.h), nil }
+func (g waitedGPU) Close()                              {}
+func (g waitedGPU) Waited() (time.Duration, time.Duration) {
+	return 60 * time.Millisecond, 20 * time.Millisecond
+}
+func (g waitedGPU) Bake() (time.Duration, time.Duration) {
+	return 9 * time.Millisecond, 3 * time.Millisecond
+}
+
+// The world draw of a frame carries how it split: the wait for the GPU, the part
+// of it that ran the sound mix, the re-bakes and their upload.
+func TestWorldDrawReadsTheWaitAndTheBake(t *testing.T) {
+	const w, h = 6, 3
+	fb, err := render.NewFrameBufferAligned(w, h, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &gameWorld{wv: &worldview.World{}, w: w, gd: waitedGPU{w, h}}
+	if err := g.DrawWorld(fb, [3]float32{}, [3]float32{}, 90, 0); err != nil {
+		t.Fatal(err)
+	}
+	d, ok := g.takeWorldDraw()
+	if !ok || d.wait != 60*time.Millisecond || d.idle != 20*time.Millisecond || d.bake != 9*time.Millisecond || d.upload != 3*time.Millisecond {
+		t.Errorf("world draw %+v", d)
+	}
+}
 
 // slowGPU is a gpuDrawer whose frame takes slices polls of the host to finish:
 // each poll runs the idle function it was given, as batchsink.Sink does while

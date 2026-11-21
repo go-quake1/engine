@@ -171,6 +171,14 @@ type Geometry struct {
 	// BakeTime is the time the last Draws spent in render.DrawSurface (the CPU
 	// side of the re-bakes, apart from the upload).
 	BakeTime time.Duration
+
+	// Idle, if set, is run by Draws between faces, at most once every IdleEvery
+	// (DefaultIdleEvery when zero): the frame's BSP-side work and re-bakes are the
+	// program's own CPU, where WinQuake calls S_ExtraUpdate (r_edge.c:728, inside
+	// the edge scan). Clock is time.Now, replaced by a test.
+	Idle      func() error
+	IdleEvery time.Duration
+	Clock     func() time.Time
 	// UpdateBudget is the most surface bytes one frame re-bakes (MaxUpdateBytes
 	// from Build).
 	UpdateBudget int
@@ -438,6 +446,16 @@ type FaceDraw struct {
 // also refuses (every vertex behind the near plane), each with its mip level
 // for this frame.
 func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int, out []FaceDraw, pol MipPolicy) ([]FaceDraw, error) {
+	clock := g.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	every := g.IdleEvery
+	if every <= 0 {
+		every = DefaultIdleEvery
+	}
+	last := clock() // the last time the program fed its sound: this call's start
+	var idleErr error
 	faces, err := w.Visible(v, width, height)
 	if err != nil {
 		return nil, err
@@ -457,6 +475,14 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 		if g.Count[idx] == 0 {
 			continue
 		}
+		if g.Idle != nil && n%idleFaces == 0 {
+			if now := clock(); now.Sub(last) >= every {
+				if err := g.Idle(); err != nil && idleErr == nil {
+					idleErr = err
+				}
+				last = clock()
+			}
+		}
 		f := w.Faces[idx]
 		// A face whose bounding sphere is inside the frustum is in front of
 		// the near plane and needs no clipping: its level from the z of its
@@ -475,8 +501,16 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 			out = append(out, FaceDraw{First: g.First[idx], Count: g.Count[idx], Mip: uint32(mip), Face: idx})
 		}
 	}
-	return out, nil
+	return out, idleErr
 }
+
+// DefaultIdleEvery is the time between two runs of Geometry.Idle in a Draws:
+// the slice of the sink's wait for the GPU (batchsink.IdleSlice).
+const DefaultIdleEvery = 2 * time.Millisecond
+
+// idleFaces is how many faces Draws goes through between two reads of the clock
+// that decides whether Idle is due.
+const idleFaces = 16
 
 // UniformSize is the size of the frame uniform in bytes.
 const UniformSize = 96

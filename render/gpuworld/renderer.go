@@ -330,6 +330,11 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 // (render.DrawSurface), apart from recording their upload ([Renderer.UploadTime]).
 func (r *Renderer) BakeTime() time.Duration { return r.geo.BakeTime }
 
+// SetIdle makes the frame's own CPU work (the face walk and the re-bakes of
+// Geometry.Draws) run f in slices of [DefaultIdleEvery]: WinQuake's S_ExtraUpdate
+// inside rendering (r_edge.c:728). nil stops it.
+func (r *Renderer) SetIdle(f func() error) { r.geo.Idle = f }
+
 // recordUpdates writes the surfaces the frame's Draws re-baked (light styles
 // and '+' textures that moved) into the atlases, one WriteTexture each, before
 // the pass that reads them.
