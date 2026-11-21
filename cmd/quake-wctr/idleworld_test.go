@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -20,14 +21,40 @@ import (
 // them.
 type siteBackend struct {
 	backend.Backend
-	r     *runloop.Runner
-	sites map[string]int
+	r      *runloop.Runner
+	sites  map[string]int
+	failAt string // the site whose refill fails
 }
 
 func (b *siteBackend) QueuedFrames() int { return 0 }
 func (b *siteBackend) QueueAudio(s []sound.StereoSample) error {
 	b.sites[b.r.MixSite]++
+	if b.failAt != "" && b.r.MixSite == b.failAt {
+		return errSiteRefill
+	}
 	return nil
+}
+
+var errSiteRefill = errors.New("refill refused")
+
+// A refill that fails inside rendering ends the frame with its error, at each
+// of the sites, instead of being dropped.
+func TestRenderingSiteRefillErrorEndsTheFrame(t *testing.T) {
+	for _, site := range []string{"world-faces", "entities", "particles"} {
+		p := &fakePresenter{}
+		closes := 0
+		withSurface(t, p, false, &closes)
+		oldTR, oldTM := testRunner, testMixer
+		sb := &siteBackend{sites: map[string]int{}, failAt: site}
+		testRunner = func(r *runloop.Runner) { sb.r = r }
+		testMixer = func(be backend.Backend) backend.Backend { sb.Backend = be; return sb }
+		var out, errOut bytes.Buffer
+		err := runGameWith(&out, &errOut, realFS(t), "e1m1", 64, 40, 4, gameOpts{})
+		testRunner, testMixer = oldTR, oldTM
+		if !errors.Is(err, errSiteRefill) {
+			t.Errorf("site %q: the frame ended with %v, want the refill's error", site, err)
+		}
+	}
 }
 
 // WinQuake calls S_ExtraUpdate inside rendering, where the frame is CPU-heavy
