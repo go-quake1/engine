@@ -177,7 +177,10 @@ type Geometry struct {
 	// (DefaultIdleEvery when zero): the frame's BSP-side work and re-bakes are the
 	// program's own CPU, where WinQuake calls S_ExtraUpdate (r_edge.c:728, inside
 	// the edge scan). Clock is time.Now, replaced by a test.
-	Idle      func() error
+	Idle func() error
+	// IdleAt, when set, runs instead of Idle and is told the place in the frame
+	// (SiteWalk, SiteFaces, SiteEntities, SiteRecord).
+	IdleAt    func(site string) error
 	IdleEvery time.Duration
 	Clock     func() time.Time
 	// UpdateBudget is the most surface bytes one frame re-bakes (MaxUpdateBytes
@@ -455,7 +458,7 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 	}
 	// The BSP walk and the leaf marking are done: R_RenderWorld's end, where
 	// R_ScanEdges calls S_ExtraUpdate (r_edge.c:728).
-	if err := g.Feed(); err != nil {
+	if err := g.Feed(SiteWalk); err != nil {
 		idleErr = err
 	}
 	view := (&render.RefDef{ViewAngles: v.Angles, ViewOrigin: v.Origin}).SetupView()
@@ -474,7 +477,7 @@ func (g *Geometry) Draws(w *worldview.World, v worldview.View, width, height int
 			continue
 		}
 		if n%idleFaces == 0 {
-			if err := g.Feed(); err != nil && idleErr == nil {
+			if err := g.Feed(SiteFaces); err != nil && idleErr == nil {
 				idleErr = err
 			}
 		}
@@ -509,8 +512,8 @@ func (g *Geometry) now() time.Time {
 // Feed runs Idle (the program's S_ExtraUpdate) when IdleEvery has passed since
 // the last time it ran or the frame's Draws began. It reads the clock, so a
 // caller puts it between steps of work, not inside the cheapest loops.
-func (g *Geometry) Feed() error {
-	if g.Idle == nil {
+func (g *Geometry) Feed(site string) error {
+	if g.Idle == nil && g.IdleAt == nil {
 		return nil
 	}
 	every := g.IdleEvery
@@ -520,10 +523,24 @@ func (g *Geometry) Feed() error {
 	if g.now().Sub(g.fedAt) < every {
 		return nil
 	}
-	err := g.Idle()
+	var err error
+	if g.IdleAt != nil {
+		err = g.IdleAt(site)
+	} else {
+		err = g.Idle()
+	}
 	g.fedAt = g.now()
 	return err
 }
+
+// The places of a frame's CPU work where Geometry.Feed runs the idle function:
+// they name the refill site in the sound write log.
+const (
+	SiteWalk     = "gpu-walk"     // after the BSP walk (r_edge.c:728)
+	SiteFaces    = "gpu-faces"    // between the faces of the draw list
+	SiteEntities = "gpu-entities" // between entities (r_main.c:982)
+	SiteRecord   = "gpu-record"   // between the draws of the recorded pass
+)
 
 // DefaultIdleEvery is the time between two runs of Geometry.Idle in a Draws:
 // the slice of the sink's wait for the GPU (batchsink.IdleSlice).

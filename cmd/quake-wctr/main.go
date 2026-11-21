@@ -387,7 +387,9 @@ func runGameWith(out, errOut io.Writer, fsys fs.FS, slug string, w, h, frames in
 	// inside rendering); the runner honours snd_noextraupdate.
 	if gw, ok := so.WorldDraw.(*gameWorld); ok {
 		gw.SetIdle(func() error { return r.ExtraUpdateAt("world") })
+		gw.SetIdleAt(r.ExtraUpdateAt)
 	}
+	probeHooks.refillGap = r.TakeRefillGap
 	probeHooks.frameNo = func() int { return r.FrameNo }
 	probeHooks.present = nil
 	if pt, ok := gs.Presenter.(interface {

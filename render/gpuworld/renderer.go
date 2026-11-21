@@ -314,7 +314,7 @@ func (r *Renderer) record(v worldview.View, ents []worldview.AliasEnt) error {
 	if !r.SkipWorld {
 		for i, d := range r.draws {
 			if i%idleFaces == 0 {
-				if err := r.geo.Feed(); err != nil && feedErr == nil {
+				if err := r.geo.Feed(SiteRecord); err != nil && feedErr == nil {
 					feedErr = err
 				}
 			}
@@ -344,6 +344,10 @@ func (r *Renderer) BakeTime() time.Duration { return r.geo.BakeTime }
 // Geometry.Draws) run f in slices of [DefaultIdleEvery]: WinQuake's S_ExtraUpdate
 // inside rendering (r_edge.c:728). nil stops it.
 func (r *Renderer) SetIdle(f func() error) { r.geo.Idle = f }
+
+// SetIdleAt is SetIdle with the place in the frame passed to f (the Site
+// constants), for the sound write log: it takes the place of SetIdle's function.
+func (r *Renderer) SetIdleAt(f func(site string) error) { r.geo.IdleAt = f }
 
 // recordUpdates writes the surfaces the frame's Draws re-baked (light styles
 // and '+' textures that moved) into the atlases, one WriteTexture each, before

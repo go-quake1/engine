@@ -5,6 +5,7 @@ package runloop
 
 import (
 	"testing"
+	"time"
 
 	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/sound"
@@ -118,5 +119,42 @@ func TestExtraUpdateBeforeTheFirstUpdateIsNothing(t *testing.T) {
 	r, d := mixRunner(t)
 	if err := r.ExtraUpdate(); err != nil || d.offered != 0 {
 		t.Errorf("before the first tic: err %v, %d frames", err, d.offered)
+	}
+}
+
+// What decides an underrun is the longest interval between two consecutive refill
+// ATTEMPTS: TakeRefillGap says it and the sites of its two ends, then forgets it,
+// and a refill that paints nothing still closes an interval.
+func TestTakeRefillGapNamesTheLongestInterval(t *testing.T) {
+	d := &dmaBackend{Recorder: backend.NewRecorder(0, 0)}
+	r, _ := newRunner(t, d)
+	pool, mixBuf := mixRunnerPool(t)
+	r.SoundPool, r.MixBuffer = pool, mixBuf
+	var now time.Time
+	now = time.Unix(1000, 0)
+	r.Clock = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		d.advance(1.0 / 30)
+		if err := r.RunFrame(1.0/30, float32(i+1)/30); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.TakeRefillGap()
+	at := func(after time.Duration, site string) {
+		now = now.Add(after)
+		if err := r.ExtraUpdateAt(site); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at(0, "a")
+	at(10*time.Millisecond, "b")
+	at(60*time.Millisecond, "c")
+	at(5*time.Millisecond, "d")
+	got, from, to := r.TakeRefillGap()
+	if got != 60*time.Millisecond || from != "b" || to != "c" {
+		t.Errorf("the longest interval = %v from %q to %q, want 60ms from b to c", got, from, to)
+	}
+	if got, from, to := r.TakeRefillGap(); got != 0 || from != "" || to != "" {
+		t.Errorf("not forgotten once taken: %v %q %q", got, from, to)
 	}
 }

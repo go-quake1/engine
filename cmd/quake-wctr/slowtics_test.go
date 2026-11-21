@@ -346,3 +346,37 @@ func TestWorldDetailIsEmptyWithoutAWorldDraw(t *testing.T) {
 		t.Errorf("no host call named: %q", got)
 	}
 }
+
+// The page counts an underrun when its ring falls under one worklet quantum, not
+// when it is empty: a gap that leaves the queue under 3 ms is "audiotight", not
+// dry, and counted in the summary; one that leaves 10 ms is neither.
+func TestWriteAudioGapsTightIsNotDryButCounted(t *testing.T) {
+	l := &fakeWriteLog{}
+	p := &frameProbe{wl: l}
+	l.recs = []wasisurface.WriteRecord{
+		wrec(0, 882, "tic-end", 1),                  // 80 ms queued, returns at 1 ms
+		wrec(80*time.Millisecond, 882, "world", 2),  // 79 ms gap: 1 ms of queue left
+		wrec(151*time.Millisecond, 882, "world", 3), // 70 ms gap: 10 ms left
+	}
+	p.frame(0)
+	var out bytes.Buffer
+	writeAudioGaps(&out, p)
+	got := out.String()
+	if strings.Contains(got, "audiodry ") || strings.Count(got, "audiotight ") != 1 ||
+		!strings.Contains(got, "audiotight unix-ms=1000080 gap-ms=79.0 queued-ms=80.0 left-ms=1.0 from=tic-end#1 to=world#2") ||
+		!strings.Contains(got, "audiogaps: 0 of 2 writes ran dry") || !strings.Contains(got, "; 1 more left under 3.0 ms of queue") {
+		t.Errorf("a gap leaving 1 ms of queue:\n%s", got)
+	}
+}
+
+// The frame's longest refill interval, and the sites of its ends, are on its line.
+func TestFrameDetailCarriesTheLongestUnfedInterval(t *testing.T) {
+	probeHooks.frameNo = func() int { return 7 }
+	probeHooks.refillGap = func() (time.Duration, string, string) { return 94 * time.Millisecond, "gpu-record", "world" }
+	defer func() { probeHooks.frameNo, probeHooks.refillGap = nil, nil }()
+	p := &frameProbe{}
+	p.frame(0)
+	if got := p.frameDetail(7); !strings.Contains(got, " unfed-ms=94.0 unfed-from=gpu-record unfed-to=world") {
+		t.Errorf("frameDetail = %q", got)
+	}
+}

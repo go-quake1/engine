@@ -213,7 +213,7 @@ func (r *Renderer) prepareAlias(ents []worldview.AliasEnt) error {
 	clip := func(e worldview.AliasEnt) bool {
 		// One entity's classification is the loop of R_DrawEntitiesOnList, where the
 		// program feeds its sound between entities (r_main.c:982).
-		if err := r.geo.Feed(); err != nil && feedErr == nil {
+		if err := r.geo.Feed(SiteEntities); err != nil && feedErr == nil {
 			feedErr = err
 		}
 		ent := render.AliasEntityInterp{

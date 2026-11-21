@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"time"
 
 	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/client"
@@ -158,6 +159,18 @@ type Runner struct {
 	// frames RunFrame has begun: what the sound write log tags each write with.
 	MixSite string
 	FrameNo int
+
+	// Clock is the wall clock of the refill gaps (nil: time.Now). Every refill
+	// attempt, painted or not, ends the interval since the one before it; the
+	// longest one since the last [Runner.TakeRefillGap] is kept with the sites
+	// of its two ends. What decides an underrun is that interval: a refill tops
+	// the output up to the playback position plus the mix-ahead, so the next one
+	// must come within it.
+	Clock          func() time.Time
+	gapLast        time.Time
+	gapLastSite    string
+	gapMax         time.Duration
+	gapFrom, gapTo string
 
 	// MixDropped is the mix frames of the time a tic outlasted the queue the
 	// update before it had left (the output ran dry for that long), MixStalls the
@@ -823,6 +836,30 @@ func (r *Runner) ExtraUpdateAt(site string) error {
 	return r.refill(qa, ahead)
 }
 
+// noteRefill closes the interval since the previous refill attempt (no
+// allocation: the sites are constants).
+func (r *Runner) noteRefill() {
+	now := time.Now()
+	if r.Clock != nil {
+		now = r.Clock()
+	}
+	if !r.gapLast.IsZero() {
+		if d := now.Sub(r.gapLast); d > r.gapMax {
+			r.gapMax, r.gapFrom, r.gapTo = d, r.gapLastSite, r.MixSite
+		}
+	}
+	r.gapLast, r.gapLastSite = now, r.MixSite
+}
+
+// TakeRefillGap returns the longest interval between two consecutive refill
+// attempts since the last call, and the sites of its ends, then forgets it. The
+// interval that is still open is not counted: the next call sees it closed.
+func (r *Runner) TakeRefillGap() (d time.Duration, from, to string) {
+	d, from, to = r.gapMax, r.gapFrom, r.gapTo
+	r.gapMax, r.gapFrom, r.gapTo = 0, "", ""
+	return d, from, to
+}
+
 // refill is S_Update_ (snd_dma.c lines 856-): read the playback position
 // (soundtime: the queue is what the output has not played), mix to
 // endtime = soundtime + _snd_mixahead * speed, and remember what is queued.
@@ -833,6 +870,7 @@ func (r *Runner) ExtraUpdateAt(site string) error {
 // middle of a tic measures from the tic's start.
 func (r *Runner) refill(qa backend.QueuedAudio, ahead float32) error {
 	const rate = sound.DefaultSampleRate
+	r.noteRefill()
 	queued := qa.QueuedFrames()
 	if queued < 0 {
 		queued = 0
