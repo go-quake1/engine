@@ -180,6 +180,17 @@ it still runs the game), the game plays silent and raises nothing; it prints
 sound in a browser; until then the stream is *waiting* and the host discards the
 mix. `--frames N` also prints `audio: ... real-time ratio`.
 
+On a host that has the **voice mixer** (go-wasmcontainers/engine v0.49.0, `voice_open`
+of the same module), the mixing runs in the page's AudioWorklet instead: the game
+loads each sound once into a shared bank (`sample_load`), and every tic sends
+commands (start, volume, stop) through `voice_commit`. A game that stalls no longer
+starves the output, because the worklet keeps painting the sounds that play. The
+music is decoded a slice a tic, uploaded once (at most 240 s) and looped by the
+worklet. The line is `QUAKE: sound on (wctr_audio_out voices, mixed in the page)`; a
+host without it falls back to the stream above (`QUAKE: voice mixer unavailable:
+<why>`), and `--fixed-mixer` forces the stream. `--frames N` then also prints
+`voices: painted ... underruns ... (frames starved)`, the worklet's own counters.
+
 The [go-wasmcontainers playground](https://go-wasmcontainers.github.io/playground/)
 has a `quake` image that runs it in a container on a GPU:
 
