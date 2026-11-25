@@ -739,9 +739,7 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	// chunk below, as before.
 	if v := r.voices(); v != nil && r.SoundPool != nil {
 		// A voice mixer outside the game paints; nothing to pace or refill.
-		if err := r.voiceStep(v); err != nil {
-			return err
-		}
+		r.voiceStep(v)
 	} else if qa, ok := r.Backend.(backend.QueuedAudio); ok && r.SoundPool != nil && len(r.MixBuffer) > 0 {
 		if err := r.paceAudio(qa, dt); err != nil {
 			return err

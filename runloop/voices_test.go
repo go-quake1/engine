@@ -169,9 +169,7 @@ func TestVoiceStep_AttachesOnceSyncsAndCommitsEachTic(t *testing.T) {
 	r := &Runner{SoundPool: p}
 	v := &retiringVoices{}
 	for i := 0; i < 3; i++ {
-		if err := r.voiceStep(v); err != nil {
-			t.Fatal(err)
-		}
+		r.voiceStep(v)
 	}
 	if v.commits != 3 || p.Voices != sound.Voices(v) {
 		t.Fatalf("commits %d, attached %v", v.commits, p.Voices != nil)
@@ -197,5 +195,37 @@ func TestVoices_AnAbsentMixerIsNilNotATypedNil(t *testing.T) {
 	r.Backend = voiceBackendStub{v: v}
 	if r.voices() != sound.Voices(v) {
 		t.Fatal("the backend's mixer is not returned")
+	}
+}
+
+func noPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s panicked: %v", what, r)
+		}
+	}()
+	f()
+}
+
+func TestMusicVoices_NothingWiredOrNothingPlayingIsANoOp(t *testing.T) {
+	v := &recVoices{}
+	open := func(int) ([]byte, bool) { return []byte{1}, true }
+	dec := func([]byte) (music.Decoder, error) { return nil, nil }
+	noPanic(t, "no client", func() { (&Runner{MusicOpen: open, MusicDecoder: dec}).tickMusicVoices(v) })
+	noPanic(t, "no open", func() { (&Runner{Client: client.NewState(), MusicDecoder: dec}).tickMusicVoices(v) })
+	noPanic(t, "no decoder", func() { (&Runner{Client: client.NewState(), MusicOpen: open}).tickMusicVoices(v) })
+	noPanic(t, "no job", func() { (&Runner{Client: client.NewState(), MusicOpen: open, MusicDecoder: dec}).tickMusicVoices(v) })
+	if v.sets+v.stops != 0 {
+		t.Fatalf("the mixer was touched: sets %d stops %d", v.sets, v.stops)
+	}
+}
+
+func TestMusicVoices_ATrackThatDecodesToNothingIsNotUploaded(t *testing.T) {
+	r := musicRunner(map[int]*fakeMusicDecoder{2: {rate: 11025, channels: 2}}, 2, 0)
+	v := &recVoices{}
+	run(r, v, 5)
+	if v.sets != 0 {
+		t.Fatalf("an empty track was uploaded (%d frames)", len(v.l))
 	}
 }

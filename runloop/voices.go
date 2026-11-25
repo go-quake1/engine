@@ -31,7 +31,7 @@ type musicJob struct {
 // voiceStep is the audio step of a tic for a backend with a voice mixer: it
 // has nothing to paint, so it keeps the channels in step with the mixer, runs
 // the music driver and sends the commands.
-func (r *Runner) voiceStep(v sound.Voices) error {
+func (r *Runner) voiceStep(v sound.Voices) {
 	if r.SoundPool.Voices != v {
 		r.SoundPool.AttachVoices(v)
 	}
@@ -40,7 +40,6 @@ func (r *Runner) voiceStep(v sound.Voices) error {
 	if err := v.Commit(); err != nil {
 		r.VoiceRefused++
 	}
-	return nil
 }
 
 // tickMusicVoices is tickMusic for a voice mixer.

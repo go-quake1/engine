@@ -310,3 +310,101 @@ func TestEachTrackTakesNewBankIdsUntilTheyRunOut(t *testing.T) {
 		t.Fatalf("%d tracks before the ids ran out, want %d", n, (audioring.MaxSamples-musicBase)/2)
 	}
 }
+
+func TestAnInvalidCommandIsRefusedNotQueued(t *testing.T) {
+	m := New(newFake())
+	m.push(audioring.Command{Op: 99})
+	if m.Refused != 1 || len(m.words) != 0 || m.LastErr == nil {
+		t.Fatalf("refused %d words %d", m.Refused, len(m.words))
+	}
+}
+
+func TestVolumesAreClampedToTheRange(t *testing.T) {
+	f := newFake()
+	m := New(f)
+	p := pool(t, m)
+	slot := startOn(p, sample("a", 10), 1)
+	p.Channels[slot].LeftVol, p.Channels[slot].RightVol = -5, 999
+	p.Retune(slot)
+	m.Start(slot, sample("b", 10), false, -1, audioring.MaxVolume+1)
+	if m.Refused != 0 {
+		t.Fatalf("an out-of-range volume was refused (%v) instead of clamped", m.LastErr)
+	}
+	if got := len(m.words) / 4; got != 3 {
+		t.Fatalf("%d commands queued, want start, setvol, start", got)
+	}
+	c, _ := audioring.DecodeCommand([4]int32{m.words[4], m.words[5], m.words[6], m.words[7]})
+	if c.Left != 0 || c.Right != audioring.MaxVolume {
+		t.Fatalf("clamped to (%d,%d)", c.Left, c.Right)
+	}
+}
+
+func TestSlotsOutsideTheGamesRangeAreIgnored(t *testing.T) {
+	f := newFake()
+	m := New(f)
+	if err := m.SetMusic(make([]int16, 10), make([]int16, 10), -1); err != nil {
+		t.Fatal(err)
+	}
+	m.Commit()
+	base := len(f.loads)
+	for _, slot := range []int{audioring.VoiceSlots - 2, audioring.VoiceSlots - 1} {
+		m.Start(slot, sample("a", 10), false, 100, 100)
+		m.SetVolume(slot, 1, 1)
+		m.Stop(slot)
+		if m.Remaining(slot) != -1 || m.Retired(slot) {
+			t.Fatalf("slot %d answers", slot)
+		}
+	}
+	if len(m.words) != 0 || len(f.loads) != base {
+		t.Fatalf("%d commands, %d loads for slots that are not the game's", len(m.words)/4, len(f.loads)-base)
+	}
+}
+
+func TestVolumeAndStopNeedALiveSlot(t *testing.T) {
+	m := New(newFake())
+	m.SetVolume(3, 1, 1)
+	m.Stop(3)
+	if len(m.words) != 0 {
+		t.Fatalf("%d commands for a slot nothing started", len(m.words)/4)
+	}
+}
+
+func TestARefusedMusicLoadStartsNothing(t *testing.T) {
+	f := newFake()
+	f.loadErr = errors.New("bank full")
+	m := New(f)
+	if err := m.SetMusic(make([]int16, 10), make([]int16, 10), -1); err == nil || m.Refused != 1 {
+		t.Fatalf("err %v refused %d", err, m.Refused)
+	}
+	if len(m.words) != 0 || m.musicOn {
+		t.Fatal("music started though its samples did not load")
+	}
+}
+
+// noPanic fails t when f panics: a slot outside the table must be ignored, and
+// an index panic would be that guard missing.
+func noPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s panicked: %v", what, r)
+		}
+	}()
+	f()
+}
+
+func TestNegativeAndHugeSlotsDoNotIndexTheTables(t *testing.T) {
+	m := New(newFake())
+	m.Commit()
+	for _, slot := range []int{-1, -1000, audioring.VoiceSlots, 1 << 20} {
+		noPanic(t, "Start", func() { m.Start(slot, sample("a", 4), false, 1, 1) })
+		noPanic(t, "SetVolume", func() { m.SetVolume(slot, 1, 1) })
+		noPanic(t, "Stop", func() { m.Stop(slot) })
+		noPanic(t, "Retired", func() { _ = m.Retired(slot) })
+		noPanic(t, "Remaining", func() {
+			if got := m.Remaining(slot); got != -1 {
+				t.Errorf("Remaining(%d) = %d", slot, got)
+			}
+		})
+	}
+}

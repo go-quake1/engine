@@ -45,10 +45,7 @@ const MusicSlots = 2
 // queues a command, and what plays is whatever v paints. Channels already
 // playing (the level's ambients, seeded before the mixer existed) start now.
 func (p *Pool) AttachVoices(v Voices) {
-	p.Voices = v
-	if v == nil {
-		return
-	}
+	p.Voices = v // nil detaches: Launch does nothing without a mixer
 	for i := range p.Channels {
 		if !p.Channels[i].Free() {
 			p.Launch(i)
