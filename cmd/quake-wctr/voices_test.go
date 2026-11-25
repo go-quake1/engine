@@ -11,7 +11,9 @@ import (
 
 	"github.com/wasmdesk/wasmbox/audioring"
 
+	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/backend/wasisurface"
+	"github.com/go-quake1/engine/runloop"
 )
 
 // fakeVoiceHost is the page's mixer: it counts what the game sends it.
@@ -116,5 +118,22 @@ func TestFixedMixerSkipsTheVoices(t *testing.T) {
 	}
 	if opened != 0 {
 		t.Error("--fixed-mixer opened the voice mixer")
+	}
+}
+
+// A backend that is not the surface (a wrapper hiding it) has no counters to
+// print: the summary is silent, not a panic and not zeros.
+func TestWriteVoiceStatsNeedsAMixerBackend(t *testing.T) {
+	var out bytes.Buffer
+	var be wasisurface.Backend
+	writeVoiceStats(&out, struct{ backend.Backend }{}, &runloop.Runner{})
+	writeVoiceStats(&out, &be, &runloop.Runner{VoiceRefused: 3})
+	if out.Len() != 0 {
+		t.Fatalf("a summary without a mixer: %q", out.String())
+	}
+	be.WithVoices(&fakeVoiceHost{})
+	writeVoiceStats(&out, &be, &runloop.Runner{VoiceRefused: 3})
+	if !strings.Contains(out.String(), "bad commands 0, refused 3") {
+		t.Fatalf("summary %q", out.String())
 	}
 }
