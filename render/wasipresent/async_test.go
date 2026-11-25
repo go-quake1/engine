@@ -197,6 +197,11 @@ func TestPresentGuards(t *testing.T) {
 	if err := presentNoPanic(t, "a driver that cannot say", p, px, 8, 4, 8, pal); err != nil || plain.draws != 1 {
 		t.Errorf("a driver that cannot say: %v, %d draws", err, plain.draws)
 	}
+	noIdle := &readyDriver{waits: 5}
+	p, _ = New(noIdle, 8, 4)
+	if err := presentNoPanic(t, "no idle hook", p, px, 8, 4, 8, pal); err != nil || noIdle.polls != 0 || noIdle.draws != 1 {
+		t.Errorf("no idle hook: %v, %d polls, %d draws", err, noIdle.polls, noIdle.draws)
+	}
 	boom := errors.New("boom")
 	p, drv, _ := stallPresenter(t, 250*time.Millisecond)
 	drv.fail = map[string]error{"begin": boom}
