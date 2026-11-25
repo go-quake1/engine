@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/go-quake1/engine/render"
 )
 
 // simClock is a clock the test moves: a sleep and a blocking host call advance
@@ -150,6 +152,56 @@ func TestAsyncDrawBounds(t *testing.T) {
 	}
 	if drv.ends != 1 || clock.t != time.Unix(1005, 0) {
 		t.Errorf("%d ends, clock at +%v: End must wait out the frame", drv.ends, clock.t.Sub(time.Unix(1000, 0)))
+	}
+}
+
+// presentNoPanic is Present with a panic reported as an assertion, so a guard that
+// is missing fails on what it was for and not by a crash.
+func presentNoPanic(t *testing.T, what string, p *Presenter, px []byte, w, h, pitch int, pal *render.Palette) (err error) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s: Present panicked: %v", what, r)
+			err = errors.New("panic")
+		}
+	}()
+	return p.Present(px, w, h, pitch, pal)
+}
+
+// The guards of Present: a bad frame is refused before anything is drawn, a
+// driver that cannot say is never waited for, a begin that fails has no frame to
+// collect.
+func TestPresentGuards(t *testing.T) {
+	px, pal := idleFrame()
+	for _, c := range []struct {
+		name        string
+		w, h, pitch int
+		pixels      []byte
+		pal         *render.Palette
+	}{
+		{"zero width", 0, 4, 8, px, pal},
+		{"zero height", 8, 0, 8, px, pal},
+		{"pitch under width", 8, 4, 7, px, pal},
+		{"no palette", 8, 4, 8, px, nil},
+		{"short frame", 8, 4, 8, px[:8], pal},
+	} {
+		drv := &fakeDriver{}
+		p, _ := New(drv, 8, 4)
+		if err := presentNoPanic(t, c.name, p, c.pixels, c.w, c.h, c.pitch, c.pal); !errors.Is(err, ErrBadFrame) || drv.draws != 0 {
+			t.Errorf("%s: %v, %d draws; want ErrBadFrame and none", c.name, err, drv.draws)
+		}
+	}
+	plain := &fakeDriver{}
+	p, _ := New(plain, 8, 4)
+	p.SetIdle(func() error { return nil })
+	if err := presentNoPanic(t, "a driver that cannot say", p, px, 8, 4, 8, pal); err != nil || plain.draws != 1 {
+		t.Errorf("a driver that cannot say: %v, %d draws", err, plain.draws)
+	}
+	boom := errors.New("boom")
+	p, drv, _ := stallPresenter(t, 250*time.Millisecond)
+	drv.fail = map[string]error{"begin": boom}
+	if err := presentNoPanic(t, "begin error", p, px, 8, 4, 8, pal); !errors.Is(err, boom) || drv.ends != 0 {
+		t.Errorf("begin error: %v, %d ends", err, drv.ends)
 	}
 }
 
