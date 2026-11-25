@@ -3,7 +3,11 @@
 
 package backend
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quake1/engine/sound"
+)
 
 type queuedFake struct {
 	*fakeBackend
@@ -48,5 +52,31 @@ func TestForwardQueue(t *testing.T) {
 	}
 	if q.fakeBackend.QueueCalls != 1 {
 		t.Errorf("QueueAudio reached the backend %d times, want 1", q.fakeBackend.QueueCalls)
+	}
+}
+
+type voicesFake struct {
+	*queuedFake
+	v *voicesStub
+}
+
+type voicesStub struct{ sound.Voices }
+
+func (f *voicesFake) Voices() sound.Voices { return f.v }
+
+// ForwardQueue forwards the voice mixer too, and only when the backend has one.
+func TestForwardQueueForwardsTheVoices(t *testing.T) {
+	plain := &queuedFake{fakeBackend: &fakeBackend{}, n: 3}
+	if _, ok := ForwardQueue(wrapper{plain}, plain).(VoiceBackend); ok {
+		t.Error("a wrapper over a backend with no voice mixer offers one")
+	}
+	vf := &voicesFake{queuedFake: &queuedFake{fakeBackend: &fakeBackend{}, n: 5}, v: &voicesStub{}}
+	got := ForwardQueue(wrapper{vf}, vf)
+	vb, ok := got.(VoiceBackend)
+	if !ok || vb.Voices() != sound.Voices(vf.v) {
+		t.Fatal("the wrapper hides the voice mixer")
+	}
+	if qa, ok := got.(QueuedAudio); !ok || qa.QueuedFrames() != 5 {
+		t.Error("the voice wrapper lost the queue")
 	}
 }
