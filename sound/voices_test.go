@@ -7,6 +7,7 @@ import "testing"
 
 type callLog struct {
 	starts, vols, stops []int
+	stopAlls            int
 	retired             map[int]bool
 	remaining           map[int]int
 }
@@ -14,7 +15,7 @@ type callLog struct {
 func (c *callLog) Start(slot int, _ *Sample, _ bool, _, _ int) { c.starts = append(c.starts, slot) }
 func (c *callLog) SetVolume(slot, _, _ int)                    { c.vols = append(c.vols, slot) }
 func (c *callLog) Stop(slot int)                               { c.stops = append(c.stops, slot) }
-func (c *callLog) StopAll()                                    {}
+func (c *callLog) StopAll()                                    { c.stopAlls++ }
 func (c *callLog) Commit() error                               { return nil }
 func (c *callLog) Retired(slot int) bool                       { return c.retired[slot] }
 func (c *callLog) Remaining(slot int) int {
@@ -134,5 +135,16 @@ func TestAllocNeverHandsOutTheMusicSlots(t *testing.T) {
 		}
 		playing(p, slot, 10)
 		p.Channels[slot].EntNum, p.Channels[slot].EntChannel = 100+i, 1
+	}
+}
+
+func TestStopAllSilencesTheChannelsAndTheMixer(t *testing.T) {
+	p, _ := NewPool(8)
+	playing(p, 1, 100)
+	c := &callLog{}
+	p.Voices = c
+	p.StopAll()
+	if c.stopAlls != 1 || !p.Channels[1].Free() {
+		t.Fatalf("mixer StopAll calls %d, channel free %v", c.stopAlls, p.Channels[1].Free())
 	}
 }

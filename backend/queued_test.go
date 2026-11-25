@@ -80,3 +80,19 @@ func TestForwardQueueForwardsTheVoices(t *testing.T) {
 		t.Error("the voice wrapper lost the queue")
 	}
 }
+
+// A voice backend with no queue reports an empty one, not a panic.
+func TestVoiceForwardWithoutAQueueReportsNone(t *testing.T) {
+	vf := &voicesOnly{fakeBackend: &fakeBackend{}}
+	qa, ok := ForwardQueue(wrapper{vf}, vf).(QueuedAudio)
+	if !ok {
+		t.Fatal("the voice wrapper is not QueuedAudio")
+	}
+	if n := qa.QueuedFrames(); n != 0 {
+		t.Fatalf("QueuedFrames = %d, want 0", n)
+	}
+}
+
+type voicesOnly struct{ *fakeBackend }
+
+func (voicesOnly) Voices() sound.Voices { return nil }
