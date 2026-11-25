@@ -119,6 +119,21 @@ func Paint(pool *Pool, output []StereoSample, numFrames int) error {
 		}
 	}
 
+	// WinQuake's paintbuffer is an int array clamped once at the transfer:
+	// sum every channel in int32 and clamp at the end, so a loud mix
+	// saturates instead of wrapping to the opposite sign.
+	var acc [MaxMixOutputFrames * 2]int32
+	for i := 0; i < numFrames; i++ {
+		acc[2*i] = int32(output[i].L)
+		acc[2*i+1] = int32(output[i].R)
+	}
+	defer func() {
+		for i := 0; i < numFrames; i++ {
+			output[i].L = clamp16(acc[2*i])
+			output[i].R = clamp16(acc[2*i+1])
+		}
+	}()
+
 	for i := range pool.Channels {
 		ch := &pool.Channels[i]
 		if ch.Free() {
@@ -141,7 +156,7 @@ func Paint(pool *Pool, output []StereoSample, numFrames int) error {
 				count = remaining
 			}
 			if count > 0 {
-				paintSamples(ch, output[done:done+count])
+				paintSamples(ch, acc[2*done:2*(done+count)])
 				ch.Position += count
 				done += count
 			}
@@ -161,7 +176,8 @@ func Paint(pool *Pool, output []StereoSample, numFrames int) error {
 }
 
 // paintSamples mixes len(out) samples of ch, from ch.Position, into out.
-func paintSamples(ch *Channel, out []StereoSample) {
+// out holds interleaved L, R int32 accumulators.
+func paintSamples(ch *Channel, out []int32) {
 	data := ch.Sfx.Data
 	pos := ch.Position
 	lv := int32(ch.LeftVol)
@@ -169,10 +185,10 @@ func paintSamples(ch *Channel, out []StereoSample) {
 	switch ch.Sfx.BitsPerSam {
 	case 8:
 		// 8-bit signed bytes; one byte per sample.
-		for j := range out {
+		for j := 0; j < len(out)/2; j++ {
 			s := int32(int8(data[pos+j]))
-			out[j].L += int16(s * lv / 256)
-			out[j].R += int16(s * rv / 256)
+			out[2*j] += s * lv / 256
+			out[2*j+1] += s * rv / 256
 		}
 	case 16:
 		// 16-bit signed little-endian; two bytes per sample.
@@ -181,13 +197,24 @@ func paintSamples(ch *Channel, out []StereoSample) {
 		// brings the result to the 8-bit path's scale so
 		// downstream clamp + transfer logic is bit-depth-
 		// agnostic.
-		for j := range out {
+		for j := 0; j < len(out)/2; j++ {
 			off := (pos + j) * 2
 			s := int32(int16(binary.LittleEndian.Uint16(data[off : off+2])))
-			out[j].L += int16(s * lv >> 8)
-			out[j].R += int16(s * rv >> 8)
+			out[2*j] += s * lv >> 8
+			out[2*j+1] += s * rv >> 8
 		}
 	}
+}
+
+// clamp16 saturates v to the int16 range (WinQuake's transfer clamp).
+func clamp16(v int32) int16 {
+	if v > 32767 {
+		return 32767
+	}
+	if v < -32768 {
+		return -32768
+	}
+	return int16(v)
 }
 
 // ClampToInt8 converts the int16 stereo accumulator to int8 PCM,
