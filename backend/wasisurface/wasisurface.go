@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-quake1/engine/backend"
 	"github.com/go-quake1/engine/backend/wasmbox"
+	"github.com/go-quake1/engine/sound/voicemix"
 	"github.com/go-wasmcontainers/gpu/wasigpu"
 )
 
@@ -67,6 +68,8 @@ type Backend struct {
 	// Sound (audio.go): the output, nil for silence, the scratch the mix is
 	// converted into, and the queue as the last write left it.
 	out       AudioOut
+	vhost     VoiceHost // the page's voice mixer (voices.go), nil without
+	voices    *voicemix.Mixer
 	pcm       []float32
 	queued    float64
 	queuedAt0 time.Time

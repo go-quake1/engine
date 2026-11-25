@@ -290,6 +290,7 @@ func (h *Host) StartSound(entIdx, channel int, name string, volume int, leftVol,
 	ch.LeftVol = leftVol
 	ch.RightVol = rightVol
 	ch.Master = false
+	h.soundPool.Launch(slot) // a command for the mixer when it runs elsewhere
 	h.LastSoundsStarted++
 	return slot, nil
 }
@@ -411,6 +412,7 @@ func (h *Host) AmbientSound(slot, entIdx int, name string, volume int) (int, err
 	ch.LeftVol = volume
 	ch.RightVol = volume
 	ch.Master = true
+	h.soundPool.Launch(slot)
 	h.LastAmbientsStarted++
 	return slot, nil
 }
@@ -462,5 +464,6 @@ func (h *Host) AmbientSoundAt(slot, entIdx int, name string, volume int, positio
 	ch := &h.soundPool.Channels[out2]
 	ch.LeftVol = out.LeftVol
 	ch.RightVol = out.RightVol
+	h.soundPool.Retune(out2)
 	return out2, nil
 }

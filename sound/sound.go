@@ -68,6 +68,10 @@ func (c *Channel) Stop() {
 type Pool struct {
 	Channels       [MaxChannels]Channel
 	ReservedStatic int // 0..MaxChannels; default 8
+
+	// Voices, when set (AttachVoices), paints the channels somewhere else
+	// than Paint does; see Voices.
+	Voices Voices
 }
 
 var (
@@ -94,15 +98,17 @@ func NewPool(reservedStatic int) (*Pool, error) {
 // "same entity/channel replaces previous sound" rule). tyrquake:
 // SND_PickChannel.
 func (p *Pool) Alloc(entNum, entChannel int) (int, error) {
+	p.Sync() // a sound the mixer has finished frees its slot
+	end := p.limit()
 	if entChannel != 0 {
-		for i := p.ReservedStatic; i < MaxChannels; i++ {
+		for i := p.ReservedStatic; i < end; i++ {
 			c := &p.Channels[i]
 			if c.EntNum == entNum && c.EntChannel == entChannel && !c.Free() {
 				return i, nil
 			}
 		}
 	}
-	for i := p.ReservedStatic; i < MaxChannels; i++ {
+	for i := p.ReservedStatic; i < end; i++ {
 		if p.Channels[i].Free() {
 			return i, nil
 		}
@@ -112,7 +118,7 @@ func (p *Pool) Alloc(entNum, entChannel int) (int, error) {
 	// pick the slot with the smallest EndPos-Position remaining.
 	best := FreeChannel
 	bestRemaining := -1
-	for i := p.ReservedStatic; i < MaxChannels; i++ {
+	for i := p.ReservedStatic; i < end; i++ {
 		c := &p.Channels[i]
 		rem := c.EndPos - c.Position
 		if best == FreeChannel || rem < bestRemaining {
@@ -132,6 +138,9 @@ func (p *Pool) Alloc(entNum, entChannel int) (int, error) {
 func (p *Pool) StopAll() {
 	for i := range p.Channels {
 		p.Channels[i].Stop()
+	}
+	if p.Voices != nil {
+		p.Voices.StopAll()
 	}
 }
 

@@ -115,10 +115,38 @@ type QueuedAudio interface {
 // and would otherwise hide the queue from the runloop and leave the mixer
 // unpaced.
 func ForwardQueue(outer, inner Backend) Backend {
+	var b Backend = outer
 	if q, ok := inner.(QueuedAudio); ok {
-		return &queuedForward{Backend: outer, q: q}
+		b = &queuedForward{Backend: outer, q: q}
 	}
-	return outer
+	if v, ok := inner.(VoiceBackend); ok {
+		b = &voiceForward{Backend: b, v: v}
+	}
+	return b
+}
+
+// VoiceBackend is the optional extension of [Audio] for a backend whose output
+// is mixed outside the game (the page's AudioWorklet): the runloop does not
+// paint frames for it, it drives the returned [sound.Voices] instead. A nil
+// result means the backend has no voice mixer after all (the host refused it).
+type VoiceBackend interface {
+	Voices() sound.Voices
+}
+
+type voiceForward struct {
+	Backend
+	v VoiceBackend
+}
+
+func (f *voiceForward) Voices() sound.Voices { return f.v.Voices() }
+
+// QueuedFrames keeps the wrapped backend's queue visible: embedding the Backend
+// interface would hide it.
+func (f *voiceForward) QueuedFrames() int {
+	if q, ok := f.Backend.(QueuedAudio); ok {
+		return q.QueuedFrames()
+	}
+	return 0
 }
 
 type queuedForward struct {

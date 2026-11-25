@@ -40,6 +40,11 @@ func (b *Backend) WithAudio(out AudioOut) *Backend {
 
 // Stats returns what the sound output did.
 func (b *Backend) AudioStats() AudioStats {
+	if st, ok := b.VoiceStats(); ok {
+		// The mixer is the page's: what it painted is what the output got, at the
+		// pace the worklet ran, not the game's.
+		return AudioStats{Offered: int(st.Painted), Accepted: int(st.Painted)}
+	}
 	return AudioStats{Offered: b.offered, Accepted: b.accepted, Silent: b.out == nil}
 }
 
