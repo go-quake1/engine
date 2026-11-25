@@ -188,7 +188,9 @@ starves the output, because the worklet keeps painting the sounds that play. The
 music is decoded a slice a tic, uploaded once (at most 240 s) and looped by the
 worklet. The line is `QUAKE: sound on (wctr_audio_out voices, mixed in the page)`; a
 host without it falls back to the stream above (`QUAKE: voice mixer unavailable:
-<why>`), and `--fixed-mixer` forces the stream. `--frames N` then also prints
+<why>`), and `--fixed-mixer` forces the stream. The hidden `--stall-ms N` (with
+`--stall-every F`, default 120 frames) holds the game still for N ms every F
+frames: the stall the page's mixer must play through, for the playground's e2e. `--frames N` then also prints
 `voices: painted ... underruns ... (frames starved)`, the worklet's own counters.
 
 The [go-wasmcontainers playground](https://go-wasmcontainers.github.io/playground/)

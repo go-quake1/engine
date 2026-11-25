@@ -171,6 +171,10 @@ func RootCmd() *cobra.Command {
 	fl.BoolVar(&gpuCheck, "gpuworld-check", false, "with --gpuworld in the game loop: draw every frame's world on the CPU too, compare at worldcheck's tolerance, and fail above it (needs --frames)")
 	fl.BoolVar(&fixedMixer, "fixed-mixer", false, "paint a fixed 512 mix frames every tic instead of pacing the mixer to the sound output's queue (what the game did before the pacing; for measuring the real-time ratio)")
 	_ = fl.MarkHidden("fixed-mixer")
+	fl.IntVar(&stallMs, "stall-ms", 0, "hold the game still for this many ms every --stall-every frames (a measuring aid: the stall the voice mixer must survive)")
+	_ = fl.MarkHidden("stall-ms")
+	fl.IntVar(&stallEvery, "stall-every", 120, "with --stall-ms, the frames between two stalls")
+	_ = fl.MarkHidden("stall-every")
 	fl.IntVar(&slowWindow, "slowtics", 0, "in a game without --frames, print where the time of every tic over 0.1 s went (stages, GPU, server ticks, collector, sound write) every N frames, to find what stalls a long session")
 	fl.BoolVar(&slowBrief, "slowtics-brief", false, "with --slowtics, print only the summary lines of each window (the slow tics' count and shares, the dry sound writes' count), not a line per tic: short enough for a terminal pane")
 	fl.BoolVar(&memStats, "memstats", false, "print the Go heap (live, in use, system, GC count) every 60 frames, to find a leak")
@@ -476,6 +480,7 @@ func loop(out io.Writer, r *runloop.Runner, be backend.Backend, frames int, gt *
 		if obs.quit {
 			return nil
 		}
+		stallTic(n)
 		// A wasm guest has one P and the frame never sleeps (the host call that
 		// presents blocks in the browser): without a yield the collector's
 		// background workers never run, the heap grows by the frame's garbage

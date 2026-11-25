@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wasmdesk/wasmbox/audioring"
 
@@ -135,5 +136,50 @@ func TestWriteVoiceStatsNeedsAMixerBackend(t *testing.T) {
 	writeVoiceStats(&out, &be, &runloop.Runner{VoiceRefused: 3})
 	if !strings.Contains(out.String(), "bad commands 0, refused 3") {
 		t.Fatalf("summary %q", out.String())
+	}
+}
+
+func withStall(t *testing.T, ms, every int) *[]time.Duration {
+	t.Helper()
+	oldMs, oldEvery, oldSleep := stallMs, stallEvery, stallSleep
+	var slept []time.Duration
+	stallMs, stallEvery = ms, every
+	stallSleep = func(d time.Duration) { slept = append(slept, d) }
+	t.Cleanup(func() { stallMs, stallEvery, stallSleep = oldMs, oldEvery, oldSleep })
+	return &slept
+}
+
+// The stall is due on every Nth frame, never on the first, never without both
+// flags.
+func TestStallTicIsDueEveryNthFrame(t *testing.T) {
+	slept := withStall(t, 250, 3)
+	for n := 0; n < 10; n++ {
+		stallTic(n)
+	}
+	if len(*slept) != 3 || (*slept)[0] != 250*time.Millisecond {
+		t.Fatalf("slept %v over frames 0..9 every 3, want 3 stalls of 250 ms (frames 3, 6, 9)", *slept)
+	}
+	for _, c := range [][2]int{{0, 3}, {250, 0}, {-1, 3}, {250, -3}} {
+		s := withStall(t, c[0], c[1])
+		for n := 0; n < 10; n++ {
+			stallTic(n)
+		}
+		if len(*s) != 0 {
+			t.Fatalf("--stall-ms %d --stall-every %d stalled %d times", c[0], c[1], len(*s))
+		}
+	}
+}
+
+// The game loop calls it: a run of 7 frames with a stall every 3 holds twice.
+func TestTheGameLoopStalls(t *testing.T) {
+	closes := 0
+	withSurface(t, &fakePresenter{}, false, &closes)
+	slept := withStall(t, 5, 3)
+	var out, errOut bytes.Buffer
+	if err := runGame(&out, &errOut, realFS(t), "e1m1", 64, 40, 7); err != nil {
+		t.Fatalf("%v\n%s", err, errOut.String())
+	}
+	if len(*slept) != 2 {
+		t.Fatalf("%d stalls in 7 frames every 3, want 2 (frames 3 and 6)", len(*slept))
 	}
 }

@@ -142,3 +142,20 @@ func writeVoiceStats(out io.Writer, be backend.Backend, r *runloop.Runner) {
 	fmt.Fprintf(out, "voices: painted %d frames, underruns %d (%d frames starved), bad commands %d, refused %d\n",
 		st.Painted, st.Underruns, st.Starved, st.BadCmds, r.VoiceRefused)
 }
+
+// --stall-ms N holds the game still for N ms every --stall-every frames (hidden:
+// a measuring aid). It reproduces, on demand, the stall the voice mixer exists
+// to survive (a collection, a slow GPU frame, a busy tab): the playground's
+// e2e asserts the page's sound neither underruns nor dips while it lasts.
+var (
+	stallMs    int
+	stallEvery = 120
+	stallSleep = time.Sleep // a test replaces it
+)
+
+// stallTic holds the game after frame n (0-based) when it is due.
+func stallTic(n int) {
+	if stallMs > 0 && stallEvery > 0 && n > 0 && n%stallEvery == 0 {
+		stallSleep(time.Duration(stallMs) * time.Millisecond)
+	}
+}
