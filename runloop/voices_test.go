@@ -225,7 +225,8 @@ func TestMusicVoices_ATrackThatDecodesToNothingIsNotUploaded(t *testing.T) {
 	r := musicRunner(map[int]*fakeMusicDecoder{2: {rate: 11025, channels: 2}}, 2, 0)
 	v := &recVoices{}
 	run(r, v, 5)
-	if v.sets != 0 {
+	// The one stop is the epoch change's; an upload of nothing would add a second.
+	if v.sets != 0 || v.stops != 1 {
 		t.Fatalf("an empty track was uploaded (%d frames)", len(v.l))
 	}
 }
