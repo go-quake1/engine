@@ -42,6 +42,25 @@ type ReadyDriver interface {
 	ReadyToPresent() (bool, error)
 }
 
+// AsyncDriver is a Driver whose frame runs on the host while the game works:
+// BeginDraw hands the frame over and returns at once (go-wasmcontainers/gpu's
+// submit-present-begin), the browser may hold the submit and the present for
+// hundreds of milliseconds, and the presenter keeps the sound output fed in that
+// span (engine#160). While a frame is pending no other call that uses the device
+// may be made.
+type AsyncDriver interface {
+	Driver
+	BeginDraw() (PendingDraw, error)
+}
+
+// PendingDraw is a frame BeginDraw started. Ready says, without a host call, that
+// the host is done with it; End waits for it if it is not, releases it and
+// returns its error.
+type PendingDraw interface {
+	Ready() bool
+	End() error
+}
+
 // Slice is how long a presenter sleeps between two polls of ReadyToPresent, and
 // MaxWait how long it waits in all before drawing anyway (the host gives up on
 // the page's acknowledgement after a second itself, webgpu.AckWait).
@@ -112,6 +131,12 @@ func (p *Presenter) waitReady() error {
 	if !ok || p.idle == nil {
 		return nil
 	}
+	return p.waitUntil(rd.ReadyToPresent)
+}
+
+// waitUntil polls ready in slices of Slice, running the idle work between two
+// polls, for at most MaxWait; the time it takes goes to LastPresent's Wait.
+func (p *Presenter) waitUntil(ready func() (bool, error)) error {
 	sleep, now := p.sleep, p.now
 	if sleep == nil {
 		sleep = time.Sleep
@@ -120,10 +145,10 @@ func (p *Presenter) waitReady() error {
 		now = time.Now
 	}
 	t0 := now()
-	defer func() { p.last.Wait = now().Sub(t0) }()
+	defer func() { p.last.Wait += now().Sub(t0) }()
 	for waited := time.Duration(0); waited < MaxWait; waited += Slice {
-		ready, err := rd.ReadyToPresent()
-		if err != nil || ready {
+		ok, err := ready()
+		if err != nil || ok {
 			return err
 		}
 		if err := p.idle(); err != nil {
@@ -137,6 +162,26 @@ func (p *Presenter) waitReady() error {
 		}
 	}
 	return nil
+}
+
+// drawAsync hands the frame to the host and runs the idle work until the host is
+// done with it, then collects it: the sound mix is kept filled for as long as the
+// browser holds the submit and the present.
+func (p *Presenter) drawAsync(ad AsyncDriver, now func() time.Time) error {
+	t0 := now()
+	pd, err := ad.BeginDraw()
+	p.last.Draw = now().Sub(t0)
+	if err != nil {
+		return err
+	}
+	werr := p.waitUntil(func() (bool, error) { return pd.Ready(), nil })
+	t1 := now()
+	eerr := pd.End() // always: it releases what the frame held
+	p.last.Draw += now().Sub(t1)
+	if werr != nil {
+		return werr
+	}
+	return eerr
 }
 
 var _ render.Presenter = (*Presenter)(nil)
@@ -187,9 +232,14 @@ func (p *Presenter) Present(pixels []byte, width, height, pitch int, pal *render
 	if timed {
 		sd.ResetSlowest()
 	}
-	t0 := now()
-	err := p.drv.Draw()
-	p.last.Draw = now().Sub(t0)
+	var err error
+	if ad, ok := p.drv.(AsyncDriver); ok && p.idle != nil {
+		err = p.drawAsync(ad, now)
+	} else {
+		t0 := now()
+		err = p.drv.Draw()
+		p.last.Draw = now().Sub(t0)
+	}
 	if timed {
 		p.last.Slowest, p.last.SlowestFor = sd.SlowestCall()
 	}
