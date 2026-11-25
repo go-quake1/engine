@@ -447,3 +447,38 @@ func TestMixConstantsAreSane(t *testing.T) {
 		t.Fatalf("MaxMixOutputFrames drift")
 	}
 }
+
+// WinQuake paints into an int buffer and clamps once, at the transfer. Paint
+// used to add into int16 and wrap: four loud voices turned a loud sound into a
+// burst of the opposite sign.
+func TestPaint_SumsPastInt16ClampInsteadOfWrapping(t *testing.T) {
+	loud := func(name string, v int16) Channel {
+		return Channel{Sfx: makeSample16(name, []int16{v, v}), EndPos: 2, LeftVol: 256, RightVol: 256}
+	}
+	cases := []struct {
+		name string
+		vs   []int16
+		want int16
+	}{
+		{"four loud positive voices clamp high", []int16{30000, 30000, 30000, 30000}, 32767},
+		{"four loud negative voices clamp low", []int16{-30000, -30000, -30000, -30000}, -32768},
+		// An intermediate sum past the range must not lose what a later
+		// voice takes back: the clamp is at the end, as in WinQuake.
+		{"the clamp comes after the whole sum", []int16{30000, 30000, -30000}, 30000},
+	}
+	for _, c := range cases {
+		p, _ := NewPool(len(c.vs))
+		for i, v := range c.vs {
+			p.Channels[i] = loud("v", v)
+		}
+		out := make([]StereoSample, 2)
+		if err := Paint(p, out, 2); err != nil {
+			t.Fatalf("%s: Paint: %v", c.name, err)
+		}
+		for i, s := range out {
+			if s.L != c.want || s.R != c.want {
+				t.Errorf("%s: frame %d = %+v want {%d,%d}", c.name, i, s, c.want, c.want)
+			}
+		}
+	}
+}
