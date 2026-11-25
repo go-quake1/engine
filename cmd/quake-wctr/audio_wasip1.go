@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/wasmdesk/wasmbox/audioring"
+
 	"github.com/go-quake1/engine/backend/wasisurface"
 )
 
@@ -83,3 +85,74 @@ func (s *wctrStream) Write(pcm []float32) (accepted, queued int, err error) {
 }
 
 func (s *wctrStream) Close() { streamClose(s.h) }
+
+// The voice mixer of the same module (docs/audio-design.md): the game loads
+// each sound once and sends commands; the mixer runs in the page.
+
+//go:wasmimport wctr_audio_out voice_open
+func voiceOpen(rate uint32, out unsafe.Pointer) uint32
+
+//go:wasmimport wctr_audio_out sample_load
+func sampleLoad(mixer, id, ptr, length, bits, rate, loopStart, nsamples uint32) uint32
+
+//go:wasmimport wctr_audio_out voice_commit
+func voiceCommit(mixer, cmds, n uint32, snap unsafe.Pointer) uint32
+
+//go:wasmimport wctr_audio_out voice_stats
+func voiceStats(mixer uint32, out unsafe.Pointer) uint32
+
+//go:wasmimport wctr_audio_out voice_close
+func voiceClose(mixer uint32) uint32
+
+func init() { openVoices = openWctrVoices }
+
+func errnoError(op string, e uint32) error {
+	msg, ok := audioErrno[e]
+	if !ok {
+		msg = fmt.Sprintf("errno %d", e)
+	}
+	return fmt.Errorf("%s: %s", op, msg)
+}
+
+func openWctrVoices() (wasisurface.VoiceHost, error) {
+	var h uint32
+	if e := voiceOpen(audioRate, unsafe.Pointer(&h)); e != 0 {
+		return nil, errnoError("voice_open", e)
+	}
+	return &wctrVoices{h: h}, nil
+}
+
+// wctrVoices is one voice_open handle as a wasisurface.VoiceHost.
+type wctrVoices struct{ h uint32 }
+
+func (v *wctrVoices) Load(id, bits, rate, loopStart, frames int, pcm []byte) error {
+	if len(pcm) == 0 {
+		return errors.New("sample_load: empty sound")
+	}
+	if e := sampleLoad(v.h, uint32(id), uint32(uintptr(unsafe.Pointer(&pcm[0]))), uint32(len(pcm)),
+		uint32(bits), uint32(rate), uint32(loopStart), uint32(frames)); e != 0 {
+		return errnoError("sample_load", e)
+	}
+	return nil
+}
+
+func (v *wctrVoices) Commit(words []int32, snap *[2 * audioring.VoiceSlots]uint32) error {
+	var p uint32
+	if len(words) > 0 {
+		p = uint32(uintptr(unsafe.Pointer(&words[0])))
+	}
+	if e := voiceCommit(v.h, p, uint32(len(words)/4), unsafe.Pointer(snap)); e != 0 {
+		return errnoError("voice_commit", e)
+	}
+	return nil
+}
+
+func (v *wctrVoices) Stats() (wasisurface.VoiceStats, error) {
+	var s wasisurface.VoiceStats
+	if e := voiceStats(v.h, unsafe.Pointer(&s)); e != 0 {
+		return s, errnoError("voice_stats", e)
+	}
+	return s, nil
+}
+
+func (v *wctrVoices) Close() { voiceClose(v.h) }

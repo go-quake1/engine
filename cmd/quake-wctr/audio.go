@@ -25,6 +25,11 @@ import (
 // silent and raises nothing.
 var openAudio func() (wasisurface.AudioOut, error)
 
+// openVoices opens the container's voice mixer (voice_open of the same host
+// module): the mixer runs in the page and the game sends it commands. Set by
+// audio_wasip1.go, nil elsewhere; an error falls back to openAudio's stream.
+var openVoices func() (wasisurface.VoiceHost, error)
+
 // fixedMixer paints a fixed chunk of the mix every tic, as the runloop did
 // before it paced the mixer (--fixed-mixer, hidden: a measuring aid).
 var fixedMixer bool
@@ -32,6 +37,18 @@ var fixedMixer bool
 // attachAudio gives be the sound output when this build and this container
 // have one, says which on errOut, and returns the function that closes it.
 func attachAudio(be *wasisurface.Backend, errOut io.Writer) (closeAudio func()) {
+	// The voice mixer first: it paints in the page's AudioWorklet, so a game that
+	// stalls does not starve the output. A host without it (Unsupported) or a
+	// refusal falls back to the stream below.
+	if openVoices != nil && !fixedMixer {
+		vh, err := openVoices()
+		if err == nil {
+			be.WithVoices(vh)
+			fmt.Fprintln(errOut, "QUAKE: sound on (wctr_audio_out voices, mixed in the page)")
+			return vh.Close
+		}
+		fmt.Fprintf(errOut, "QUAKE: voice mixer unavailable: %v\n", err)
+	}
 	if openAudio == nil {
 		fmt.Fprintln(errOut, "QUAKE: sound off (this build has no wctr_audio_out)")
 		return func() {}
@@ -102,4 +119,26 @@ func writeAudioStats(out io.Writer, be backend.Backend, el time.Duration, frames
 	fmt.Fprintf(out, "audio: %s, %d mix frames offered, %d accepted, in %.2f s: real-time ratio %.3f; %.1f frames a second, %d mix frames dropped in %d stalled tics, ratio with them %.3f; tics over 0.1 0.2 0.35 0.5 s: %d %d %d %d, longest %.3f s\n",
 		state, st.Offered, st.Accepted, el.Seconds(), float64(st.Offered)/total, float64(frames)/el.Seconds(), r.MixDropped, r.MixStalls,
 		float64(st.Offered+r.MixDropped)/total, r.MixTicsOver[0], r.MixTicsOver[1], r.MixTicsOver[2], r.MixTicsOver[3], r.MixLongest)
+}
+
+// voiceStatser is what the voices line of writeAudioStats reads.
+type voiceStatser interface {
+	VoiceStats() (wasisurface.VoiceStats, bool)
+}
+
+// writeVoiceStats prints what the page's mixer did, when the game has one: the
+// frames it mixed, the output blocks it could not fill (underruns, and the
+// frames of silence in them) and the commands it or the host refused. The
+// mixer's underruns are the worklet's own, not the game's.
+func writeVoiceStats(out io.Writer, be backend.Backend, r *runloop.Runner) {
+	s, ok := be.(voiceStatser)
+	if !ok {
+		return
+	}
+	st, ok := s.VoiceStats()
+	if !ok {
+		return
+	}
+	fmt.Fprintf(out, "voices: painted %d frames, underruns %d (%d frames starved), bad commands %d, refused %d\n",
+		st.Painted, st.Underruns, st.Starved, st.BadCmds, r.VoiceRefused)
 }

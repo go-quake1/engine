@@ -313,6 +313,13 @@ type Runner struct {
 	// free.
 	musicEpochSeen uint64
 
+	// musicJob is the track being decoded for a voice mixer (voices.go).
+	musicJob *musicJob
+
+	// VoiceRefused counts the commands, loads and tracks a voice mixer's host
+	// refused.
+	VoiceRefused int
+
 	// musicMissingLogged tracks (Track, LoopTrack) pairs the driver
 	// has already logged as missing so the log fires once per unique
 	// pair rather than every signon. Bounded by the wire byte
@@ -730,7 +737,10 @@ func (r *Runner) RunFrame(dt float32, nowSec float32) error {
 	// 8+9) Audio (optional). A backend that reports its queue is paced like
 	// tyrquake's S_Update (see paceAudio); one that does not gets the fixed
 	// chunk below, as before.
-	if qa, ok := r.Backend.(backend.QueuedAudio); ok && r.SoundPool != nil && len(r.MixBuffer) > 0 {
+	if v := r.voices(); v != nil && r.SoundPool != nil {
+		// A voice mixer outside the game paints; nothing to pace or refill.
+		r.voiceStep(v)
+	} else if qa, ok := r.Backend.(backend.QueuedAudio); ok && r.SoundPool != nil && len(r.MixBuffer) > 0 {
 		if err := r.paceAudio(qa, dt); err != nil {
 			return err
 		}
