@@ -25,6 +25,9 @@ type WasiDriver struct {
 var (
 	_ ReadyDriver = (*WasiDriver)(nil)
 	_ SlowDriver  = (*WasiDriver)(nil)
+
+	_ AsyncDriver = (*WasiDriver)(nil)
+	_ PendingDraw = (*wasigpu.PendingFrame)(nil)
 )
 
 // NewDriver returns the driver drawing on s with d.
@@ -78,6 +81,16 @@ func (w *WasiDriver) WritePalette(data []byte) error { return w.d.Write(w.pal, 0
 // Draw implements [Driver].
 func (w *WasiDriver) Draw() error {
 	return w.s.Frame(w.pipe, []*wasigpu.Buffer{w.idx, w.pal}, [4]float64{0, 0, 0, 1}, 3)
+}
+
+// BeginDraw implements [AsyncDriver]: the host submits and presents the frame on
+// its own while the presenter keeps the sound output fed.
+func (w *WasiDriver) BeginDraw() (PendingDraw, error) {
+	f, err := w.s.BeginFrame(w.pipe, []*wasigpu.Buffer{w.idx, w.pal}, [4]float64{0, 0, 0, 1}, 3)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 // ResetSlowest and SlowestCall implement [SlowDriver].
