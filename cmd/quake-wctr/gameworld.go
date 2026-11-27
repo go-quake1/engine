@@ -63,6 +63,10 @@ type gameWorld struct {
 	swap                map[*worldview.AliasModel]*worldview.AliasModel
 	corrupt             bool
 	entCount, entFrames int
+	// failedDraws and firstDrawErr: the frames whose GPU draw failed and the first
+	// error, for --gpuworld-check's verdict.
+	failedDraws  int
+	firstDrawErr error
 }
 
 // idleSetter is a [gpuDrawer] whose wait for the GPU can run a function in
@@ -188,6 +192,16 @@ func (g *gameWorld) SetDLights(lights *[client.MaxDLights]client.DLight, now flo
 // sent, which the frame's animation uses in place of the default table.
 func (g *gameWorld) SetLightStyles(value func(style byte) int) { g.styles = value }
 
+// drawFailed records a frame whose GPU draw failed (the runner draws it on the
+// CPU and logs the error, which a CI log that keeps only a tail loses): how many,
+// and the first error, for --gpuworld-check's verdict.
+func (g *gameWorld) drawFailed(err error) {
+	g.failedDraws++
+	if g.firstDrawErr == nil {
+		g.firstDrawErr = err
+	}
+}
+
 // DrawWorld implements runner.WorldDrawer.
 func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32, fov, t float32) error {
 	g.wv.FOV = fov
@@ -223,11 +237,14 @@ func (g *gameWorld) DrawWorld(fb *render.FrameBuffer, origin, angles [3]float32,
 		frame, err = g.gd.Draw(view)
 	}
 	if err != nil {
+		g.drawFailed(err)
 		return err
 	}
 	t1 := time.Now()
 	if len(frame) != g.w*fb.Height || fb.Width != g.w {
-		return fmt.Errorf("the GPU frame has %d bytes for a %dx%d frame buffer", len(frame), fb.Width, fb.Height)
+		err := fmt.Errorf("the GPU frame has %d bytes for a %dx%d frame buffer", len(frame), fb.Width, fb.Height)
+		g.drawFailed(err)
+		return err
 	}
 	for y := 0; y < fb.Height; y++ {
 		copy(fb.Pixels[y*fb.Pitch:y*fb.Pitch+g.w], frame[y*g.w:(y+1)*g.w])
@@ -354,7 +371,10 @@ func (c *checkStats) report(out io.Writer) error {
 		fmt.Fprintf(out, "gpuworld check: %d alias entities drawn by the GPU over %d frames\n", c.ents.entCount, c.ents.entFrames)
 	}
 	if c.frames == 0 {
-		return fmt.Errorf("quake-wctr: --gpuworld-check compared no frame")
+		if c.ents != nil && c.ents.failedDraws > 0 {
+			return fmt.Errorf("quake-wctr: --gpuworld-check compared no frame: %d frames fell back to the CPU, the first GPU draw error was: %w", c.ents.failedDraws, c.ents.firstDrawErr)
+		}
+		return fmt.Errorf("quake-wctr: --gpuworld-check compared no frame (no GPU draw failed: the world was never drawn)")
 	}
 	if c.ents != nil && c.entPixels > 0 {
 		rate := float64(c.entUnexplained) / float64(c.entPixels)
