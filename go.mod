@@ -10,9 +10,9 @@ require (
 	github.com/go-virtio/sound v0.1.0
 	github.com/go-virtio/validate/guest v0.1.0
 	github.com/go-wasmcontainers/gpu v0.26.0
-	github.com/jfreymuth/oggvorbis v1.0.5
+	github.com/jfreymuth/oggvorbis v1.0.6
 	github.com/spf13/cobra v1.10.2
-	github.com/usbarmory/tamago v1.27.3
+	github.com/usbarmory/tamago v1.27.4
 	github.com/wasmdesk/wasmbox/audioring v0.3.0
 )
 
